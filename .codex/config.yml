@@ -1,0 +1,9 @@
+# .codex/config.toml
+
+model = "gpt-5.5"
+
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+
+[workspace_write]
+network_access = false

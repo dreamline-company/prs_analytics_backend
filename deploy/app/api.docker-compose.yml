@@ -1,0 +1,10 @@
+services:
+  api:
+    extends:
+      file: compose.common.yml
+      service: common
+    container_name: prs_eff_api
+    command: ["uvicorn", "entrypoints.server:app", "--workers", "${API_WORKERS:-1}", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${API_PORT:-8000}:8000"
+

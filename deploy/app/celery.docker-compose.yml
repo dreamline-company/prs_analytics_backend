@@ -1,0 +1,28 @@
+services:
+#  No needed currently
+#  celery_worker:
+#    extends:
+#      file: compose.common.yml
+#      service: common
+#    container_name: prs_eff_celery_worker
+#    command: celery -A ../../src/entrypoints/celery/celery_app worker --loglevel=info
+
+  celery_beat:
+    extends:
+      file: compose.common.yml
+      service: common
+    container_name: prs_eff_celery_beat
+    command: celery -A entrypoints.celery:celery_app beat --loglevel=info
+
+  flower:
+    extends:
+      file: compose.common.yml
+      service: common
+    container_name: prs_eff_flower
+    command: celery -A entrypoints.celery:celery_app flower --port=5555
+    ports:
+      - "5556:5555"
+
+networks:
+  prs_effectiveness_network:
+    name: prs_effectiveness_network

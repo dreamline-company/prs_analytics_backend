@@ -1,0 +1,19 @@
+# `This is a common service that builds the prs_effectiveness_image image. You have to inherit this in all new service docker-compose files in order to not duplicate image`
+
+services:
+  common:
+    image: prs_effectiveness_image:local
+    build:
+      context: ../..
+      dockerfile: deploy/app/app.Dockerfile
+    env_file:
+      - ../../src/.env
+    networks:
+      - prs_effectiveness_network
+    volumes:
+      - ../../src/:/src
+        
+
+networks:
+  prs_effectiveness_network:
+    name: prs_effectiveness_network

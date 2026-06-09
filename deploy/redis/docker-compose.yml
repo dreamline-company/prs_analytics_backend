@@ -1,0 +1,41 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: prs_eff_redis
+    env_file:
+      - ../../src/.env
+    ports:
+      - "${REDIS_EXTERNAL_PORT}:6379"
+    networks:
+      - prs_effectiveness_network
+    volumes:
+      - redis_data:/data
+    command: >
+      sh -c '
+        mkdir -p /usr/local/etc/redis &&
+        echo "bind 0.0.0.0" > /usr/local/etc/redis/redis.conf &&
+        echo "appendonly yes" >> /usr/local/etc/redis/redis.conf &&
+        echo "appendfsync everysec" >> /usr/local/etc/redis/redis.conf &&
+        echo "user default off" > /usr/local/etc/redis/users.acl &&
+        echo "user $$REDIS_USER on >$$REDIS_USER_PASSWORD ~* &* +@all" >> /usr/local/etc/redis/users.acl &&
+        redis-server /usr/local/etc/redis/redis.conf --aclfile /usr/local/etc/redis/users.acl
+      '
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --user \"$$REDIS_USER\" -a \"$$REDIS_USER_PASSWORD\" ping | grep PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: always
+    mem_limit: 512m
+    cpus: 0.5
+
+
+
+volumes:
+  redis_data:
+
+networks:
+  prs_effectiveness_network:
+    name: prs_effectiveness_network
+
+
