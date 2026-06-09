@@ -12,7 +12,7 @@ services:
       file: compose.common.yml
       service: common
     container_name: prs_eff_celery_beat
-    command: celery -A entrypoints.celery:celery_app beat --loglevel=info
+    command: celery -A entrypoints.celery:celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
 
   flower:
     extends:
