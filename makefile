@@ -22,10 +22,10 @@ down-redis: ## Stop and remove Redis containers.
 	$(REDIS_COMPOSE) down
 
 logs-redis: ## Show Redis logs. Use TAIL=100 and FOLLOW=1 to control output.
-	$(REDIS_COMPOSE) logs $(LOG_OPTIONS) meet_redis
+	$(REDIS_COMPOSE) logs $(LOG_OPTIONS)
 
 up-api: ## Build and start the API service in detached mode.
-	$(API_COMPOSE) up -d --build api
+	$(API_COMPOSE) up -d --build
 
 down-api: ## Stop and remove API service containers.
 	$(API_COMPOSE) down
