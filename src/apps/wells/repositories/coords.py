@@ -7,20 +7,13 @@ from apps.wells.dto.internal.repositories.coords import (
     UpdateWellCoordDTO,
 )
 from apps.wells.models.coords import Coord, WellCoord
-from shared.repository.base import AsyncAlchemyRepository, QuerySpec
+from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
 
 class CoordRepository(
     AsyncAlchemyRepository[CreateCoordDTO, UpdateCoordDTO, Coord],
 ):
     model = Coord
-
-    async def get_by_id(self, coord_id: int) -> Coord | None:
-        return await self.get_one(
-            QuerySpec(
-                filters=(Coord.id == coord_id,),
-            ),
-        )
 
     async def get_by_abai_id(self, abai_id: int) -> Coord | None:
         return await self.get_one(
@@ -61,13 +54,6 @@ class WellCoordRepository(
     AsyncAlchemyRepository[CreateWellCoordDTO, UpdateWellCoordDTO, WellCoord],
 ):
     model = WellCoord
-
-    async def get_by_id(self, well_coord_id: int) -> WellCoord | None:
-        return await self.get_one(
-            QuerySpec(
-                filters=(WellCoord.id == well_coord_id,),
-            ),
-        )
 
     async def get_by_abai_id(self, abai_id: int) -> WellCoord | None:
         return await self.get_one(

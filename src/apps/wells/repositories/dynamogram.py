@@ -5,20 +5,13 @@ from apps.wells.dto.internal.repositories.dynamogram import (
     UpdateDynamogramDTO,
 )
 from apps.wells.models.dynamogram import Dynamogram
-from shared.repository.base import AsyncAlchemyRepository, QuerySpec
+from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
 
 class DynamogramRepository(
     AsyncAlchemyRepository[CreateDynamogramDTO, UpdateDynamogramDTO, Dynamogram],
 ):
     model = Dynamogram
-
-    async def get_by_id(self, dynamogram_id: int) -> Dynamogram | None:
-        return await self.get_one(
-            QuerySpec(
-                filters=(Dynamogram.id == dynamogram_id,),
-            ),
-        )
 
     async def list_by_well_id(self, well_id: int) -> Sequence[Dynamogram]:
         return await self.get_list(

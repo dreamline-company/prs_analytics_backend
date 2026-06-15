@@ -6,7 +6,7 @@ from apps.repairs.dto.internal.repositories.reports import (
     UpdateRepairSummaryDTO,
 )
 from apps.repairs.models.reports import RepairSummary
-from shared.repository.base import AsyncAlchemyRepository, QuerySpec
+from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
 
 class RepairSummaryRepository(
@@ -17,13 +17,6 @@ class RepairSummaryRepository(
     ],
 ):
     model = RepairSummary
-
-    async def get_by_id(self, repair_summary_id: int) -> RepairSummary | None:
-        return await self.get_one(
-            QuerySpec(
-                filters=(RepairSummary.id == repair_summary_id,),
-            ),
-        )
 
     async def list_by_well_id(self, well_id: int) -> Sequence[RepairSummary]:
         return await self.get_list(

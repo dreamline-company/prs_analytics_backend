@@ -10,3 +10,4 @@ class CreateWellDTO(RepositoryDTO):
 class UpdateWellDTO(RepositoryDTO):
     name: str | None = None
     coords_id: int | None = None
+    is_deleted: bool | None = None

@@ -10,9 +10,6 @@ class ABAIWellRepository(
 ):
     model = Well
 
-    async def get_by_id(self, well_id: int) -> Well | None:
-        return await super().get_by_id(well_id)
-
     async def get_by_uwi(self, uwi: str) -> Well | None:
         return await self.get_one(
             QuerySpec(

@@ -10,9 +10,6 @@ class ABAIWellWorkoverRepository(
 ):
     model = WellWorkover
 
-    async def get_by_id(self, well_workover_id: int) -> WellWorkover | None:
-        return await super().get_by_id(well_workover_id)
-
     async def list_by_ids(
         self,
         well_workover_ids: Sequence[int],

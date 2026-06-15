@@ -5,20 +5,13 @@ from apps.telemetry.dto.internal.repositories.telemetry import (
     UpdateTelemetryDTO,
 )
 from apps.telemetry.models.telemetry import Telemetry
-from shared.repository.base import AsyncAlchemyRepository, QuerySpec
+from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
 
 class TelemetryRepository(
     AsyncAlchemyRepository[CreateTelemetryDTO, UpdateTelemetryDTO, Telemetry],
 ):
     model = Telemetry
-
-    async def get_by_id(self, telemetry_id: int) -> Telemetry | None:
-        return await self.get_one(
-            QuerySpec(
-                filters=(Telemetry.id == telemetry_id,),
-            ),
-        )
 
     async def get_by_abai_id(self, abai_id: int) -> Telemetry | None:
         return await self.get_one(

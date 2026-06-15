@@ -68,6 +68,7 @@ class AbaiIdMixin:
 class ABAIBaseModel(DeclarativeBase):
     """An abstract base model for ABAI DB tables."""
 
+    __table_args__ = {"schema": "emg"}
     __abstract__ = True
 
 

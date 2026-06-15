@@ -1,21 +1,16 @@
 from collections.abc import Sequence
 
+from sqlalchemy import insert, update
+
 from apps.wells.dto.internal.repositories.well import CreateWellDTO, UpdateWellDTO
 from apps.wells.models.well import Well
-from shared.repository.base import AsyncAlchemyRepository, QuerySpec
+from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
 
 class WellRepository(
     AsyncAlchemyRepository[CreateWellDTO, UpdateWellDTO, Well],
 ):
     model = Well
-
-    async def get_by_id(self, well_id: int) -> Well | None:
-        return await self.get_one(
-            QuerySpec(
-                filters=(Well.id == well_id,),
-            ),
-        )
 
     async def get_by_abai_id(self, abai_id: int) -> Well | None:
         return await self.get_one(
@@ -52,6 +47,35 @@ class WellRepository(
                 order_by=(Well.name,),
             ),
         )
+
+    async def batch_create(self, data: Sequence[CreateWellDTO]) -> None:
+        if not data:
+            return
+
+        values = [item.model_dump() for item in data]
+        await self.session.execute(insert(Well), values)
+
+    async def mark_deleted_by_abai_ids(
+        self,
+        abai_ids: Sequence[int],
+        *,
+        is_deleted: bool,
+    ) -> None:
+        if not abai_ids:
+            return
+
+        await self.session.execute(
+            update(Well)
+            .where(Well.abai_id.in_(abai_ids))
+            .values(is_deleted=is_deleted),
+        )
+
+    async def update_names_by_abai_id(self, names_by_abai_id: dict[int, str]) -> None:
+        for abai_id, name in names_by_abai_id.items():
+            await self.update(
+                data=UpdateWellDTO(name=name),
+                filters=(Well.abai_id == abai_id,),
+            )
 
     async def update_by_id(self, well_id: int, data: UpdateWellDTO) -> Well:
         return await self.update(

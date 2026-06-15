@@ -10,9 +10,6 @@ class ABAICoordSystemRepository(
 ):
     model = CoordSystem
 
-    async def get_by_id(self, coord_system_id: int) -> CoordSystem | None:
-        return await super().get_by_id(coord_system_id)
-
     async def get_by_mn(self, mn: str) -> CoordSystem | None:
         return await self.get_one(
             QuerySpec(
@@ -20,7 +17,10 @@ class ABAICoordSystemRepository(
             ),
         )
 
-    async def list_by_ids(self, coord_system_ids: Sequence[int]) -> Sequence[CoordSystem]:
+    async def list_by_ids(
+        self,
+        coord_system_ids: Sequence[int],
+    ) -> Sequence[CoordSystem]:
         if not coord_system_ids:
             return ()
 

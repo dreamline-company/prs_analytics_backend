@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, ForeignKey, String
+from sqlalchemy import BigInteger, Boolean, ForeignKey, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.database.sql.models import AbaiIdMixin, AppBaseModel, IntPkMixin
@@ -12,4 +12,9 @@ class Well(AppBaseModel, IntPkMixin, AbaiIdMixin):
     coords_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("wells_coord.abai_id"),
+    )
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
     )

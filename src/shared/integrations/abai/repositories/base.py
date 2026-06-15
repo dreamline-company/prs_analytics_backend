@@ -25,6 +25,7 @@ class ABAIReadOnlyRepository[ModelT: DeclarativeBase](
         *,
         exclude_none: bool = False,
     ) -> ModelT:
+        _ = data, exclude_none
         raise ABAIRepositoryIsReadOnlyError
 
     async def update(
@@ -35,10 +36,12 @@ class ABAIReadOnlyRepository[ModelT: DeclarativeBase](
         partial: bool = True,
         exclude_none: bool = False,
     ) -> ModelT:
+        _ = data, filters, partial, exclude_none
         raise ABAIRepositoryIsReadOnlyError
 
     async def delete(
         self,
         filters: FILTERS_TYPE,
     ) -> None:
+        _ = filters
         raise ABAIRepositoryIsReadOnlyError

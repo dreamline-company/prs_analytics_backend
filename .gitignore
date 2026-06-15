@@ -125,3 +125,5 @@ redisdata/*
 
 #Audios
 src/audios/*
+# temp
+src/migrations/versions

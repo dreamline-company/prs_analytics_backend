@@ -13,7 +13,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import DeclarativeBase, InstrumentedAttribute, Load
+from sqlalchemy.orm import DeclarativeBase, Load
 from sqlalchemy.sql.elements import ColumnElement
 
 from core import get_logger
@@ -512,34 +512,34 @@ class AsyncAlchemyRepository[
 
         await self.session.execute(qs)
 
-    async def get_by_id(
-        self,
-        id_: Any,
-        id_field: InstrumentedAttribute[Any] | None = None,
-        *,
-        options: Sequence[Load] = (),
-    ) -> ModelT | None:
-        """Return one model instance by primary key or another identifier field.
-
-        Args:
-            id_: Identifier value.
-            id_field: SQLAlchemy model attribute used as the identifier. If
-                omitted, ``self.model.id`` is used.
-            options: ORM loading options such as ``selectinload`` or
-                ``joinedload``.
-
-        Returns:
-            Matching ORM model instance or ``None``.
-        """
-
-        field = id_field or self.model.id
-
-        spec = QuerySpec(
-            filters=(field == id_,),
-            options=options,
-        )
-
-        return await self.get_one(spec)
+    # async def get_by_id(
+    #     self,
+    #     id_: Any,
+    #     id_field: InstrumentedAttribute[Any] | None = None,
+    #     *,
+    #     options: Sequence[Load] = (),
+    # ) -> ModelT | None:
+    #     """Return one model instance by primary key or another identifier field.
+    #
+    #     Args:
+    #         id_: Identifier value.
+    #         id_field: SQLAlchemy model attribute used as the identifier. If
+    #             omitted, ``self.model.id`` is used.
+    #         options: ORM loading options such as ``selectinload`` or
+    #             ``joinedload``.
+    #
+    #     Returns:
+    #         Matching ORM model instance or ``None``.
+    #     """
+    #
+    #     field = id_field or self.model.id
+    #
+    #     spec = QuerySpec(
+    #         filters=(field == id_,),
+    #         options=options,
+    #     )
+    #
+    #     return await self.get_one(spec)
 
     async def get_one(
         self,

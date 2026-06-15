@@ -7,7 +7,7 @@ from apps.repairs.dto.internal.repositories.repair import (
     UpdateRepairTypeDTO,
 )
 from apps.repairs.models.repair import Repair, RepairType
-from shared.repository.base import AsyncAlchemyRepository, QuerySpec
+from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
 
 class RepairTypeRepository(

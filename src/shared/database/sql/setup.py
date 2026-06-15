@@ -8,13 +8,17 @@ settings = get_settings()
 AVAILABLE_DB = Literal["abai", "telemetry", "app"]
 
 is_echo = settings.LOG_LEVEL == "DEBUG"
+print("ABAI: ", settings.ABAI_ASYNC_DATABASE_URL)
 engines: dict[AVAILABLE_DB, AsyncEngine] = {
     "abai": create_async_engine(url=settings.ABAI_ASYNC_DATABASE_URL, echo=is_echo),
-    "telemetry": create_async_engine(
-        url=settings.TELEMETRY_ASYNC_DATABASE_URL,
+    # "telemetry": create_async_engine(
+    #     url=settings.TELEMETRY_ASYNC_DATABASE_URL,
+    #     echo=is_echo,
+    # ),
+    "app": create_async_engine(
+        url=settings.APP_ASYNC_DATABASE_URL.get_secret_value(),
         echo=is_echo,
     ),
-    "app": create_async_engine(url=settings.APP_ASYNC_DATABASE_URL, echo=is_echo),
 }
 
 session_makers = {

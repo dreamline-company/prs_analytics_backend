@@ -2,20 +2,13 @@ from collections.abc import Sequence
 
 from apps.wells.dto.internal.repositories.spo import CreateSPODTO, UpdateSPODTO
 from apps.wells.models.spo import SPO
-from shared.repository.base import AsyncAlchemyRepository, QuerySpec
+from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
 
 class SPORepository(
     AsyncAlchemyRepository[CreateSPODTO, UpdateSPODTO, SPO],
 ):
     model = SPO
-
-    async def get_by_id(self, spo_id: int) -> SPO | None:
-        return await self.get_one(
-            QuerySpec(
-                filters=(SPO.id == spo_id,),
-            ),
-        )
 
     async def list_by_well_id(self, well_id: int) -> Sequence[SPO]:
         return await self.get_list(

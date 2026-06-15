@@ -10,9 +10,6 @@ class ABAIRepairWorkTypeRepository(
 ):
     model = RepairWorkType
 
-    async def get_by_id(self, repair_work_type_id: int) -> RepairWorkType | None:
-        return await super().get_by_id(repair_work_type_id)
-
     async def list_by_ids(
         self,
         repair_work_type_ids: Sequence[int],

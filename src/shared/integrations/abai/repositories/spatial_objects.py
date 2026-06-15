@@ -10,9 +10,6 @@ class ABAISpatialObjectRepository(
 ):
     model = SpatialObject
 
-    async def get_by_id(self, spatial_object_id: int) -> SpatialObject | None:
-        return await super().get_by_id(spatial_object_id)
-
     async def list_by_ids(
         self,
         spatial_object_ids: Sequence[int],
@@ -27,7 +24,10 @@ class ABAISpatialObjectRepository(
             ),
         )
 
-    async def list_by_coord_system(self, coord_system_id: int) -> Sequence[SpatialObject]:
+    async def list_by_coord_system(
+        self,
+        coord_system_id: int,
+    ) -> Sequence[SpatialObject]:
         return await self.get_list(
             QuerySpec(
                 filters=(SpatialObject.coord_system == coord_system_id,),
