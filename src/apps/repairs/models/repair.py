@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.database.sql.models import AbaiIdMixin, AppBaseModel, IntPkMixin
@@ -16,11 +16,20 @@ class RepairType(AppBaseModel, IntPkMixin, AbaiIdMixin):
 class Repair(AppBaseModel, IntPkMixin, AbaiIdMixin):
     __tablename__ = "repairs_repair"
 
-    well_id: Mapped[str] = mapped_column(
-        Text,
+    well_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("wells_well.id"),
         nullable=False,
     )
+    abai_well_id: Mapped[int] = mapped_column(BigInteger)
+    work_list: Mapped[str] = mapped_column(
+        Text,
+        nullable=True,
+    )  # Описание проделанных работ
+    work_plan: Mapped[str] = mapped_column(
+        Text,
+        nullable=True,
+    )  # Список планируемых работ
     repair_type_id: Mapped[int] = mapped_column(
         ForeignKey("repairs_repair_type.abai_id"),
     )
@@ -32,5 +41,5 @@ class Repair(AppBaseModel, IntPkMixin, AbaiIdMixin):
     end_time: Mapped[datetime] = mapped_column(
         DateTime,
         index=True,
-        nullable=False,
+        nullable=True,
     )

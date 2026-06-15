@@ -23,8 +23,9 @@ class Settings(CoreSettings):
     APP_NAME: str = "prs-effectiveness"
 
     # database
-    APP_ASYNC_DATABASE_URL: str
-    APP_SYNC_DATABASE_URL: str
+    APP_ASYNC_DATABASE_URL: SecretStr
+    APP_SYNC_DATABASE_URL: SecretStr
+    ALEMBIC_VERSION_TABLE_NAME: str = "prs_alembic_versions"
 
     ABAI_ASYNC_DATABASE_URL: str
     TELEMETRY_ASYNC_DATABASE_URL: str

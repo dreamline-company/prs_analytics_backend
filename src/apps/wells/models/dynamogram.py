@@ -14,8 +14,8 @@ class Dynamogram(AppBaseModel, IntPkMixin):
         nullable=False,
     )
     snapshot_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    repair_id: Mapped[int] = mapped_column(
+    well_id: Mapped[int] = mapped_column(
         BigInteger,
-        ForeignKey("repairs_repair.id"),
+        ForeignKey("wells_well.id"),
         nullable=False,
     )

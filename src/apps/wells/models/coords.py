@@ -1,6 +1,6 @@
 from geoalchemy2 import Geometry
 from geoalchemy2.elements import WKBElement
-from sqlalchemy import ForeignKey, Integer, Text
+from sqlalchemy import BigInteger, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.database.sql.models import AbaiIdMixin, AppBaseModel, IntPkMixin
@@ -21,7 +21,7 @@ class WellCoord(AppBaseModel, IntPkMixin, AbaiIdMixin):
     __tablename__ = "wells_coord"
 
     coords_system_id: Mapped[int | None] = mapped_column(
-        Integer,
+        BigInteger,
         ForeignKey("wells_coord_system.abai_id"),
     )
     spatial_object_type: Mapped[int] = mapped_column(Integer, nullable=False)
