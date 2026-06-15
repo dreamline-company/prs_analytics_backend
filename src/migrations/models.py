@@ -1,3 +1,5 @@
+import inspect
+
 from apps.files.models.file import File
 from apps.repairs.models.repair import Repair, RepairType
 from apps.repairs.models.reports import RepairSummary
@@ -21,3 +23,34 @@ __all__ = [
     "Well",
     "WellCoord",
 ]
+
+
+def validate_model_exports() -> None:
+    errors: list[str] = []
+
+    for model_name in __all__:
+        model = globals().get(model_name)
+
+        if model is None:
+            errors.append(f"{model_name}: object not found in globals()")
+            continue
+
+        if not inspect.isclass(model):
+            errors.append(f"{model_name}: is not a class, is a {type(model)!r}")
+            continue
+
+        if model is AppBaseModel:
+            continue
+
+        if not issubclass(model, AppBaseModel):
+            errors.append(
+                f"{model_name}: is not {AppBaseModel.__name__} or "
+                f"not its subclass. All migrating models must subclass of AppBaseModel.",
+            )
+
+    if errors:
+        message = "Export errors:\n" + "\n".join(f"- {error}" for error in errors)
+        raise TypeError(message)
+
+
+validate_model_exports()

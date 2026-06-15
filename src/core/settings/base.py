@@ -1,4 +1,5 @@
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,6 +22,13 @@ class CoreSettings(BaseSettings):
 class Settings(CoreSettings):
     # APP ENV
     APP_NAME: str = "prs-effectiveness"
+
+    # Time
+    TZ_NAME: str = "Asia/Atyrau"
+
+    @property
+    def ZONE_INFO(self) -> ZoneInfo:  # noqa: N802
+        return ZoneInfo(self.TZ_NAME)
 
     # database
     APP_ASYNC_DATABASE_URL: SecretStr
