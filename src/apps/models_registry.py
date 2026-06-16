@@ -3,26 +3,28 @@ import inspect
 from apps.files.models.file import File
 from apps.repairs.models.repair import Repair, RepairType
 from apps.repairs.models.reports import RepairSummary
+from apps.telemetry.models.tech_regime import TechRegime
 from apps.telemetry.models.telemetry import Telemetry
 from apps.wells.models.coords import Coord, WellCoord
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.models.spo import SPO
 from apps.wells.models.well import Well
-from shared.database.sql.models import AppBaseModel
 
-__all__ = [
+__all__ = (
     "SPO",
-    "AppBaseModel",
     "Coord",
     "Dynamogram",
     "File",
     "Repair",
     "RepairSummary",
     "RepairType",
+    "TechRegime",
     "Telemetry",
     "Well",
     "WellCoord",
-]
+)
+
+from shared.database.sql.models import AppBaseModel
 
 
 def validate_model_exports() -> None:

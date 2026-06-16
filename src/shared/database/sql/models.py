@@ -61,7 +61,6 @@ class AbaiIdMixin:
         sa.BigInteger,
         unique=True,
         nullable=False,
-        index=True,
     )
 
 

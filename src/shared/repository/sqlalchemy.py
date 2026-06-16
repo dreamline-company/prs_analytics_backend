@@ -44,6 +44,13 @@ class EmptyUpdateDataError(AppError):
     code = "empty_update_data"
 
 
+class LimitOffsetError(AppError):
+    """Raised when explicit limit/offset arguments are invalid."""
+
+    message = "Limit/offset is invalid."
+    code = "limit_offset_invalid"
+
+
 FILTERS_TYPE = Sequence[ColumnElement[bool]]
 ORDER_BY_TYPE = Sequence[ColumnElement[Any]]
 FIELDS_TYPE = Sequence[Any]
@@ -63,6 +70,8 @@ class QuerySpec:
         order_by: SQLAlchemy expressions used in the ORDER BY clause.
         page: One-based page number for pagination.
         page_size: Number of rows per page.
+        limit: Explicit SQL LIMIT. Cannot be combined with page/page_size.
+        offset: Explicit SQL OFFSET. Cannot be combined with page/page_size.
     """
 
     filters: FILTERS_TYPE = ()
@@ -70,6 +79,8 @@ class QuerySpec:
     order_by: ORDER_BY_TYPE = ()
     page: int | None = None
     page_size: int | None = None
+    limit: int | None = None
+    offset: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +118,8 @@ class ProjectionQuerySpec:
         order_by: SQLAlchemy expressions used in the ORDER BY clause.
         page: One-based page number for pagination.
         page_size: Number of rows per page.
+        limit: Explicit SQL LIMIT. Cannot be combined with page/page_size.
+        offset: Explicit SQL OFFSET. Cannot be combined with page/page_size.
     """
 
     joins: Sequence[JoinSpec]
@@ -115,6 +128,8 @@ class ProjectionQuerySpec:
     order_by: ORDER_BY_TYPE = ()
     page: int | None = None
     page_size: int | None = None
+    limit: int | None = None
+    offset: int | None = None
 
 
 class AsyncAlchemyRepository[
@@ -348,6 +363,74 @@ class AsyncAlchemyRepository[
         offset = (page - 1) * page_size
         return qs.limit(page_size).offset(offset)
 
+    @classmethod
+    def _apply_limit_offset(
+        cls,
+        qs: Select[Any],
+        *,
+        limit: int | None,
+        offset: int | None,
+        page: int | None = None,
+        page_size: int | None = None,
+    ) -> Select[Any]:
+        """Apply explicit LIMIT/OFFSET to a SELECT query.
+
+        Explicit limit/offset cannot be combined with page/page_size pagination,
+        because page/page_size already produces LIMIT/OFFSET.
+
+        Args:
+            qs: Base SQLAlchemy SELECT query.
+            limit: Explicit SQL LIMIT.
+            offset: Explicit SQL OFFSET.
+            page: One-based page number for pagination.
+            page_size: Number of rows per page.
+
+        Returns:
+            SELECT query with explicit LIMIT/OFFSET applied.
+
+        Raises:
+            LimitOffsetError: If limit/offset values are invalid or combined with
+                page/page_size pagination.
+        """
+
+        if limit is None and offset is None:
+            return qs
+
+        if page is not None or page_size is not None:
+            raise LimitOffsetError(
+                details={
+                    "page": page,
+                    "page_size": page_size,
+                    "limit": limit,
+                    "offset": offset,
+                    "message": "limit/offset cannot be combined with page/page_size.",
+                },
+            )
+
+        if limit is not None and limit < 1:
+            raise LimitOffsetError(
+                details={
+                    "limit": limit,
+                    "message": "limit must be greater than 0.",
+                },
+            )
+
+        if offset is not None and offset < 0:
+            raise LimitOffsetError(
+                details={
+                    "offset": offset,
+                    "message": "offset must be greater than or equal to 0.",
+                },
+            )
+
+        if limit is not None:
+            qs = qs.limit(limit)
+
+        if offset is not None:
+            qs = qs.offset(offset)
+
+        return qs
+
     def build_model_select(
         self,
         spec: QuerySpec | None = None,
@@ -377,6 +460,13 @@ class AsyncAlchemyRepository[
         qs = self._apply_filters(qs, spec.filters, required=required_filters)
         qs = self._apply_order_by(qs, spec.order_by)
         qs = self._apply_pagination(qs, page=spec.page, page_size=spec.page_size)
+        qs = self._apply_limit_offset(
+            qs,
+            limit=spec.limit,
+            offset=spec.offset,
+            page=spec.page,
+            page_size=spec.page_size,
+        )
 
         logger.debug("Built model select query: %s", qs)
 
@@ -408,6 +498,13 @@ class AsyncAlchemyRepository[
         qs = self._apply_filters(qs, spec.filters, required=required_filters)
         qs = self._apply_order_by(qs, spec.order_by)
         qs = self._apply_pagination(qs, page=spec.page, page_size=spec.page_size)
+        qs = self._apply_limit_offset(
+            qs,
+            limit=spec.limit,
+            offset=spec.offset,
+            page=spec.page,
+            page_size=spec.page_size,
+        )
 
         logger.debug("Built projection select query: %s", qs)
 

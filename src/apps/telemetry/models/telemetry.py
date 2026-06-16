@@ -3,10 +3,10 @@ from datetime import datetime
 from sqlalchemy import BigInteger, DateTime, Float, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
-from shared.database.sql.models import AbaiIdMixin, AppBaseModel, IntPkMixin
+from shared.database.sql.models import AppBaseModel, IntPkMixin
 
 
-class Telemetry(AppBaseModel, IntPkMixin, AbaiIdMixin):
+class Telemetry(AppBaseModel, IntPkMixin):
     __tablename__ = "telemetry_well"
 
     well_id: Mapped[int] = mapped_column(

@@ -20,7 +20,7 @@ class LoadWells:
 
     async def run(self) -> None:
         abai_wells = await self.abai_wells_repo.get_list(spec=QuerySpec())
-        abai_wells = [w for w in abai_wells if len(w.uwi) == 8 and w.uwi[4:].isdigit()]
+        # abai_wells = [w for w in abai_wells if len(w.uwi) == 8 and w.uwi[4:].isdigit()]
         app_wells = await self.well_repo.get_list()
 
         abai_wells_with_name_by_id = {

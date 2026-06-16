@@ -4,10 +4,10 @@ from alembic import context
 from alembic.script import ScriptDirectory
 from sqlalchemy import engine_from_config, pool
 
+from apps.models_registry import *  # noqa: F403 # import all application models need to be migrated.
 from core import get_logger
 from core.settings import get_settings
-from migrations.models import *  # noqa: F403 # import all application models need to be migrated.
-from migrations.models import AppBaseModel
+from shared.database.sql.models import AppBaseModel
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -26,7 +26,7 @@ if config.config_file_name is not None:
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
 target_metadata = AppBaseModel.metadata
-print("Url ", settings.APP_SYNC_DATABASE_URL.get_secret_value())
+
 config.set_main_option(
     "sqlalchemy.url",
     str(settings.APP_SYNC_DATABASE_URL.get_secret_value()),

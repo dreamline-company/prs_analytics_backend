@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (
+    DOUBLE_PRECISION,
     BigInteger,
     Boolean,
     Date,
@@ -243,4 +244,57 @@ class RepairWorkType(ABAIBaseModel):
         BigInteger,
         nullable=True,
         comment="УНВ",
+    )
+
+
+class TechModeProdOil(ABAIBaseModel):
+    __tablename__ = "tech_mode_prod_oil"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        comment="ID",
+    )
+
+    well: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("well.id"),
+        nullable=False,
+        comment="Скважина. Ссылка на поле id таблицы well",
+    )
+
+    dbeg: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+        comment="Дата начала",
+    )
+
+    dend: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        comment="Дата окончания",
+    )
+
+    liquid: Mapped[float | None] = mapped_column(
+        DOUBLE_PRECISION,
+        nullable=True,
+        comment="Дебит жидкости (м.куб/сут)",
+    )
+
+    oil: Mapped[float | None] = mapped_column(
+        DOUBLE_PRECISION,
+        nullable=True,
+        comment="Дебит нефти (т/сут)",
+    )
+
+    wcut: Mapped[float | None] = mapped_column(
+        DOUBLE_PRECISION,
+        nullable=True,
+        comment="Обводненность (%)",
+    )
+
+    oil_density: Mapped[float | None] = mapped_column(
+        DOUBLE_PRECISION,
+        nullable=True,
+        comment="Плотность нефти (т/м.куб)",
     )
