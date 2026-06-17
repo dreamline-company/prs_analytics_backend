@@ -1,15 +1,15 @@
 from collections.abc import Callable, Iterable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import AsyncContextManager
 
 from botocore.exceptions import ClientError
-from interfaces.s3 import AiobotoClient
 
-from utils import get_logger
+from core import get_logger
+from shared.database.s3.interface import AiobotoClient
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class S3Error(Exception): ...
@@ -24,7 +24,7 @@ class FileUploadError(S3Error): ...
 @dataclass(slots=True)
 class AiobotoFileStorage:
     bucket_name: str
-    client_factory: Callable[[], AsyncContextManager[AiobotoClient]]
+    client_factory: Callable[[], AbstractAsyncContextManager[AiobotoClient]]
 
     async def download_file(self, file_path: str) -> BytesIO:
         file = BytesIO()
