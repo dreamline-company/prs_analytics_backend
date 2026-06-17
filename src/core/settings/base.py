@@ -22,7 +22,7 @@ class CoreSettings(BaseSettings):
 
 class Settings(CoreSettings):
     # APP ENV
-    APP_NAME: str = "prs-effectiveness"
+    APP_NAME: str = "prs-analytics"
 
     # Time
     TZ_NAME: str = "Asia/Atyrau"
