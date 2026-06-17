@@ -8,7 +8,7 @@ class UploadParsedSummaryDTO(BaseModel):
     start_date: date
     brigade_number: int
     well_name: str = Field(..., description="Основаня скважина")
-    second_well_name: str | None = Field(None, description="Скважина откда переехали")
+    second_well_name: str | None = Field(None, description="Скважина откуда переехали")
     pump_type: str
     shift_type_number: int
     car: str
@@ -31,5 +31,5 @@ class UploadParsedSummaryDTO(BaseModel):
             raise ValueError("Start date must be in DD.MM.YYYY format.") from exc
 
 
-class UploadParsedSummariesListDTO:
+class UploadParsedSummariesListDTO(BaseModel):
     summaries: list[UploadParsedSummaryDTO]
