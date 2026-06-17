@@ -29,14 +29,14 @@ class RepairTypeRepository(
             ),
         )
 
-    async def update_by_id(
+    async def update_by_abai_id(
         self,
-        repair_type_id: int,
+        abai_id: int,
         data: UpdateRepairTypeDTO,
     ) -> RepairType:
         return await self.update(
             data=data,
-            filters=(RepairType.id == repair_type_id,),
+            filters=(RepairType.abai_id == abai_id,),
         )
 
     async def delete_by_id(self, repair_type_id: int) -> None:

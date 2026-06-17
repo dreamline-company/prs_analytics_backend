@@ -10,7 +10,7 @@ class RepairType(AppBaseModel, IntPkMixin, AbaiIdMixin):
     __tablename__ = "repairs_repair_type"
 
     name_ru: Mapped[str] = mapped_column(Text, nullable=False)
-    name_ru_short: Mapped[str] = mapped_column(Text, nullable=False)
+    name_ru_short: Mapped[str | None] = mapped_column(Text)
 
 
 class Repair(AppBaseModel, IntPkMixin, AbaiIdMixin):

@@ -6,7 +6,7 @@ from shared.dto.repositories import RepositoryDTO
 class CreateRepairTypeDTO(RepositoryDTO):
     abai_id: int
     name_ru: str
-    name_ru_short: str
+    name_ru_short: str | None
 
 
 class UpdateRepairTypeDTO(RepositoryDTO):
