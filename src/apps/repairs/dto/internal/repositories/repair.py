@@ -16,7 +16,6 @@ class UpdateRepairTypeDTO(RepositoryDTO):
 
 class CreateRepairDTO(RepositoryDTO):
     abai_id: int
-    well_id: int
     abai_well_id: int
     work_list: str | None = None
     work_plan: str | None = None
@@ -26,8 +25,6 @@ class CreateRepairDTO(RepositoryDTO):
 
 
 class UpdateRepairDTO(RepositoryDTO):
-    well_id: int | None = None
-    abai_well_id: int | None = None
     work_list: str | None = None
     work_plan: str | None = None
     repair_type_id: int | None = None

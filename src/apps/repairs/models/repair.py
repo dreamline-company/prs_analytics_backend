@@ -19,9 +19,12 @@ class Repair(AppBaseModel, IntPkMixin, AbaiIdMixin):
     well_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("wells_well.id"),
-        nullable=False,
+        nullable=True,
     )
-    abai_well_id: Mapped[int] = mapped_column(BigInteger)
+    abai_well_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("wells_well.abai_id"),
+    )
     work_list: Mapped[str] = mapped_column(
         Text,
         nullable=True,

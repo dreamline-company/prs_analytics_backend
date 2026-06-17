@@ -84,5 +84,17 @@ class RepairRepository(
             filters=(Repair.id == repair_id,),
         )
 
+    async def update_by_abai_id(self, abai_id: int, data: UpdateRepairDTO) -> Repair:
+        return await self.update(
+            data=data,
+            filters=(Repair.abai_id == abai_id,),
+        )
+
     async def delete_by_id(self, repair_id: int) -> None:
         await self.delete(filters=(Repair.id == repair_id,))
+
+    async def get_last_by_abai_id(self) -> Repair | None:
+        rs = await self.get_list(
+            spec=QuerySpec(order_by=(Repair.abai_id.desc(),), limit=1),
+        )
+        return rs[0] if rs else None

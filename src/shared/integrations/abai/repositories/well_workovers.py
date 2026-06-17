@@ -20,7 +20,7 @@ class ABAIWellWorkoverRepository(
         return await self.get_list(
             QuerySpec(
                 filters=(WellWorkover.id.in_(well_workover_ids),),
-                order_by=(WellWorkover.id,),
+                order_by=(WellWorkover.id.asc(),),
             ),
         )
 
@@ -28,7 +28,7 @@ class ABAIWellWorkoverRepository(
         return await self.get_list(
             QuerySpec(
                 filters=(WellWorkover.well == well_id,),
-                order_by=(WellWorkover.dbeg,),
+                order_by=(WellWorkover.dbeg.asc(),),
             ),
         )
 
@@ -39,6 +39,6 @@ class ABAIWellWorkoverRepository(
         return await self.get_list(
             QuerySpec(
                 filters=(WellWorkover.repair_work_type == repair_work_type_id,),
-                order_by=(WellWorkover.dbeg,),
+                order_by=(WellWorkover.dbeg.asc(),),
             ),
         )
