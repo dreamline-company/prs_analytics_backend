@@ -4,11 +4,14 @@ from shared.dto.repositories import RepositoryDTO
 
 
 class CreateTelemetryDTO(RepositoryDTO):
-    abai_id: int
     well_id: int
     date_time: datetime
-    qv_liquid: float
-    qm_oil: float
+    qv_liquid: float | None
+    qm_oil: float | None
+    ngdu_id: int
+    oil_field: str | None = None
+    gzu: str | None = None
+    otvod: int | None = None
 
 
 class UpdateTelemetryDTO(RepositoryDTO):
@@ -16,3 +19,7 @@ class UpdateTelemetryDTO(RepositoryDTO):
     date_time: datetime | None = None
     qv_liquid: float | None = None
     qm_oil: float | None = None
+    ngdu_id: int | None = None
+    oil_field: str | None = None
+    gzu: str | None = None
+    otvod: int | None = None

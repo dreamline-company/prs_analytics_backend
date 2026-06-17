@@ -5,16 +5,26 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from core.settings import get_settings
 
 settings = get_settings()
-AVAILABLE_DB = Literal["abai", "telemetry", "app"]
+AVAILABLE_DB = Literal[
+    "app",
+    "abai",
+    "zhylyoi_telemetry",
+    "kainar_telemetry",
+    "zhmg_telemetry",
+    "dmg_telemetry",
+]
 
 is_echo = settings.LOG_LEVEL == "DEBUG"
-print("ABAI: ", settings.ABAI_ASYNC_DATABASE_URL)
 engines: dict[AVAILABLE_DB, AsyncEngine] = {
     "abai": create_async_engine(url=settings.ABAI_ASYNC_DATABASE_URL, echo=is_echo),
-    # "telemetry": create_async_engine(
-    #     url=settings.TELEMETRY_ASYNC_DATABASE_URL,
-    #     echo=is_echo,
-    # ),
+    "dmg_telemetry": create_async_engine(
+        url=settings.DMG_TELEMETRY_ASYNC_DATABASE_URL,
+        echo=is_echo,
+    ),
+    "kainar_telemetry": create_async_engine(
+        url=settings.KAINAR_TELEMETRY_ASYNC_DATABASE_URL,
+        echo=is_echo,
+    ),
     "app": create_async_engine(
         url=settings.APP_ASYNC_DATABASE_URL.get_secret_value(),
         echo=is_echo,

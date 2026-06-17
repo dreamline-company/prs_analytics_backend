@@ -23,13 +23,13 @@ class TechRegimeRepository(
         )
 
     async def get_latest_by_abai_id(self) -> TechRegime | None:
-        return await self.get_one(
+        tr = await self.get_list(
             QuerySpec(
                 order_by=(TechRegime.abai_id.desc(),),
                 limit=1,
             ),
-            required_filters=False,
         )
+        return tr[0] if tr else None
 
     async def list_by_abai_ids(
         self,

@@ -1,4 +1,5 @@
 from typing import Literal
+from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
 
 from pydantic import SecretStr
@@ -30,13 +31,69 @@ class Settings(CoreSettings):
     def ZONE_INFO(self) -> ZoneInfo:  # noqa: N802
         return ZoneInfo(self.TZ_NAME)
 
-    # database
+    # app database
     APP_ASYNC_DATABASE_URL: SecretStr
     APP_SYNC_DATABASE_URL: SecretStr
     ALEMBIC_VERSION_TABLE_NAME: str = "prs_alembic_versions"
 
+    # external Databases
     ABAI_ASYNC_DATABASE_URL: str
-    TELEMETRY_ASYNC_DATABASE_URL: str
+
+    ODBC_DRIVER: str = "ODBC Driver 18 for SQL Server"
+
+    KAINAR_HOST: str
+    KAINAR_PORT: int
+    KAINAR_DATABASE: str
+    KAINAR_USER: str
+    KAINAR_PASSWORD: str
+
+    DMG_HOST: str
+    DMG_PORT: int
+    DMG_DATABASE: str
+    DMG_USER: str
+    DMG_PASSWORD: str
+
+    @classmethod
+    def _get_odbc_url(  # noqa: PLR0913
+        cls,
+        driver: str,
+        host: str,
+        port: int,
+        uid: str,
+        password: str,
+        db: str,
+    ) -> str:
+        odbc_str = (
+            f"DRIVER={driver};"
+            f"SERVER={host},{port};"
+            f"DATABASE={db};"
+            f"UID={uid};"
+            f"PWD={password};"
+            "TrustServerCertificate=yes;"
+        )
+        return f"mssql+aioodbc:///?odbc_connect={quote_plus(odbc_str)}"
+
+    @property
+    def DMG_TELEMETRY_ASYNC_DATABASE_URL(self) -> str:  # noqa: N802
+        return self._get_odbc_url(
+            self.ODBC_DRIVER,
+            self.DMG_HOST,
+            self.DMG_PORT,
+            self.DMG_USER,
+            self.DMG_PASSWORD,
+            self.DMG_DATABASE,
+        )
+
+    @property
+    def KAINAR_TELEMETRY_ASYNC_DATABASE_URL(self) -> str:  # noqa: N802
+        return self._get_odbc_url(
+            self.ODBC_DRIVER,
+            self.KAINAR_HOST,
+            self.KAINAR_PORT,
+            self.KAINAR_USER,
+            self.KAINAR_PASSWORD,
+            self.KAINAR_DATABASE,
+        )
 
     # S3 (minio)
     S3_ACCESS_KEY: str

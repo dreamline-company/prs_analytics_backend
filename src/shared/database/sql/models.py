@@ -71,7 +71,7 @@ class ABAIBaseModel(DeclarativeBase):
     __abstract__ = True
 
 
-class TelemetryBaseModel(DeclarativeBase):
+class WinccTelemetryBaseModel(DeclarativeBase):
     """An abstract base model for ABAI DB tables."""
 
     __abstract__ = True

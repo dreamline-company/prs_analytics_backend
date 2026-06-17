@@ -537,6 +537,13 @@ class AsyncAlchemyRepository[
 
         return result.scalar_one()
 
+    async def bulk_create(self, data: Sequence[CreateDataT]) -> None:
+        if not data:
+            return
+
+        values = [item.model_dump() for item in data]
+        await self.session.execute(insert(self.model), values)
+
     async def update(
         self,
         data: UpdateDataT,
@@ -667,7 +674,7 @@ class AsyncAlchemyRepository[
 
         result = await self.session.execute(qs)
 
-        return result.scalars().unique().one_or_none()
+        return result.scalars().one_or_none()
 
     async def get_list(
         self,
@@ -690,7 +697,7 @@ class AsyncAlchemyRepository[
 
         result = await self.session.execute(qs)
 
-        return result.scalars().unique().all()
+        return result.scalars().all()
 
     async def get_projection_one(
         self,

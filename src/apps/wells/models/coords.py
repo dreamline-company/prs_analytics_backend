@@ -26,12 +26,10 @@ class WellCoord(AppBaseModel, IntPkMixin, AbaiIdMixin):
     )
     spatial_object_type: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    coord_point: Mapped[WKBElement | None] = mapped_column(
+    coord_point: Mapped[WKBElement] = mapped_column(
         Geometry("POINT"),
-        nullable=True,
     )
 
-    coord_polygon: Mapped[WKBElement | None] = mapped_column(
+    coord_polygon: Mapped[WKBElement] = mapped_column(
         Geometry("POLYGON"),
-        nullable=True,
     )
