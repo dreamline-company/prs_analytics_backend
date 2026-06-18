@@ -53,6 +53,10 @@ class Settings(CoreSettings):
     DMG_USER: str
     DMG_PASSWORD: str
 
+    # ABAI WEB
+    ABAI_LOGIN: str
+    ABAI_PASS: str
+
     @classmethod
     def _get_odbc_url(  # noqa: PLR0913
         cls,
