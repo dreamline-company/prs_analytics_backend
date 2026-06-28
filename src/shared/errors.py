@@ -48,8 +48,8 @@ class HttpError(HTTPException):
         self.details = details or {}
 
         super().__init__(
-            status_code=status_code,
-            detail=message + " Details: " + str(details),
+            status_code=self.status_code,
+            detail=self.message + " Details: " + str(details),
         )
 
     def to_dict(self) -> dict[str, Any]:

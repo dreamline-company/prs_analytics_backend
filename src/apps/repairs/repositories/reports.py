@@ -1,5 +1,7 @@
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import date
+
+from sqlalchemy import select, tuple_
 
 from apps.repairs.dto.internal.repositories.reports import (
     CreateRepairSummaryDTO,
@@ -33,6 +35,20 @@ class RepairSummaryRepository(
                 order_by=(RepairSummary.date,),
             ),
         )
+
+    async def list_existing_well_date_pairs(
+        self,
+        pairs: Iterable[tuple[int, date]],
+    ) -> set[tuple[int, date]]:
+        pairs_list = list(pairs)
+        if not pairs_list:
+            return set()
+
+        qs = select(RepairSummary.well_id, RepairSummary.date).where(
+            tuple_(RepairSummary.well_id, RepairSummary.date).in_(pairs_list),
+        )
+        rows = await self.fetch_all(qs)
+        return {(row["well_id"], row["date"]) for row in rows}
 
     async def list_by_date(self, summary_date: date) -> Sequence[RepairSummary]:
         return await self.get_list(
