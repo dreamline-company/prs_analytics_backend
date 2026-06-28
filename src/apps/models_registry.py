@@ -2,6 +2,7 @@ import inspect
 
 from apps.files.models.file import File
 from apps.org.models.ngdu import NGDU
+from apps.repairs.models.docs import RepairDoc
 from apps.repairs.models.repair import Repair, RepairType
 from apps.repairs.models.reports import RepairSummary
 from apps.telemetry.models.tech_regime import TechRegime
@@ -18,6 +19,7 @@ __all__ = (
     "Dynamogram",
     "File",
     "Repair",
+    "RepairDoc",
     "RepairSummary",
     "RepairType",
     "TechRegime",
@@ -49,7 +51,8 @@ def validate_model_exports() -> None:
         if not issubclass(model, AppBaseModel):
             errors.append(
                 f"{model_name}: is not {AppBaseModel.__name__} or "
-                f"not its subclass. All migrating models must subclass of AppBaseModel.",
+                "not its subclass. All migrating models must subclass of "
+                "AppBaseModel.",
             )
 
     if errors:

@@ -62,11 +62,11 @@ class RepairRepository(
             ),
         )
 
-    async def list_by_well_id(self, well_id: int) -> Sequence[Repair]:
+    async def list_by_well_abai_id(self, well_id: int) -> Sequence[Repair]:
         return await self.get_list(
             QuerySpec(
-                filters=(Repair.well_id == well_id,),
-                order_by=(Repair.start_time,),
+                filters=(Repair.abai_well_id == well_id,),
+                order_by=(Repair.start_time.desc(),),
             ),
         )
 

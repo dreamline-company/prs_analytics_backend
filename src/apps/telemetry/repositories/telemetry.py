@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from datetime import datetime
 
 from apps.telemetry.dto.internal.repositories.telemetry import (
     CreateTelemetryDTO,
@@ -25,6 +26,26 @@ class TelemetryRepository(
             QuerySpec(
                 filters=(Telemetry.well_id == well_id,),
                 order_by=(Telemetry.date_time,),
+            ),
+        )
+
+    async def list_by_well_id_in_period(
+        self,
+        well_id: int,
+        *,
+        date_time_from: datetime | None = None,
+        date_time_to: datetime | None = None,
+    ) -> Sequence[Telemetry]:
+        filters = [Telemetry.well_id == well_id]
+        if date_time_from is not None:
+            filters.append(Telemetry.date_time >= date_time_from)
+        if date_time_to is not None:
+            filters.append(Telemetry.date_time <= date_time_to)
+
+        return await self.get_list(
+            QuerySpec(
+                filters=tuple(filters),
+                order_by=(Telemetry.date_time.asc(),),
             ),
         )
 

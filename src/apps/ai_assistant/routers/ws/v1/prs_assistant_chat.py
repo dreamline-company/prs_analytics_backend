@@ -21,7 +21,7 @@ from shared.ai.llm.messages import HumanMessageDTO
 from shared.errors import WSError
 
 logger = get_logger(__name__)
-ws_router = APIRouter(prefix="/chat")
+ws_router = APIRouter(prefix="/prs")
 
 
 class BadRequestDataError(WSError):
@@ -29,10 +29,10 @@ class BadRequestDataError(WSError):
     close_code = status.WS_1007_INVALID_FRAME_PAYLOAD_DATA
 
 
-@ws_router.websocket("/{chat_id}")
+@ws_router.websocket("/chat/{chat_id}")
 async def assistant_chat_websocket(
     ws: WebSocket,
-    chat_id: Annotated[str, Path(description="Chat ID")],
+    chat_id: Annotated[str, Path(description="Chat UUID")],
 ) -> None:
     await ws.accept()
     try:

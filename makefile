@@ -1,4 +1,4 @@
-.PHONY: help up-redis down-redis logs-redis up-api down-api logs-api up-celery down-celery logs-celery
+.PHONY: help run-api up-redis down-redis logs-redis up-api down-api logs-api up-celery down-celery logs-celery
 
 PROJECT_NAME ?= prs_effectiveness
 ENV_FILE ?= src/.env
@@ -14,6 +14,9 @@ LOG_OPTIONS = --tail $(TAIL) $(LOG_FOLLOW)
 
 help: ## Show available make commands with descriptions.
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "%-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+run-api: ## Run API server locally from src with PYTHONPATH configured.
+	cd src && PYTHONPATH=$$(pwd) python entrypoints/server.py
 
 up-redis: ## Build and start Redis in detached mode.
 	$(REDIS_COMPOSE) up -d --build

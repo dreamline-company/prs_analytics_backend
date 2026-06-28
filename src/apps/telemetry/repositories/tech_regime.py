@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from datetime import date
 
 from sqlalchemy import insert
 
@@ -53,6 +54,26 @@ class TechRegimeRepository(
             QuerySpec(
                 filters=(TechRegime.abai_well_id == abai_well_id,),
                 order_by=(TechRegime.start_date.desc(),),
+            ),
+        )
+
+    async def list_by_abai_well_id_in_period(
+        self,
+        abai_well_id: int,
+        *,
+        start_date_from: date | None = None,
+        start_date_to: date | None = None,
+    ) -> Sequence[TechRegime]:
+        filters = [TechRegime.abai_well_id == abai_well_id]
+        if start_date_from is not None:
+            filters.append(TechRegime.start_date >= start_date_from)
+        if start_date_to is not None:
+            filters.append(TechRegime.start_date <= start_date_to)
+
+        return await self.get_list(
+            QuerySpec(
+                filters=tuple(filters),
+                order_by=(TechRegime.start_date.asc(),),
             ),
         )
 

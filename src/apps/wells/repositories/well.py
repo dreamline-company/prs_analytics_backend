@@ -12,6 +12,13 @@ class WellRepository(
 ):
     model = Well
 
+    async def get_by_id(self, id_: int) -> Well | None:
+        return await self.get_one(
+            QuerySpec(
+                filters=(Well.id == id_,),
+            ),
+        )
+
     async def get_by_abai_id(self, abai_id: int) -> Well | None:
         return await self.get_one(
             QuerySpec(
@@ -34,6 +41,23 @@ class WellRepository(
             QuerySpec(
                 filters=(Well.abai_id.in_(abai_ids),),
                 order_by=(Well.abai_id,),
+            ),
+        )
+
+    async def search_by_name(
+        self,
+        name: str,
+        *,
+        limit: int = 20,
+    ) -> Sequence[Well]:
+        return await self.get_list(
+            QuerySpec(
+                filters=(
+                    Well.name.ilike(f"%{name}%"),
+                    Well.is_deleted.is_(False),
+                ),
+                order_by=(Well.name,),
+                limit=limit,
             ),
         )
 
