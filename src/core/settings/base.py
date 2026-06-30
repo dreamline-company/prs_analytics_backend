@@ -38,6 +38,7 @@ class Settings(CoreSettings):
 
     # external Databases
     ABAI_ASYNC_DATABASE_URL: str
+    CM_ASYNC_DATABASE_URL: str
 
     ODBC_DRIVER: str = "ODBC Driver 18 for SQL Server"
 

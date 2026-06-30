@@ -75,3 +75,9 @@ class WinccTelemetryBaseModel(DeclarativeBase):
     """An abstract base model for ABAI DB tables."""
 
     __abstract__ = True
+
+
+class CMBaseModel(DeclarativeBase):
+    """An abstract base model for CM DB tables."""
+
+    __abstract__ = True
