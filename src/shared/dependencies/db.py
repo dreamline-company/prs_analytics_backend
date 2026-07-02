@@ -22,6 +22,11 @@ async def get_app_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+async def get_cm_session() -> AsyncGenerator[AsyncSession, None]:
+    async with session_makers["cm"]() as session:
+        yield session
+
+
 def get_aioboto_client_factory() -> Callable[[], AsyncContextManager[AiobotoClient]]:
     def factory() -> "AsyncContextManager[AiobotoClient]":
         session = aioboto3.Session()

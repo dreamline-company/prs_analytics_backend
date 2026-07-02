@@ -51,6 +51,22 @@ class SPORepository(
             ),
         )
 
+    async def list_by_well_id_in_window(
+        self,
+        well_id: int,
+        start: datetime,
+        end: datetime | None,
+    ) -> Sequence[SPO]:
+        filters = [SPO.well_id == well_id, SPO.snapshot_time >= start]
+        if end is not None:
+            filters.append(SPO.snapshot_time <= end)
+        return await self.get_list(
+            QuerySpec(
+                filters=tuple(filters),
+                order_by=(SPO.snapshot_time.asc(),),
+            ),
+        )
+
     async def list_by_file_id(self, file_id: int) -> Sequence[SPO]:
         return await self.get_list(
             QuerySpec(

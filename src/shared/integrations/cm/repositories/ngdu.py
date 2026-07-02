@@ -41,3 +41,17 @@ class CMNGDURepository(
                 order_by=(NGDU.name,),
             ),
         )
+
+    async def search_by_name(
+        self,
+        name: str,
+        *,
+        limit: int = 20,
+    ) -> Sequence[NGDU]:
+        return await self.get_list(
+            QuerySpec(
+                filters=(NGDU.name.ilike(f"%{name}%"),),
+                order_by=(NGDU.name,),
+                limit=limit,
+            ),
+        )

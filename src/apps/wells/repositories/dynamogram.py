@@ -70,6 +70,19 @@ class DynamogramRepository(
             ),
         )
 
+    async def list_by_ids(
+        self,
+        dynamogram_ids: Sequence[int],
+    ) -> Sequence[Dynamogram]:
+        if not dynamogram_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(Dynamogram.id.in_(dynamogram_ids),),
+                order_by=(Dynamogram.id,),
+            ),
+        )
+
     async def list_by_file_id(self, file_id: int) -> Sequence[Dynamogram]:
         return await self.get_list(
             QuerySpec(

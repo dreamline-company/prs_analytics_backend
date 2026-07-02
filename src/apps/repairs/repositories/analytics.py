@@ -1,15 +1,18 @@
 from collections.abc import Sequence
 
 from apps.repairs.dto.internal.repositories.analytics import (
+    CreateRepairAnalyticsBrigadeErrorScreenDTO,
     CreateRepairAnalyticsDTO,
     CreateRepairAnalyticsDynamogramDTO,
     CreateRepairAnalyticsSPODTO,
+    UpdateRepairAnalyticsBrigadeErrorScreenDTO,
     UpdateRepairAnalyticsDTO,
     UpdateRepairAnalyticsDynamogramDTO,
     UpdateRepairAnalyticsSPODTO,
 )
 from apps.repairs.models.analytics import (
     RepairAnalytics,
+    RepairAnalyticsBrigadeErrorScreen,
     RepairAnalyticsDynamogram,
     RepairAnalyticsSPO,
 )
@@ -106,4 +109,27 @@ class RepairAnalyticsSPORepository(
         return await self.update(
             data=data,
             filters=(RepairAnalyticsSPO.analytics_id == analytics_id,),
+        )
+
+
+class RepairAnalyticsBrigadeErrorScreenRepository(
+    AsyncAlchemyRepository[
+        CreateRepairAnalyticsBrigadeErrorScreenDTO,
+        UpdateRepairAnalyticsBrigadeErrorScreenDTO,
+        RepairAnalyticsBrigadeErrorScreen,
+    ],
+):
+    model = RepairAnalyticsBrigadeErrorScreen
+
+    async def list_by_analytics_id(
+        self,
+        analytics_id: int,
+    ) -> Sequence[RepairAnalyticsBrigadeErrorScreen]:
+        return await self.get_list(
+            QuerySpec(
+                filters=(
+                    RepairAnalyticsBrigadeErrorScreen.analytics_id == analytics_id,
+                ),
+                order_by=(RepairAnalyticsBrigadeErrorScreen.id,),
+            ),
         )

@@ -32,3 +32,12 @@ class CreateRepairAnalyticsSPODTO(RepositoryDTO):
 
 class UpdateRepairAnalyticsSPODTO(RepositoryDTO):
     spo_id: int | None = None
+
+
+class CreateRepairAnalyticsBrigadeErrorScreenDTO(RepositoryDTO):
+    analytics_id: int
+    cm_screen_id: int
+
+
+class UpdateRepairAnalyticsBrigadeErrorScreenDTO(RepositoryDTO):
+    cm_screen_id: int | None = None

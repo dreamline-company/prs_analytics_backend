@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 from apps.repairs.dto.internal.repositories.ai_results import (
     CreateRepairAIAnalysisDTO,
     CreateRepairDynamogramAIResultDTO,
@@ -33,6 +35,20 @@ class RepairDynamogramAIResultRepository(
             ),
         )
 
+    async def list_by_dynamogram_ids(
+        self,
+        dynamogram_ids: Sequence[int],
+    ) -> Sequence[RepairDynamogramAIResult]:
+        if not dynamogram_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(
+                    RepairDynamogramAIResult.dynamogram_id.in_(dynamogram_ids),
+                ),
+            ),
+        )
+
     async def update_by_dynamogram_id(
         self,
         dynamogram_id: int,
@@ -56,6 +72,18 @@ class RepairSPOAIResultRepository(
     async def get_by_spo_id(self, spo_id: int) -> RepairSPOAIResult | None:
         return await self.get_one(
             QuerySpec(filters=(RepairSPOAIResult.spo_id == spo_id,)),
+        )
+
+    async def list_by_spo_ids(
+        self,
+        spo_ids: Sequence[int],
+    ) -> Sequence[RepairSPOAIResult]:
+        if not spo_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(RepairSPOAIResult.spo_id.in_(spo_ids),),
+            ),
         )
 
     async def update_by_spo_id(
