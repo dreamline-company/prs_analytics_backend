@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, ForeignKey
+from sqlalchemy import BigInteger, Boolean, ForeignKey, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.database.sql.models import AppBaseModel, IntPkMixin, TimedMixinModel
@@ -6,9 +6,12 @@ from shared.database.sql.models import AppBaseModel, IntPkMixin, TimedMixinModel
 
 class RepairAnalytics(AppBaseModel, IntPkMixin, TimedMixinModel):
     __tablename__ = "repairs_repair_analytics"
+
     repair_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("repairs_repair.id"),
+        unique=True,
+        nullable=False,
     )
     summary_id: Mapped[int | None] = mapped_column(
         BigInteger,
@@ -18,9 +21,17 @@ class RepairAnalytics(AppBaseModel, IntPkMixin, TimedMixinModel):
         BigInteger,
         ForeignKey("repairs_repair_docs.id"),
     )
+    is_finalized: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        nullable=False,
+    )
 
 
 class RepairAnalyticsDynamogram(AppBaseModel, IntPkMixin, TimedMixinModel):
+    __tablename__ = "repairs_repair_analytics_dynamogram"
+
     analytics_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("repairs_repair_analytics.id"),
@@ -37,6 +48,8 @@ class RepairAnalyticsDynamogram(AppBaseModel, IntPkMixin, TimedMixinModel):
 
 
 class RepairAnalyticsSPO(AppBaseModel, IntPkMixin, TimedMixinModel):
+    __tablename__ = "repairs_repair_analytics_spo"
+
     analytics_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("repairs_repair_analytics.id"),
@@ -49,7 +62,9 @@ class RepairAnalyticsBrigadeErrorScreen(
     AppBaseModel,
     IntPkMixin,
     TimedMixinModel,
-):  # модель main_brigadeerrorscreen из ЦМ
+):
+    __tablename__ = "repairs_repair_analytics_brigade_error_screen"
+
     analytics_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("repairs_repair_analytics.id"),

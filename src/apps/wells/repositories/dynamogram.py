@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from datetime import datetime
 
 from apps.wells.dto.internal.repositories.dynamogram import (
     CreateDynamogramDTO,
@@ -18,6 +19,54 @@ class DynamogramRepository(
             QuerySpec(
                 filters=(Dynamogram.well_id == well_id,),
                 order_by=(Dynamogram.snapshot_time,),
+            ),
+        )
+
+    async def get_closest_before(
+        self,
+        well_id: int,
+        at: datetime,
+    ) -> Dynamogram | None:
+        rs = await self.get_list(
+            QuerySpec(
+                filters=(
+                    Dynamogram.well_id == well_id,
+                    Dynamogram.snapshot_time <= at,
+                ),
+                order_by=(Dynamogram.snapshot_time.desc(),),
+                limit=1,
+            ),
+        )
+        return rs[0] if rs else None
+
+    async def get_closest_after(
+        self,
+        well_id: int,
+        at: datetime,
+    ) -> Dynamogram | None:
+        rs = await self.get_list(
+            QuerySpec(
+                filters=(
+                    Dynamogram.well_id == well_id,
+                    Dynamogram.snapshot_time >= at,
+                ),
+                order_by=(Dynamogram.snapshot_time.asc(),),
+                limit=1,
+            ),
+        )
+        return rs[0] if rs else None
+
+    async def get_by_well_id_and_snapshot_time(
+        self,
+        well_id: int,
+        snapshot_time: datetime,
+    ) -> Dynamogram | None:
+        return await self.get_one(
+            QuerySpec(
+                filters=(
+                    Dynamogram.well_id == well_id,
+                    Dynamogram.snapshot_time == snapshot_time,
+                ),
             ),
         )
 

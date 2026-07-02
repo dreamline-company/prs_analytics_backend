@@ -13,6 +13,16 @@ class SPO(AppBaseModel, IntPkMixin):
         ForeignKey("files_file.id"),
         nullable=False,
     )
+    chart_file_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("files_file.id"),
+        nullable=True,
+    )
+    notes_file_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("files_file.id"),
+        nullable=True,
+    )
     snapshot_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     well_id: Mapped[int] = mapped_column(
         BigInteger,
