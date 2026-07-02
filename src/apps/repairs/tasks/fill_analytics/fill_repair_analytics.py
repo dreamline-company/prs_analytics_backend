@@ -6,13 +6,19 @@ Sources:
   * SPO        — kbrs/Toucan RPC (``ToucanBackendClient``), routed via the
                  brigade number on ``RepairSummary`` (бригада владеет девайсом).
 
+After every fetch pass, LLM processors (LangChain/LangGraph) analyze each
+dynamogram (before/after) and each SPO, then an aggregator produces one
+overall verdict for the repair. All results land in dedicated tables so the
+prompt owner can iterate on prompts without touching the schema.
+
 Selection logic per repair:
   * not finalized AND (active OR within grace window OR analytics missing)
     → process this run.
 
 Finalization (mark ``is_finalized=True``, stop touching) — either:
-  * RepairDoc has both ``por_file_id`` and ``act_file_id`` (the act PDF arrived);
-  * OR end_time + 10 days have passed (grace period for late docs).
+  * end_time + 10 days have passed (grace period ran out); OR
+  * RepairDoc has both ``por_file_id`` and ``act_file_id`` (act PDF arrived)
+    AND the overall AI analysis is ``completed``.
 """
 
 import asyncio
@@ -32,8 +38,13 @@ from apps.repairs.dto.internal.repositories.analytics import (
     UpdateRepairAnalyticsDynamogramDTO,
     UpdateRepairAnalyticsSPODTO,
 )
-from apps.repairs.models.analytics import RepairAnalytics
+from apps.repairs.models.analytics import AI_STATUS_COMPLETED, RepairAnalytics
 from apps.repairs.models.repair import Repair
+from apps.repairs.repositories.ai_results import (
+    RepairAIAnalysisRepository,
+    RepairDynamogramAIResultRepository,
+    RepairSPOAIResultRepository,
+)
 from apps.repairs.repositories.analytics import (
     RepairAnalyticsDynamogramRepository,
     RepairAnalyticsRepository,
@@ -41,6 +52,17 @@ from apps.repairs.repositories.analytics import (
 )
 from apps.repairs.repositories.docs import RepairDocRepository
 from apps.repairs.repositories.reports import RepairSummaryRepository
+from apps.repairs.tasks.fill_analytics.ai.agent_factory import (
+    build_dynamogram_agent,
+    build_overall_agent,
+    build_spo_agent,
+)
+from apps.repairs.tasks.fill_analytics.ai.coordinator import AICoordinator
+from apps.repairs.tasks.fill_analytics.ai.dynamogram_processor import (
+    DynamogramAIProcessor,
+)
+from apps.repairs.tasks.fill_analytics.ai.overall_processor import OverallAIProcessor
+from apps.repairs.tasks.fill_analytics.ai.spo_processor import SPOAIProcessor
 from apps.repairs.tasks.fill_analytics.fetchers.abai_dynamogram_fetcher import (
     AbaiDynamogramFetcher,
 )
@@ -136,6 +158,24 @@ class FillRepairAnalytics:
                     if toucan_client is not None
                     else None
                 )
+                ai_coordinator = AICoordinator(
+                    dynamogram_processor=DynamogramAIProcessor(
+                        build_dynamogram_agent(),
+                        model_name=settings.LLM_MODEL_NAME,
+                    ),
+                    spo_processor=SPOAIProcessor(
+                        build_spo_agent(),
+                        model_name=settings.LLM_MODEL_NAME,
+                    ),
+                    overall_processor=OverallAIProcessor(
+                        build_overall_agent(),
+                        model_name=settings.LLM_MODEL_NAME,
+                    ),
+                    dynamogram_ai_repo=deps.dynamogram_ai_repo,
+                    spo_ai_repo=deps.spo_ai_repo,
+                    overall_ai_repo=deps.overall_ai_repo,
+                    file_repo=deps.file_repo,
+                )
 
                 async for repairs in self._iter_candidates(session, grace_cutoff):
                     logger.debug("Batch: %s candidate repairs.", len(repairs))
@@ -147,6 +187,7 @@ class FillRepairAnalytics:
                                 dyn_fetcher=dyn_fetcher,
                                 doc_fetcher=doc_fetcher,
                                 spo_fetcher=spo_fetcher,
+                                ai_coordinator=ai_coordinator,
                                 grace_cutoff=grace_cutoff,
                             )
                             await session.commit()
@@ -178,6 +219,7 @@ class FillRepairAnalytics:
         dyn_fetcher: AbaiDynamogramFetcher,
         doc_fetcher: AbaiRepairDocFetcher,
         spo_fetcher: KbrsSPOFetcher | None,
+        ai_coordinator: AICoordinator,
         grace_cutoff: datetime,
     ) -> bool:
         well = (
@@ -188,6 +230,9 @@ class FillRepairAnalytics:
         abai_well_id = well.abai_id if well else repair.abai_well_id
 
         analytics = await self._ensure_analytics(repair, deps.analytics_repo)
+
+        before = after = None
+        spos: list = []
 
         if abai_well_id is not None:
             before, after = await dyn_fetcher.fetch_before_after(repair, abai_well_id)
@@ -207,15 +252,51 @@ class FillRepairAnalytics:
 
         if spo_fetcher is not None:
             spos = await spo_fetcher.fetch_for_repair(repair)
-            spo = spos[0] if spos else None
-            if spo is not None:
+            primary_spo = spos[0] if spos else None
+            if primary_spo is not None:
                 await self._link_spo(
                     analytics_id=analytics.id,
-                    spo_id=spo.id,
+                    spo_id=primary_spo.id,
                     analytics_spo_repo=deps.analytics_spo_repo,
                 )
 
-        if await self._should_finalize(repair, deps.doc_repo, grace_cutoff):
+        # AI processing: per-item results feed the overall analysis.
+        dyn_before_ai = (
+            await ai_coordinator.process_dynamogram(
+                dynamogram=before,
+                role="before",
+                repair_id=repair.id,
+            )
+            if before is not None
+            else None
+        )
+        dyn_after_ai = (
+            await ai_coordinator.process_dynamogram(
+                dynamogram=after,
+                role="after",
+                repair_id=repair.id,
+            )
+            if after is not None
+            else None
+        )
+        spo_ai_results = [
+            await ai_coordinator.process_spo(spo=spo, repair_id=repair.id)
+            for spo in spos
+        ]
+        overall_ai = await ai_coordinator.process_overall(
+            analytics_id=analytics.id,
+            repair=repair,
+            dynamogram_before=dyn_before_ai,
+            dynamogram_after=dyn_after_ai,
+            spo_results=spo_ai_results,
+        )
+
+        if await self._should_finalize(
+            repair=repair,
+            doc_repo=deps.doc_repo,
+            grace_cutoff=grace_cutoff,
+            overall_ai_status=overall_ai.status,
+        ):
             await deps.analytics_repo.update_by_repair_id(
                 repair_id=repair.id,
                 data=UpdateRepairAnalyticsDTO(is_finalized=True),
@@ -329,13 +410,26 @@ class FillRepairAnalytics:
     @classmethod
     async def _should_finalize(
         cls,
+        *,
         repair: Repair,
         doc_repo: RepairDocRepository,
         grace_cutoff: datetime,
+        overall_ai_status: str,
     ) -> bool:
+        # Docs-complete branch requires the AI verdict too — otherwise we would
+        # freeze the row before analysis lands. The overdue branch finalizes
+        # regardless, since we've given the pipeline its full grace window.
+        docs_complete = await cls._docs_complete(repair.id, doc_repo)
         if repair.end_time is not None and repair.end_time < grace_cutoff:
             return True
-        doc = await doc_repo.get_by_repair_id(repair.id)
+        return docs_complete and overall_ai_status == AI_STATUS_COMPLETED
+
+    @staticmethod
+    async def _docs_complete(
+        repair_id: int,
+        doc_repo: RepairDocRepository,
+    ) -> bool:
+        doc = await doc_repo.get_by_repair_id(repair_id)
         return (
             doc is not None
             and doc.por_file_id is not None
@@ -349,8 +443,11 @@ class _Dependencies:
         "analytics_repo",
         "analytics_spo_repo",
         "doc_repo",
+        "dynamogram_ai_repo",
         "dynamogram_repo",
         "file_repo",
+        "overall_ai_repo",
+        "spo_ai_repo",
         "spo_repo",
         "summary_repo",
         "well_repo",
@@ -368,6 +465,9 @@ class _Dependencies:
         summary_repo: RepairSummaryRepository,
         file_repo: FileRepository,
         well_repo: WellRepository,
+        dynamogram_ai_repo: RepairDynamogramAIResultRepository,
+        spo_ai_repo: RepairSPOAIResultRepository,
+        overall_ai_repo: RepairAIAnalysisRepository,
     ) -> None:
         self.analytics_repo = analytics_repo
         self.analytics_dyn_repo = analytics_dyn_repo
@@ -378,6 +478,9 @@ class _Dependencies:
         self.summary_repo = summary_repo
         self.file_repo = file_repo
         self.well_repo = well_repo
+        self.dynamogram_ai_repo = dynamogram_ai_repo
+        self.spo_ai_repo = spo_ai_repo
+        self.overall_ai_repo = overall_ai_repo
 
     @classmethod
     def build(cls, session: AsyncSession) -> "_Dependencies":
@@ -391,6 +494,9 @@ class _Dependencies:
             summary_repo=RepairSummaryRepository(session),
             file_repo=FileRepository(session),
             well_repo=WellRepository(session),
+            dynamogram_ai_repo=RepairDynamogramAIResultRepository(session),
+            spo_ai_repo=RepairSPOAIResultRepository(session),
+            overall_ai_repo=RepairAIAnalysisRepository(session),
         )
 
 

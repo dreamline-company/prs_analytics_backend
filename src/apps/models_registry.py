@@ -3,10 +3,13 @@ import inspect
 from apps.files.models.file import File
 from apps.org.models.ngdu import NGDU
 from apps.repairs.models.analytics import (
+    RepairAIAnalysis,
     RepairAnalytics,
     RepairAnalyticsBrigadeErrorScreen,
     RepairAnalyticsDynamogram,
     RepairAnalyticsSPO,
+    RepairDynamogramAIResult,
+    RepairSPOAIResult,
 )
 from apps.repairs.models.docs import RepairDoc
 from apps.repairs.models.repair import Repair, RepairType
@@ -25,11 +28,14 @@ __all__ = (
     "Dynamogram",
     "File",
     "Repair",
+    "RepairAIAnalysis",
     "RepairAnalytics",
     "RepairAnalyticsBrigadeErrorScreen",
     "RepairAnalyticsDynamogram",
     "RepairAnalyticsSPO",
     "RepairDoc",
+    "RepairDynamogramAIResult",
+    "RepairSPOAIResult",
     "RepairSummary",
     "RepairType",
     "TechRegime",
