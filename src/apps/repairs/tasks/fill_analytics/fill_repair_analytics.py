@@ -118,7 +118,7 @@ class FillRepairAnalytics:
         )
         toucan_client = self._toucan_client
         storage = AiobotoFileStorage(
-            bucket_name=settings.REPORTS_BUCKET_NAME,
+            bucket_name=settings.PRS_REPAIRS_BUCKET_NAME,
             client_factory=get_aioboto_client_factory(),
         )
 

@@ -95,6 +95,25 @@ class AiobotoFileStorage:
             except ClientError:
                 logger.exception("No files for delete in S3 bucket")
 
+    async def generate_presigned_url(
+        self,
+        file_path: str,
+        *,
+        expires_in: int = 3600,
+    ) -> str:
+        """Return a time-limited download URL for the object.
+
+        Works with MinIO — the URL uses the same endpoint (domain) that the
+        client is configured with, so this is exactly the domain URL the
+        frontend needs.
+        """
+        async with self.client_factory() as client:
+            return await client.generate_presigned_url(
+                ClientMethod="get_object",
+                Params={"Bucket": self.bucket_name, "Key": file_path},
+                ExpiresIn=expires_in,
+            )
+
     async def list_dir(self, prefix: str) -> list[str] | None:
         try:
             async with self.client_factory() as client:

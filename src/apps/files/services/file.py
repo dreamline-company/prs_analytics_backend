@@ -1,7 +1,9 @@
+import datetime
 from io import BytesIO
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.files.dto.internal.file import FileDownloadDTO
 from apps.files.dto.internal.repositories.file import CreateFileDTO
 from apps.files.errors import FileMissingError, FileUploadConsistencyError
 from apps.files.models.file import File
@@ -138,3 +140,30 @@ class FileService:
         if db_file is None:
             raise FileMissingError(details={"file_id": file_id})
         return db_file
+
+    async def get_download_info(
+        self,
+        file_id: int,
+        *,
+        expires_in: int = 3600,
+    ) -> FileDownloadDTO:
+        """Return a presigned S3 URL for *file_id* plus metadata.
+
+        The URL is signed against the storage's endpoint (MinIO domain), so
+        the frontend can hit S3 directly without proxying through this service.
+        """
+        db_file = await self.get_by_id(file_id)
+        url = await self._storage.generate_presigned_url(
+            db_file.file,
+            expires_in=expires_in,
+        )
+        expires_at = datetime.datetime.now(tz=datetime.UTC) + datetime.timedelta(
+            seconds=expires_in,
+        )
+        return FileDownloadDTO(
+            id=db_file.id,
+            key=db_file.file,
+            bucket=self._storage.bucket_name,
+            download_url=url,
+            expires_at=expires_at,
+        )
