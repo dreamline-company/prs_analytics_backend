@@ -3,3 +3,6 @@ from shared.dto.api import AppResponse
 
 
 class SearchNGDUResponseDTO(AppResponse[list[NGDUShortDTO]]): ...
+
+
+class ListNGDUResponseDTO(AppResponse[list[NGDUShortDTO]]): ...
