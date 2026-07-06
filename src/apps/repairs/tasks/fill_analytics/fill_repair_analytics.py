@@ -83,6 +83,7 @@ from shared.database.s3.storage import AiobotoFileStorage
 from shared.database.sql.setup import session_makers
 from shared.dependencies.db import get_aioboto_client_factory
 from shared.integrations.abai.api.client import AbaiAsyncClient
+from shared.integrations.kbrs.api import ToucanClientConfig, ToucanCredentialsDto
 from shared.integrations.kbrs.api.client import ToucanBackendClient
 
 logger = get_logger(__name__)
@@ -115,6 +116,10 @@ class FillRepairAnalytics:
         abai_client = self._abai_client or AbaiAsyncClient(
             username=settings.ABAI_LOGIN,
             password=settings.ABAI_PASS,
+            domain=settings.ABAI_DOMAIN,
+            connect_to=settings.ABAI_CONNECT_THROUGH,
+            timeout=120,
+            max_concurrent_downloads=100,
         )
         toucan_client = self._toucan_client
         storage = AiobotoFileStorage(
@@ -501,7 +506,28 @@ class _Dependencies:
 
 
 async def main() -> None:
-    await FillRepairAnalytics().run()
+    abai_client = AbaiAsyncClient(
+        username=settings.ABAI_LOGIN,
+        password=settings.ABAI_PASS,
+        domain=settings.ABAI_DOMAIN,
+        connect_to=settings.ABAI_CONNECT_THROUGH,
+        timeout=120,
+        max_concurrent_downloads=100,
+    )
+    toucan_client = ToucanBackendClient(
+        config=ToucanClientConfig(host=settings.KBRS_HOST),
+    )
+    toucan_client.login(
+        ToucanCredentialsDto(
+            login=settings.KBRS_LOGIN,
+            password=settings.KBRS_PASSWORD,
+        ),
+    )
+
+    await FillRepairAnalytics(
+        abai_client=abai_client,
+        toucan_client=toucan_client,
+    ).run()
 
 
 if __name__ == "__main__":

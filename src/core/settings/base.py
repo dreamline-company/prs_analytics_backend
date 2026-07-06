@@ -36,10 +36,13 @@ class Settings(CoreSettings):
     APP_SYNC_DATABASE_URL: SecretStr
     ALEMBIC_VERSION_TABLE_NAME: str = "prs_alembic_versions"
 
-    # external Databases
+    # External Databases
+    # ABAI VIEWS
     ABAI_ASYNC_DATABASE_URL: str
+    # CM DB
     CM_ASYNC_DATABASE_URL: str
 
+    # WINCC
     ODBC_DRIVER: str = "ODBC Driver 18 for SQL Server"
 
     KAINAR_HOST: str
@@ -53,10 +56,6 @@ class Settings(CoreSettings):
     DMG_DATABASE: str
     DMG_USER: str
     DMG_PASSWORD: str
-
-    # ABAI WEB
-    ABAI_LOGIN: str
-    ABAI_PASS: str
 
     @classmethod
     def _get_odbc_url(  # noqa: PLR0913
@@ -99,6 +98,17 @@ class Settings(CoreSettings):
             self.KAINAR_PASSWORD,
             self.KAINAR_DATABASE,
         )
+
+    # ABAI WEB CLIENT
+    ABAI_LOGIN: str
+    ABAI_PASS: str
+    ABAI_DOMAIN: str = "emg_new"
+    ABAI_CONNECT_THROUGH: str = "abai.kmg.kz:443:10.32.10.98:8443"
+
+    # TOUCAN KBRS CLIENT
+    KBRS_HOST: str = "10.32.10.86"
+    KBRS_LOGIN: str
+    KBRS_PASSWORD: str
 
     # S3 (minio)
     S3_ACCESS_KEY: str
