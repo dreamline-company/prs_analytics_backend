@@ -21,6 +21,7 @@ Finalization (mark ``is_finalized=True``, stop touching) — either:
     AND the overall AI analysis is ``completed``.
 """
 
+import argparse
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 from datetime import datetime, timedelta
@@ -74,6 +75,7 @@ from apps.repairs.tasks.fill_analytics.fetchers.kbrs_spo_fetcher import (
     KbrsSPOFetcher,
     make_kbrs_brigade_resolver,
 )
+from apps.wells.models.well import Well
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
 from apps.wells.repositories.well import WellRepository
@@ -101,16 +103,32 @@ class FillRepairAnalytics:
         abai_client: AbaiAsyncClient | None = None,
         toucan_client: ToucanBackendClient | None = None,
         brigade_resolver: BrigadeResolver | None = None,
+        *,
+        repair_id: int | None = None,
+        well_id: int | None = None,
     ) -> None:
+        if repair_id is not None and well_id is not None:
+            msg = "Pass either repair_id or well_id, not both."
+            raise ValueError(msg)
         self._abai_client = abai_client
         self._toucan_client = toucan_client
         self._brigade_resolver = brigade_resolver
+        self._repair_id = repair_id
+        self._well_id = well_id
 
     async def run(self) -> None:
+        scope_label = (
+            f"repair_id={self._repair_id}"
+            if self._repair_id is not None
+            else f"well_id={self._well_id}"
+            if self._well_id is not None
+            else "all candidates"
+        )
         logger.info(
-            "FillRepairAnalytics started (grace=%s days, batch=%s).",
+            "FillRepairAnalytics started (grace=%s days, batch=%s, scope=%s).",
             self.GRACE_DAYS,
             self.ITER_SIZE,
+            scope_label,
         )
 
         abai_client = self._abai_client or AbaiAsyncClient(
@@ -228,20 +246,28 @@ class FillRepairAnalytics:
         grace_cutoff: datetime,
     ) -> bool:
         logger.info(
-            "Processing repair id=%s well_id=%s abai_well_id=%s "
-            "start=%s end=%s",
+            "Processing repair id=%s well_id=%s abai_well_id=%s start=%s end=%s",
             repair.id,
             repair.well_id,
             repair.abai_well_id,
             repair.start_time,
             repair.end_time,
         )
-        well = (
-            await deps.well_repo.get_by_id(id_=repair.well_id)
-            if repair.well_id is not None
-            else None
-        )
+        well = None
+        if repair.well_id is not None:
+            well = await deps.well_repo.get_by_id(id_=repair.well_id)
+        elif repair.abai_well_id is not None:
+            well = await deps.well_repo.get_by_abai_id(abai_id=repair.abai_well_id)
+            if well is not None:
+                logger.info(
+                    "Resolved well via abai_id=%s → well.id=%s (repair id=%s).",
+                    repair.abai_well_id,
+                    well.id,
+                    repair.id,
+                )
+
         abai_well_id = well.abai_id if well else repair.abai_well_id
+        effective_well_id = well.id if well else repair.well_id
 
         analytics = await self._ensure_analytics(repair, deps.analytics_repo)
 
@@ -249,7 +275,11 @@ class FillRepairAnalytics:
         spos: list = []
 
         if abai_well_id is not None:
-            before, after = await dyn_fetcher.fetch_before_after(repair, abai_well_id)
+            before, after = await dyn_fetcher.fetch_before_after(
+                repair,
+                abai_well_id,
+                well_id=effective_well_id,
+            )
             logger.info(
                 "Repair id=%s dynamograms: before=%s after=%s",
                 repair.id,
@@ -281,7 +311,10 @@ class FillRepairAnalytics:
             )
 
         if spo_fetcher is not None:
-            spos = await spo_fetcher.fetch_for_repair(repair)
+            spos = await spo_fetcher.fetch_for_repair(
+                repair,
+                well_id=effective_well_id,
+            )
             logger.info(
                 "Repair id=%s SPO count=%s (ids=%s)",
                 repair.id,
@@ -351,6 +384,19 @@ class FillRepairAnalytics:
         session: AsyncSession,
         grace_cutoff: datetime,
     ) -> AsyncIterator[Sequence[Repair]]:
+        if self._repair_id is not None:
+            qs = select(Repair).where(Repair.id == self._repair_id)
+            result = await session.execute(qs)
+            repairs = result.scalars().all()
+            if repairs:
+                yield repairs
+            else:
+                logger.warning(
+                    "No repair found with id=%s.",
+                    self._repair_id,
+                )
+            return
+
         last_id = 0
         while True:
             qs = (
@@ -359,8 +405,15 @@ class FillRepairAnalytics:
                     RepairAnalytics,
                     RepairAnalytics.repair_id == Repair.id,
                 )
-                .where(
-                    Repair.id > last_id,
+                .where(Repair.id > last_id)
+                .order_by(Repair.id.asc())
+                .limit(self.ITER_SIZE)
+            )
+            if self._well_id is not None:
+                qs = qs.join(Well, Repair.abai_well_id == Well.abai_id)
+                qs = qs.where(Well.id == self._well_id)
+            else:
+                qs = qs.where(
                     or_(
                         RepairAnalytics.is_finalized.is_(None),
                         RepairAnalytics.is_finalized.is_(False),
@@ -371,9 +424,6 @@ class FillRepairAnalytics:
                         RepairAnalytics.id.is_(None),
                     ),
                 )
-                .order_by(Repair.id.asc())
-                .limit(self.ITER_SIZE)
-            )
             result = await session.execute(qs)
             repairs = result.scalars().all()
             if not repairs:
@@ -545,7 +595,11 @@ class _Dependencies:
         )
 
 
-async def main() -> None:
+async def main(
+    *,
+    repair_id: int | None = None,
+    well_id: int | None = None,
+) -> None:
     abai_client = AbaiAsyncClient(
         username=settings.ABAI_LOGIN,
         password=settings.ABAI_PASS,
@@ -567,8 +621,25 @@ async def main() -> None:
     await FillRepairAnalytics(
         abai_client=abai_client,
         toucan_client=toucan_client,
+        repair_id=repair_id,
+        well_id=well_id,
     ).run()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(
+        description="Fill repair analytics. Without args processes all candidates.",
+    )
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument(
+        "--repair-id",
+        type=int,
+        help="Process only this repair (ignores finalization filter).",
+    )
+    scope.add_argument(
+        "--well-id",
+        type=int,
+        help="Process all repairs of this well (ignores finalization filter).",
+    )
+    args = parser.parse_args()
+    asyncio.run(main(repair_id=args.repair_id, well_id=args.well_id))

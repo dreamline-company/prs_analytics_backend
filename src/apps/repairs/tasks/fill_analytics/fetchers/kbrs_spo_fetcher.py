@@ -92,10 +92,17 @@ class KbrsSPOFetcher:
         self._summary_repo = summary_repo
         self._brigade_resolver = brigade_resolver
 
-    async def fetch_for_repair(self, repair: Repair) -> list[SPO]:
-        if repair.well_id is None:
+    async def fetch_for_repair(
+        self,
+        repair: Repair,
+        *,
+        well_id: int | None = None,
+    ) -> list[SPO]:
+        effective_well_id = well_id if well_id is not None else repair.well_id
+        if effective_well_id is None:
             logger.warning(
-                "SPO skipped for repair id=%s — repair.well_id is None.",
+                "SPO skipped for repair id=%s — no well_id (neither "
+                "repair.well_id nor abai→well lookup).",
                 repair.id,
             )
             return []
@@ -137,6 +144,7 @@ class KbrsSPOFetcher:
                 repair=repair,
                 owner_id=owner_id,
                 device_id=device_id,
+                well_id=effective_well_id,
             )
             if spo is None:
                 logger.warning(
@@ -168,6 +176,7 @@ class KbrsSPOFetcher:
         repair: Repair,
         owner_id: int,
         device_id: int,
+        well_id: int,
     ) -> SPO | None:
         end = repair.end_time or datetime.now()  # noqa: DTZ005
         measure = await asyncio.to_thread(
@@ -183,7 +192,7 @@ class KbrsSPOFetcher:
         snapshot_time = measure.parsed.start or repair.start_time
 
         existing = await self._spo_repo.get_by_well_id_and_snapshot_time(
-            well_id=repair.well_id,
+            well_id=well_id,
             snapshot_time=snapshot_time,
         )
         if existing is not None and existing.chart_file_id and existing.notes_file_id:
@@ -194,7 +203,7 @@ class KbrsSPOFetcher:
         csv_bytes = self._render_csv(measure.parsed)
         notes_bytes = self._render_notes(measure.parsed)
 
-        prefix = f"spo/{repair.well_id}/{measure.request.measure_id}"
+        prefix = f"spo/{well_id}/{measure.request.measure_id}"
         master_file = await self._upload_and_register(
             payload=raw_bytes,
             s3_key=f"{prefix}/raw.bin",
@@ -218,7 +227,7 @@ class KbrsSPOFetcher:
                     chart_file_id=chart_file.id if chart_file else None,
                     notes_file_id=notes_file.id if notes_file else None,
                     snapshot_time=snapshot_time,
-                    well_id=repair.well_id,
+                    well_id=well_id,
                 ),
             )
         return await self._spo_repo.update(

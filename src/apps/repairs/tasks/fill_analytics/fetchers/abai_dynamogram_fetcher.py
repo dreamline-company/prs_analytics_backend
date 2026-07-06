@@ -45,7 +45,11 @@ class AbaiDynamogramFetcher:
         self,
         repair: Repair,
         abai_well_id: int,
+        *,
+        well_id: int | None = None,
     ) -> tuple[Dynamogram | None, Dynamogram | None]:
+        effective_well_id = well_id if well_id is not None else repair.well_id
+
         files = await self._list_dynamogram_files(abai_well_id)
         logger.info(
             "ABAI GDIS returned %s dynamogram files for abai_well_id=%s "
@@ -73,20 +77,22 @@ class AbaiDynamogramFetcher:
             repair.end_time,
         )
 
-        if repair.well_id is None:
+        if effective_well_id is None:
             logger.warning(
-                "Repair id=%s has no well_id → cannot persist dynamograms.",
+                "Repair id=%s has no well_id (repair.well_id and abai→well "
+                "lookup both empty) → cannot persist dynamograms.",
                 repair.id,
             )
+            return None, None
 
         before = (
-            await self._persist(repair.well_id, before_file)
-            if before_file and repair.well_id is not None
+            await self._persist(effective_well_id, before_file)
+            if before_file
             else None
         )
         after = (
-            await self._persist(repair.well_id, after_file)
-            if after_file and repair.well_id is not None
+            await self._persist(effective_well_id, after_file)
+            if after_file
             else None
         )
         return before, after
@@ -153,6 +159,8 @@ class AbaiDynamogramFetcher:
         snapshot_time = self._parse_measure_date(abai_file)
         if snapshot_time is None:
             return None
+        if snapshot_time.tzinfo is not None:
+            snapshot_time = snapshot_time.replace(tzinfo=None)
 
         existing = await self._dynamogram_repo.get_by_well_id_and_snapshot_time(
             well_id=well_id,
