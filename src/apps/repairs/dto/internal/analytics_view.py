@@ -6,9 +6,10 @@ AI). AI blocks are nullable — analytics rows exist before the LLM has run.
 """
 
 import datetime
+import json
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class AIResultDTO(BaseModel):
@@ -21,6 +22,16 @@ class AIResultDTO(BaseModel):
     result: dict[str, Any] | None
     error: str | None
     processed_at: datetime.datetime | None
+
+    @field_validator("result", mode="before")
+    @classmethod
+    def _parse_result(cls, value: Any) -> Any:  # noqa: ANN401
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return {"raw": value}
+        return value
 
 
 class DynamogramWithAIResultDTO(BaseModel):

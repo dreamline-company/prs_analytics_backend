@@ -19,8 +19,11 @@ from apps.wells.dto.internal.repositories.dynamogram import CreateDynamogramDTO
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from core import get_logger
+from core.settings import get_settings
 from shared.database.s3.storage import AiobotoFileStorage
 from shared.integrations.abai.api.client import AbaiAsyncClient, AbaiFile
+
+settings = get_settings()
 
 logger = get_logger(__name__)
 
@@ -44,6 +47,13 @@ class AbaiDynamogramFetcher:
         abai_well_id: int,
     ) -> tuple[Dynamogram | None, Dynamogram | None]:
         files = await self._list_dynamogram_files(abai_well_id)
+        logger.info(
+            "ABAI GDIS returned %s dynamogram files for abai_well_id=%s "
+            "(repair id=%s).",
+            len(files),
+            abai_well_id,
+            repair.id,
+        )
         if not files:
             return None, None
 
@@ -53,6 +63,21 @@ class AbaiDynamogramFetcher:
             if repair.end_time is not None
             else None
         )
+        logger.info(
+            "Dynamogram picks for repair id=%s: before=%s after=%s "
+            "(start=%s end=%s).",
+            repair.id,
+            getattr(before_file, "file_name", None),
+            getattr(after_file, "file_name", None),
+            repair.start_time,
+            repair.end_time,
+        )
+
+        if repair.well_id is None:
+            logger.warning(
+                "Repair id=%s has no well_id → cannot persist dynamograms.",
+                repair.id,
+            )
 
         before = (
             await self._persist(repair.well_id, before_file)
@@ -82,7 +107,9 @@ class AbaiDynamogramFetcher:
         if not file.measure_date:
             return None
         try:
-            return datetime.strptime(file.measure_date, "%d.%m.%Y")  # noqa: DTZ007
+            return datetime.strptime(file.measure_date, "%d.%m.%Y").replace(
+                tzinfo=settings.ZONE_INFO,
+            )
         except ValueError:
             return None
 

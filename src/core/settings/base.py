@@ -117,7 +117,7 @@ class Settings(CoreSettings):
 
     DYNAMOGRAM_BUCKET_NAME: str = "PRS-DYNAMOGRAM-BUCKET"
     SPO_BUCKET_NAME: str = "PRS-DYNAMOGRAM-BUCKET"  # спуско подъемные операции
-    PRS_REPAIRS_BUCKET_NAME: str = "PRS-BUCKET"
+    PRS_REPAIRS_BUCKET_NAME: str = "prs-analytics-bucket"
 
     # Redis
     REDIS_USER: str

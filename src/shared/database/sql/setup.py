@@ -15,7 +15,7 @@ AVAILABLE_DB = Literal[
     "dmg_telemetry",
 ]
 
-is_echo = settings.LOG_LEVEL == "DEBUG"
+is_echo = False
 engines: dict[AVAILABLE_DB, AsyncEngine] = {
     "abai": create_async_engine(url=settings.ABAI_ASYNC_DATABASE_URL, echo=is_echo),
     "dmg_telemetry": create_async_engine(

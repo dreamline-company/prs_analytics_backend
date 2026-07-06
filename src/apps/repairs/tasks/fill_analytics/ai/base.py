@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from langchain.messages import AIMessage
 
 from core import get_logger
+from core.settings import get_settings
+
+settings = get_settings()
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -58,7 +61,7 @@ class BaseAIProcessor[InputT]:
         self._model_name = model_name
 
     async def process(self, item: InputT) -> AIProcessingResult:
-        processed_at = datetime.now(tz=UTC)
+        processed_at = datetime.now(tz=settings.ZONE_INFO).replace(tzinfo=None)
         try:
             initial_state = self._build_state(item)
             final_state = await self._agent.ainvoke(input=initial_state)

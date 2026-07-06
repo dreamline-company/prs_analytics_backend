@@ -94,12 +94,22 @@ class KbrsSPOFetcher:
 
     async def fetch_for_repair(self, repair: Repair) -> list[SPO]:
         if repair.well_id is None:
+            logger.warning(
+                "SPO skipped for repair id=%s — repair.well_id is None.",
+                repair.id,
+            )
             return []
 
         brigade_numbers = await self._brigade_numbers_for_repair(repair.id)
+        logger.info(
+            "SPO for repair id=%s: brigade_numbers=%s",
+            repair.id,
+            brigade_numbers,
+        )
         if not brigade_numbers:
-            logger.debug(
-                "Skipping SPO for repair_id=%s — no brigade in RepairSummary.",
+            logger.warning(
+                "SPO skipped for repair id=%s — no brigade_number in "
+                "RepairSummary (fill summaries first).",
                 repair.id,
             )
             return []
@@ -108,18 +118,37 @@ class KbrsSPOFetcher:
         for brigade_number in brigade_numbers:
             resolved = self._brigade_resolver(brigade_number)
             if resolved is None:
-                logger.debug(
-                    "Brigade %s has no kbrs device mapping; skipped.",
+                logger.warning(
+                    "Brigade %s (repair id=%s) has no kbrs device mapping; "
+                    "skipped.",
                     brigade_number,
+                    repair.id,
                 )
                 continue
             owner_id, device_id = resolved
+            logger.info(
+                "Brigade %s → kbrs owner_id=%s device_id=%s (repair id=%s).",
+                brigade_number,
+                owner_id,
+                device_id,
+                repair.id,
+            )
             spo = await self._fetch_one(
                 repair=repair,
                 owner_id=owner_id,
                 device_id=device_id,
             )
-            if spo is not None:
+            if spo is None:
+                logger.warning(
+                    "kbrs returned no SPO for brigade %s (repair id=%s, "
+                    "owner_id=%s, device_id=%s) — no measurement in window "
+                    "or upload failed.",
+                    brigade_number,
+                    repair.id,
+                    owner_id,
+                    device_id,
+                )
+            else:
                 spos.append(spo)
         return spos
 

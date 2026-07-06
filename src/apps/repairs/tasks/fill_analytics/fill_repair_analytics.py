@@ -227,6 +227,15 @@ class FillRepairAnalytics:
         ai_coordinator: AICoordinator,
         grace_cutoff: datetime,
     ) -> bool:
+        logger.info(
+            "Processing repair id=%s well_id=%s abai_well_id=%s "
+            "start=%s end=%s",
+            repair.id,
+            repair.well_id,
+            repair.abai_well_id,
+            repair.start_time,
+            repair.end_time,
+        )
         well = (
             await deps.well_repo.get_by_id(id_=repair.well_id)
             if repair.well_id is not None
@@ -241,6 +250,12 @@ class FillRepairAnalytics:
 
         if abai_well_id is not None:
             before, after = await dyn_fetcher.fetch_before_after(repair, abai_well_id)
+            logger.info(
+                "Repair id=%s dynamograms: before=%s after=%s",
+                repair.id,
+                before.id if before else None,
+                after.id if after else None,
+            )
             await self._link_dynamograms(
                 analytics_id=analytics.id,
                 before_id=before.id if before else None,
@@ -249,14 +264,30 @@ class FillRepairAnalytics:
             )
 
             doc = await doc_fetcher.fetch(repair, abai_well_id)
+            logger.info(
+                "Repair id=%s doc: %s",
+                repair.id,
+                doc.id if doc else None,
+            )
             if doc is not None and analytics.repair_docs_id != doc.id:
                 await deps.analytics_repo.update_by_repair_id(
                     repair_id=repair.id,
                     data=UpdateRepairAnalyticsDTO(repair_docs_id=doc.id),
                 )
+        else:
+            logger.warning(
+                "Repair id=%s has no abai_well_id → skipping dynamograms + docs.",
+                repair.id,
+            )
 
         if spo_fetcher is not None:
             spos = await spo_fetcher.fetch_for_repair(repair)
+            logger.info(
+                "Repair id=%s SPO count=%s (ids=%s)",
+                repair.id,
+                len(spos),
+                [s.id for s in spos],
+            )
             primary_spo = spos[0] if spos else None
             if primary_spo is not None:
                 await self._link_spo(
@@ -264,6 +295,12 @@ class FillRepairAnalytics:
                     spo_id=primary_spo.id,
                     analytics_spo_repo=deps.analytics_spo_repo,
                 )
+        else:
+            logger.warning(
+                "Repair id=%s → spo_fetcher is None "
+                "(toucan_client not initialized), skipping SPO.",
+                repair.id,
+            )
 
         # AI processing: per-item results feed the overall analysis.
         dyn_before_ai = (
@@ -425,7 +462,10 @@ class FillRepairAnalytics:
         # freeze the row before analysis lands. The overdue branch finalizes
         # regardless, since we've given the pipeline its full grace window.
         docs_complete = await cls._docs_complete(repair.id, doc_repo)
-        if repair.end_time is not None and repair.end_time < grace_cutoff:
+        end_time = repair.end_time
+        if end_time is not None and end_time.tzinfo is not None:
+            end_time = end_time.replace(tzinfo=None)
+        if end_time is not None and end_time < grace_cutoff:
             return True
         return docs_complete and overall_ai_status == AI_STATUS_COMPLETED
 
