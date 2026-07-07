@@ -17,6 +17,11 @@ Each kbrs measurement we pull becomes one SPO row, with:
   * ``chart_file_id`` — CSV export of the measurement (тот самый «график»).
   * ``notes_file_id`` — JSON metadata blob (channels, time range, record count).
 
+Events extracted from the measurement's ``details`` block are stored in the
+``repairs_spo_event`` table, one row per event, FK ``spo_id`` back to the SPO.
+On re-fetch the event set is replaced (delete-then-insert) so it always
+matches the current measurement payload.
+
 The kbrs RPC client is synchronous, so I/O is offloaded to a thread.
 """
 
@@ -32,8 +37,10 @@ from apps.files.repositories.file import FileRepository
 from apps.repairs.models.repair import Repair
 from apps.repairs.repositories.reports import RepairSummaryRepository
 from apps.wells.dto.internal.repositories.spo import CreateSPODTO, UpdateSPODTO
+from apps.wells.dto.internal.repositories.spo_event import CreateSPOEventDTO
 from apps.wells.models.spo import SPO
 from apps.wells.repositories.spo import SPORepository
+from apps.wells.repositories.spo_event import SPOEventRepository
 from core import get_logger
 from shared.database.s3.storage import AiobotoFileStorage
 from shared.integrations.kbrs.api.client import ToucanBackendClient
@@ -84,6 +91,7 @@ class KbrsSPOFetcher:
         spo_repo: SPORepository,
         summary_repo: RepairSummaryRepository,
         brigade_resolver: BrigadeResolver,
+        spo_event_repo: SPOEventRepository,
     ) -> None:
         self._toucan = toucan_client
         self._storage = storage
@@ -91,6 +99,7 @@ class KbrsSPOFetcher:
         self._spo_repo = spo_repo
         self._summary_repo = summary_repo
         self._brigade_resolver = brigade_resolver
+        self._spo_event_repo = spo_event_repo
 
     async def fetch_for_repair(
         self,
@@ -189,19 +198,23 @@ class KbrsSPOFetcher:
         if measure is None:
             return None
 
-        snapshot_time = measure.parsed.start or repair.start_time
+        parsed = measure.full.chart
+        events = measure.full.details.events
+
+        snapshot_time = parsed.start or repair.start_time
 
         existing = await self._spo_repo.get_by_well_id_and_snapshot_time(
             well_id=well_id,
             snapshot_time=snapshot_time,
         )
         if existing is not None and existing.chart_file_id and existing.notes_file_id:
+            await self._persist_events(existing.id, events)
             return existing
 
         load_raw = self._toucan.measurement_service.load_raw_measurement
         raw_bytes = await asyncio.to_thread(load_raw, measure.request)
-        csv_bytes = self._render_csv(measure.parsed)
-        notes_bytes = self._render_notes(measure.parsed)
+        csv_bytes = self._render_csv(parsed)
+        notes_bytes = self._render_notes(parsed)
 
         prefix = f"spo/{well_id}/{measure.request.measure_id}"
         master_file = await self._upload_and_register(
@@ -221,7 +234,7 @@ class KbrsSPOFetcher:
             return None
 
         if existing is None:
-            return await self._spo_repo.create(
+            spo = await self._spo_repo.create(
                 CreateSPODTO(
                     file_id=master_file.id,
                     chart_file_id=chart_file.id if chart_file else None,
@@ -230,13 +243,40 @@ class KbrsSPOFetcher:
                     well_id=well_id,
                 ),
             )
-        return await self._spo_repo.update(
-            data=UpdateSPODTO(
-                file_id=master_file.id,
-                chart_file_id=chart_file.id if chart_file else None,
-                notes_file_id=notes_file.id if notes_file else None,
-            ),
-            filters=(SPO.id == existing.id,),
+        else:
+            spo = await self._spo_repo.update(
+                data=UpdateSPODTO(
+                    file_id=master_file.id,
+                    chart_file_id=chart_file.id if chart_file else None,
+                    notes_file_id=notes_file.id if notes_file else None,
+                ),
+                filters=(SPO.id == existing.id,),
+            )
+
+        await self._persist_events(spo.id, events)
+        return spo
+
+    async def _persist_events(
+        self,
+        spo_id: int,
+        events: Sequence,
+    ) -> None:
+        dtos = [
+            CreateSPOEventDTO(
+                spo_id=spo_id,
+                offset=event.offset,
+                time_text=event.time_text,
+                code=event.code,
+                text=event.text,
+                raw_text=event.raw_text,
+            )
+            for event in events
+        ]
+        await self._spo_event_repo.replace_for_spo(spo_id, dtos)
+        logger.info(
+            "Persisted %s SPO events for spo_id=%s.",
+            len(dtos),
+            spo_id,
         )
 
     def _pick_measurement(
@@ -265,8 +305,8 @@ class KbrsSPOFetcher:
             device_id=selected.device_id,
             update_offset=selected.offset,
         )
-        parsed = self._toucan.load_measurement(request)
-        return _PickedMeasurement(request=request, parsed=parsed)
+        full = self._toucan.load_full_measurement(request)
+        return _PickedMeasurement(request=request, full=full)
 
     @staticmethod
     def _render_csv(parsed) -> bytes:  # noqa: ANN001
@@ -309,12 +349,12 @@ class KbrsSPOFetcher:
 
 
 class _PickedMeasurement:
-    __slots__ = ("parsed", "request")
+    __slots__ = ("full", "request")
 
     def __init__(
         self,
         request: LoadMeasurementRequestDto,
-        parsed,  # noqa: ANN001
+        full,  # noqa: ANN001
     ) -> None:
         self.request = request
-        self.parsed = parsed
+        self.full = full

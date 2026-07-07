@@ -21,11 +21,13 @@ from apps.telemetry.models.telemetry import Telemetry
 from apps.wells.models.coords import Coord, WellCoord
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.models.spo import SPO
+from apps.wells.models.spo_event import SPOEvent
 from apps.wells.models.well import Well
 
 __all__ = (
     "NGDU",
     "SPO",
+    "SPOEvent",
     "Brigade",
     "Coord",
     "Dynamogram",

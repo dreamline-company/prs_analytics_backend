@@ -78,6 +78,7 @@ from apps.repairs.tasks.fill_analytics.fetchers.kbrs_spo_fetcher import (
 from apps.wells.models.well import Well
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
+from apps.wells.repositories.spo_event import SPOEventRepository
 from apps.wells.repositories.well import WellRepository
 from core import get_logger
 from core.settings import get_settings
@@ -177,6 +178,7 @@ class FillRepairAnalytics:
                             self._brigade_resolver
                             or make_kbrs_brigade_resolver(toucan_client)
                         ),
+                        spo_event_repo=deps.spo_event_repo,
                     )
                     if toucan_client is not None
                     else None
@@ -543,6 +545,7 @@ class _Dependencies:
         "file_repo",
         "overall_ai_repo",
         "spo_ai_repo",
+        "spo_event_repo",
         "spo_repo",
         "summary_repo",
         "well_repo",
@@ -557,6 +560,7 @@ class _Dependencies:
         doc_repo: RepairDocRepository,
         dynamogram_repo: DynamogramRepository,
         spo_repo: SPORepository,
+        spo_event_repo: SPOEventRepository,
         summary_repo: RepairSummaryRepository,
         file_repo: FileRepository,
         well_repo: WellRepository,
@@ -570,6 +574,7 @@ class _Dependencies:
         self.doc_repo = doc_repo
         self.dynamogram_repo = dynamogram_repo
         self.spo_repo = spo_repo
+        self.spo_event_repo = spo_event_repo
         self.summary_repo = summary_repo
         self.file_repo = file_repo
         self.well_repo = well_repo
@@ -586,6 +591,7 @@ class _Dependencies:
             doc_repo=RepairDocRepository(session),
             dynamogram_repo=DynamogramRepository(session),
             spo_repo=SPORepository(session),
+            spo_event_repo=SPOEventRepository(session),
             summary_repo=RepairSummaryRepository(session),
             file_repo=FileRepository(session),
             well_repo=WellRepository(session),

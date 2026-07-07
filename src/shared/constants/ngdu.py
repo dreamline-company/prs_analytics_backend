@@ -6,3 +6,6 @@ class AbaiNGDUIDsEnum(IntEnum):
     ZHlMG = 10
     ZHMG = 11
     KMG = 12
+
+
+NGDU_ORG_TYPE = 10
