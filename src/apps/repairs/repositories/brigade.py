@@ -48,6 +48,19 @@ class RepairBrigadeRepository(
             ),
         )
 
+    async def list_by_brigade_ids(
+        self,
+        brigade_ids: Sequence[int],
+    ) -> Sequence[RepairBrigade]:
+        if not brigade_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(RepairBrigade.brigade_id.in_(brigade_ids),),
+                order_by=(RepairBrigade.id,),
+            ),
+        )
+
     async def update_by_id(
         self,
         repair_brigade_id: int,

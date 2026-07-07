@@ -44,6 +44,16 @@ class CMBrigadeRepository(
             ),
         )
 
+    async def list_by_names(self, names: Sequence[str]) -> Sequence[Brigade]:
+        if not names:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(Brigade.name.in_(names),),
+                order_by=(Brigade.name,),
+            ),
+        )
+
     async def list_by_cdng(self, cdng: str) -> Sequence[Brigade]:
         return await self.get_list(
             QuerySpec(

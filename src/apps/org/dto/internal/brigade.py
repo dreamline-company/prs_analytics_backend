@@ -21,3 +21,20 @@ class BrigadeDTO(BaseModel):
     device: str | None = None
     violations_count: int = 0
     is_in_repair: bool = False
+
+
+class FrequentRepairBrigadeDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    ngdu_id: int
+
+
+class BrigadesKPIDTO(BaseModel):
+    total_brigades: int
+    in_repair_now: int
+    with_violations: int
+    without_violations: int
+    avg_repair_hours: float | None
+    frequent_repair_brigades: list[FrequentRepairBrigadeDTO]

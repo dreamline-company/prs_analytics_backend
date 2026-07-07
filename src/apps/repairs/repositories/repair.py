@@ -73,6 +73,13 @@ class RepairRepository(
             ),
         )
 
+    async def list_by_ids(self, repair_ids: Sequence[int]) -> Sequence[Repair]:
+        if not repair_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(filters=(Repair.id.in_(repair_ids),)),
+        )
+
     async def find_covering_date(
         self,
         well_id: int,

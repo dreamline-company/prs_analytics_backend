@@ -46,6 +46,26 @@ class CMBrigadeErrorScreenRepository(
             ),
         )
 
+    async def list_by_brigade_ids_in_range(
+        self,
+        brigade_ids: Sequence[int],
+        *,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> Sequence[BrigadeErrorScreen]:
+        if not brigade_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(
+                    BrigadeErrorScreen.brigade_id.in_(brigade_ids),
+                    BrigadeErrorScreen.timestamp >= start_time,
+                    BrigadeErrorScreen.timestamp <= end_time,
+                ),
+                order_by=(BrigadeErrorScreen.timestamp,),
+            ),
+        )
+
     async def list_by_processed_status(
         self,
         *,
