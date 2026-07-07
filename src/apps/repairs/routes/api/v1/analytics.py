@@ -19,6 +19,7 @@ from apps.repairs.repositories.analytics import (
     RepairAnalyticsBrigadeErrorScreenRepository,
     RepairAnalyticsDynamogramRepository,
     RepairAnalyticsRepository,
+    RepairAnalyticsSPORepository,
 )
 from apps.repairs.repositories.docs import RepairDocRepository
 from apps.repairs.repositories.repair import RepairRepository
@@ -27,6 +28,7 @@ from apps.repairs.use_cases.get_repair_analytics_view import (
     GetRepairAnalyticsViewUseCase,
 )
 from apps.repairs.use_cases.get_repair_timeline import GetRepairTimelineUseCase
+from apps.wells.repositories import WellRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
 from shared.dependencies.db import get_app_session, get_cm_session
@@ -48,6 +50,7 @@ async def get_repair_analytics_view(
     repair_id: Annotated[int, Path(ge=1, description="Repair ID")],
 ) -> RepairAnalyticsViewResponseDTO:
     use_case = GetRepairAnalyticsViewUseCase(
+        wells_repository=WellRepository(session=app_session),
         repair_repository=RepairRepository(session=app_session),
         analytics_repository=RepairAnalyticsRepository(session=app_session),
         analytics_dynamogram_repository=RepairAnalyticsDynamogramRepository(
@@ -56,6 +59,7 @@ async def get_repair_analytics_view(
         analytics_brigade_error_screen_repository=(
             RepairAnalyticsBrigadeErrorScreenRepository(session=app_session)
         ),
+        analytics_spo_repository=RepairAnalyticsSPORepository(session=app_session),
         dynamogram_repository=DynamogramRepository(session=app_session),
         spo_repository=SPORepository(session=app_session),
         dynamogram_ai_repository=RepairDynamogramAIResultRepository(

@@ -19,11 +19,8 @@ from apps.wells.dto.internal.repositories.dynamogram import CreateDynamogramDTO
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from core import get_logger
-from core.settings import get_settings
 from shared.database.s3.storage import AiobotoFileStorage
 from shared.integrations.abai.api.client import AbaiAsyncClient, AbaiFile
-
-settings = get_settings()
 
 logger = get_logger(__name__)
 
@@ -113,11 +110,13 @@ class AbaiDynamogramFetcher:
         if not file.measure_date:
             return None
         try:
-            return datetime.strptime(file.measure_date, "%d.%m.%Y").replace(
-                tzinfo=settings.ZONE_INFO,
-            )
+            return datetime.strptime(file.measure_date, "%d.%m.%Y")  # noqa: DTZ007
         except ValueError:
             return None
+
+    @staticmethod
+    def _as_naive(value: datetime) -> datetime:
+        return value.replace(tzinfo=None) if value.tzinfo is not None else value
 
     @classmethod
     def _closest_before(
@@ -125,6 +124,7 @@ class AbaiDynamogramFetcher:
         files: list[AbaiFile],
         at: datetime,
     ) -> AbaiFile | None:
+        at = cls._as_naive(at)
         candidates: list[tuple[datetime, AbaiFile]] = []
         for f in files:
             d = cls._parse_measure_date(f)
@@ -141,6 +141,7 @@ class AbaiDynamogramFetcher:
         files: list[AbaiFile],
         at: datetime,
     ) -> AbaiFile | None:
+        at = cls._as_naive(at)
         candidates: list[tuple[datetime, AbaiFile]] = []
         for f in files:
             d = cls._parse_measure_date(f)

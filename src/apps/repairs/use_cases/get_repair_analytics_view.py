@@ -24,8 +24,10 @@ from apps.repairs.repositories.analytics import (
     RepairAnalyticsBrigadeErrorScreenRepository,
     RepairAnalyticsDynamogramRepository,
     RepairAnalyticsRepository,
+    RepairAnalyticsSPORepository,
 )
 from apps.repairs.repositories.repair import RepairRepository
+from apps.wells.repositories import WellRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
 from shared.errors import HttpError
@@ -45,11 +47,13 @@ class GetRepairAnalyticsViewUseCase:
         self,
         *,
         repair_repository: RepairRepository,
+        wells_repository: WellRepository,
         analytics_repository: RepairAnalyticsRepository,
         analytics_dynamogram_repository: RepairAnalyticsDynamogramRepository,
         analytics_brigade_error_screen_repository: (
             RepairAnalyticsBrigadeErrorScreenRepository
         ),
+        analytics_spo_repository: RepairAnalyticsSPORepository,
         dynamogram_repository: DynamogramRepository,
         spo_repository: SPORepository,
         dynamogram_ai_repository: RepairDynamogramAIResultRepository,
@@ -58,11 +62,13 @@ class GetRepairAnalyticsViewUseCase:
         cm_brigade_error_screen_repository: CMBrigadeErrorScreenRepository,
     ) -> None:
         self.repair_repository = repair_repository
+        self.wells_repository = wells_repository
         self.analytics_repository = analytics_repository
         self.analytics_dynamogram_repository = analytics_dynamogram_repository
         self.analytics_brigade_error_screen_repository = (
             analytics_brigade_error_screen_repository
         )
+        self.analytics_spo_repository = analytics_spo_repository
         self.dynamogram_repository = dynamogram_repository
         self.spo_repository = spo_repository
         self.dynamogram_ai_repository = dynamogram_ai_repository
@@ -75,9 +81,14 @@ class GetRepairAnalyticsViewUseCase:
         query: GetRepairAnalyticsViewQuery,
     ) -> RepairAnalyticsViewDTO:
         repair = await self.repair_repository.get_by_id(query.repair_id)
+        well = await self.wells_repository.get_by_abai_id(abai_id=repair.abai_well_id)
         if repair is None:
             raise RepairAnalyticsNotFoundError(
                 details={"repair_id": query.repair_id},
+            )
+        if well is None:
+            raise RepairAnalyticsNotFoundError(
+                details={"well_no_exists": repair.abai_well_id},
             )
         analytics = await self.analytics_repository.get_by_repair_id(query.repair_id)
         if analytics is None:
@@ -86,11 +97,8 @@ class GetRepairAnalyticsViewUseCase:
             )
 
         dynamograms = await self._build_dynamograms(analytics.id)
-        spos = await self._build_spos(
-            well_id=repair.well_id,
-            start_time=repair.start_time,
-            end_time=repair.end_time,
-        )
+        spos = await self._build_spos(analytics.id)
+
         error_screens = await self._build_error_screens(analytics.id)
         overall = await self.overall_ai_repository.get_by_analytics_id(analytics.id)
 
@@ -140,31 +148,18 @@ class GetRepairAnalyticsViewUseCase:
             after=build(link.dynamogram_after_id),
         )
 
-    async def _build_spos(
-        self,
-        *,
-        well_id: int | None,
-        start_time,  # noqa: ANN001
-        end_time,  # noqa: ANN001
-    ) -> list[SPOWithAIResultDTO]:
-        if well_id is None:
+    async def _build_spos(self, analytics_id: int) -> list[SPOWithAIResultDTO]:
+        link = await self.analytics_spo_repository.get_by_analytics_id(analytics_id)
+        if link is None:
             return []
-        spos = await self.spo_repository.list_by_well_id_in_window(
-            well_id=well_id,
-            start=start_time,
-            end=end_time,
-        )
-        ai_results = await self.spo_ai_repository.list_by_spo_ids([s.id for s in spos])
-        ai_by_spo_id = {r.spo_id: r for r in ai_results}
-
-        result: list[SPOWithAIResultDTO] = []
-        for spo in spos:
-            dto = SPOWithAIResultDTO.model_validate(spo)
-            ai = ai_by_spo_id.get(spo.id)
-            if ai is not None:
-                dto.ai_result = AIResultDTO.model_validate(ai)
-            result.append(dto)
-        return result
+        spo = await self.spo_repository.get_by_id(link.spo_id)
+        if spo is None:
+            return []
+        dto = SPOWithAIResultDTO.model_validate(spo)
+        ai_results = await self.spo_ai_repository.list_by_spo_ids([spo.id])
+        if ai_results:
+            dto.ai_result = AIResultDTO.model_validate(ai_results[0])
+        return [dto]
 
     async def _build_error_screens(
         self,

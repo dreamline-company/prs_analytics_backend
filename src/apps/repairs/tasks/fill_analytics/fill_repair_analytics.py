@@ -31,6 +31,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.files.repositories.file import FileRepository
 from apps.models_registry import *  # noqa: F403
+from apps.org.repositories.org import OrgRepository
+from apps.org.use_cases.get_ngdu_for_well import GetNGDUForWellUseCase
 from apps.repairs.dto.internal.repositories.analytics import (
     CreateRepairAnalyticsDTO,
     CreateRepairAnalyticsDynamogramDTO,
@@ -71,9 +73,7 @@ from apps.repairs.tasks.fill_analytics.fetchers.abai_repair_doc_fetcher import (
     AbaiRepairDocFetcher,
 )
 from apps.repairs.tasks.fill_analytics.fetchers.kbrs_spo_fetcher import (
-    BrigadeResolver,
     KbrsSPOFetcher,
-    make_kbrs_brigade_resolver,
 )
 from apps.wells.models.well import Well
 from apps.wells.repositories.dynamogram import DynamogramRepository
@@ -86,6 +86,7 @@ from shared.database.s3.storage import AiobotoFileStorage
 from shared.database.sql.setup import session_makers
 from shared.dependencies.db import get_aioboto_client_factory
 from shared.integrations.abai.api.client import AbaiAsyncClient
+from shared.integrations.abai.repositories.well_orgs import ABAIWellOrgRepository
 from shared.integrations.kbrs.api import ToucanClientConfig, ToucanCredentialsDto
 from shared.integrations.kbrs.api.client import ToucanBackendClient
 
@@ -103,7 +104,6 @@ class FillRepairAnalytics:
         self,
         abai_client: AbaiAsyncClient | None = None,
         toucan_client: ToucanBackendClient | None = None,
-        brigade_resolver: BrigadeResolver | None = None,
         *,
         repair_id: int | None = None,
         well_id: int | None = None,
@@ -113,7 +113,6 @@ class FillRepairAnalytics:
             raise ValueError(msg)
         self._abai_client = abai_client
         self._toucan_client = toucan_client
-        self._brigade_resolver = brigade_resolver
         self._repair_id = repair_id
         self._well_id = well_id
 
@@ -152,8 +151,16 @@ class FillRepairAnalytics:
         grace_cutoff = now - timedelta(days=self.GRACE_DAYS)
 
         try:
-            async with session_makers["app"]() as session:
+            async with (
+                session_makers["app"]() as session,
+                session_makers["abai"]() as abai_session,
+            ):
                 deps = _Dependencies.build(session)
+
+                get_ngdu_for_well = GetNGDUForWellUseCase(
+                    abai_well_org_repository=ABAIWellOrgRepository(abai_session),
+                    org_repository=OrgRepository(session),
+                )
 
                 dyn_fetcher = AbaiDynamogramFetcher(
                     abai_client=abai_client,
@@ -173,12 +180,8 @@ class FillRepairAnalytics:
                         storage=storage,
                         file_repo=deps.file_repo,
                         spo_repo=deps.spo_repo,
-                        summary_repo=deps.summary_repo,
-                        brigade_resolver=(
-                            self._brigade_resolver
-                            or make_kbrs_brigade_resolver(toucan_client)
-                        ),
                         spo_event_repo=deps.spo_event_repo,
+                        get_ngdu_for_well=get_ngdu_for_well,
                     )
                     if toucan_client is not None
                     else None
@@ -312,10 +315,27 @@ class FillRepairAnalytics:
                 repair.id,
             )
 
-        if spo_fetcher is not None:
+        if spo_fetcher is None:
+            logger.warning(
+                "Repair id=%s → spo_fetcher is None "
+                "(toucan_client not initialized), skipping SPO.",
+                repair.id,
+            )
+        elif effective_well_id is None or well is None or abai_well_id is None:
+            logger.warning(
+                "Repair id=%s → cannot fetch SPO: well_id=%s, "
+                "well.name=%s, abai_well_id=%s.",
+                repair.id,
+                effective_well_id,
+                well.name if well else None,
+                abai_well_id,
+            )
+        else:
             spos = await spo_fetcher.fetch_for_repair(
                 repair,
                 well_id=effective_well_id,
+                well_name=well.name,
+                abai_well_id=abai_well_id,
             )
             logger.info(
                 "Repair id=%s SPO count=%s (ids=%s)",
@@ -330,12 +350,6 @@ class FillRepairAnalytics:
                     spo_id=primary_spo.id,
                     analytics_spo_repo=deps.analytics_spo_repo,
                 )
-        else:
-            logger.warning(
-                "Repair id=%s → spo_fetcher is None "
-                "(toucan_client not initialized), skipping SPO.",
-                repair.id,
-            )
 
         # AI processing: per-item results feed the overall analysis.
         dyn_before_ai = (
