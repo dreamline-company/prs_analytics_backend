@@ -4,7 +4,8 @@ Encapsulates the read-existing → skip-if-current → run-processor → upsert
 loop so ``FillRepairAnalytics`` stays about orchestration, not persistence.
 """
 
-from dataclasses import dataclass
+import mimetypes
+from dataclasses import dataclass, field
 
 from apps.files.repositories.file import FileRepository
 from apps.repairs.dto.internal.repositories.ai_results import (
@@ -30,7 +31,9 @@ from apps.repairs.repositories.ai_results import (
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.models.spo import SPO
 from core import get_logger
+from shared.database.s3.storage import AiobotoFileStorage, FileNotExistError
 
+from .base import TokenUsage
 from .dynamogram_processor import DynamogramAIProcessor, DynamogramProcessingInput
 from .overall_processor import OverallAIProcessor, OverallProcessingInput
 from .spo_processor import SPOAIProcessor, SPOProcessingInput
@@ -49,6 +52,8 @@ class AICoordinator:
     spo_ai_repo: RepairSPOAIResultRepository
     overall_ai_repo: RepairAIAnalysisRepository
     file_repo: FileRepository
+    storage: AiobotoFileStorage
+    _usage_by_repair: dict[int, TokenUsage] = field(default_factory=dict)
 
     async def process_dynamogram(
         self,
@@ -62,14 +67,19 @@ class AICoordinator:
             return existing
 
         s3_key = await self._resolve_s3_key(dynamogram.file_id)
+        image_bytes = await self._download_bytes(s3_key)
+        image_mime = self._guess_mime(s3_key, default="image/png")
         result = await self.dynamogram_processor.process(
             DynamogramProcessingInput(
                 dynamogram=dynamogram,
                 role=role,
                 s3_key=s3_key or "",
                 repair_id=repair_id,
+                image_bytes=image_bytes,
+                image_mime=image_mime,
             ),
         )
+        self._record_usage(repair_id, result.usage)
 
         if existing is None:
             return await self.dynamogram_ai_repo.create(
@@ -109,6 +119,9 @@ class AICoordinator:
         chart_key = await self._resolve_s3_key(spo.chart_file_id)
         notes_key = await self._resolve_s3_key(spo.notes_file_id)
 
+        chart_text = await self._download_text(chart_key)
+        notes_text = await self._download_text(notes_key)
+
         result = await self.spo_processor.process(
             SPOProcessingInput(
                 spo=spo,
@@ -116,8 +129,11 @@ class AICoordinator:
                 chart_s3_key=chart_key,
                 notes_s3_key=notes_key,
                 repair_id=repair_id,
+                chart_text=chart_text,
+                notes_text=notes_text,
             ),
         )
+        self._record_usage(repair_id, result.usage)
 
         if existing is None:
             return await self.spo_ai_repo.create(
@@ -168,6 +184,7 @@ class AICoordinator:
                 spo_results=[r.result for r in spo_results if r.result is not None],
             ),
         )
+        self._record_usage(repair.id, result.usage)
 
         if existing is None:
             return await self.overall_ai_repo.create(
@@ -206,3 +223,38 @@ class AICoordinator:
             return None
         file_row = await self.file_repo.get_by_id(file_id)
         return file_row.file if file_row is not None else None
+
+    async def _download_bytes(self, s3_key: str | None) -> bytes | None:
+        if not s3_key:
+            return None
+        try:
+            buf = await self.storage.download_file(s3_key)
+        except FileNotExistError:
+            logger.warning("S3 object missing for AI input: %s", s3_key)
+            return None
+        return buf.getvalue()
+
+    async def _download_text(
+        self,
+        s3_key: str | None,
+        *,
+        encoding: str = "utf-8",
+    ) -> str | None:
+        payload = await self._download_bytes(s3_key)
+        if payload is None:
+            return None
+        return payload.decode(encoding, errors="replace")
+
+    @staticmethod
+    def _guess_mime(s3_key: str | None, *, default: str) -> str:
+        if not s3_key:
+            return default
+        guessed, _ = mimetypes.guess_type(s3_key)
+        return guessed or default
+
+    def _record_usage(self, repair_id: int, usage: TokenUsage) -> None:
+        bucket = self._usage_by_repair.setdefault(repair_id, TokenUsage())
+        bucket.add(usage)
+
+    def pop_repair_usage(self, repair_id: int) -> TokenUsage:
+        return self._usage_by_repair.pop(repair_id, TokenUsage())

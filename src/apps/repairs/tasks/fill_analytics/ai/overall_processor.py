@@ -24,7 +24,7 @@ class OverallProcessingInput:
 
 
 class OverallAIProcessor(BaseAIProcessor[OverallProcessingInput]):
-    prompt_version: str = "v0"
+    prompt_version: str = "v1"
 
     def _build_state(self, item: OverallProcessingInput) -> dict[str, Any]:
         # Prompt author: design the aggregation prompt (compare before vs

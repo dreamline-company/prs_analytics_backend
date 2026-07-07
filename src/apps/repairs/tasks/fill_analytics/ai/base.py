@@ -29,6 +29,18 @@ logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
+class TokenUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
+    def add(self, other: TokenUsage) -> None:
+        self.input_tokens += other.input_tokens
+        self.output_tokens += other.output_tokens
+        self.total_tokens += other.total_tokens
+
+
+@dataclass(slots=True)
 class AIProcessingResult:
     """Outcome of one LLM run, in a shape the persistence layer stores."""
 
@@ -38,6 +50,11 @@ class AIProcessingResult:
     model_name: str | None
     prompt_version: str | None
     processed_at: datetime
+    usage: TokenUsage = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.usage is None:
+            self.usage = TokenUsage()
 
 
 class BaseAIProcessor[InputT]:
@@ -66,6 +83,7 @@ class BaseAIProcessor[InputT]:
             initial_state = self._build_state(item)
             final_state = await self._agent.ainvoke(input=initial_state)
             payload = self._parse_output(final_state)
+            usage = self._extract_usage(final_state)
         except Exception as exc:
             logger.exception("AI processor %s failed.", type(self).__name__)
             return AIProcessingResult(
@@ -84,6 +102,7 @@ class BaseAIProcessor[InputT]:
             model_name=self._model_name,
             prompt_version=self.prompt_version,
             processed_at=processed_at,
+            usage=usage,
         )
 
     def _build_state(self, item: InputT) -> dict[str, Any]:
@@ -106,3 +125,20 @@ class BaseAIProcessor[InputT]:
             except json.JSONDecodeError:
                 return {"raw": content}
         return {"raw": content}
+
+    @staticmethod
+    def _extract_usage(final_state: Any) -> TokenUsage:  # noqa: ANN401
+        messages = (
+            final_state.get("messages", []) if isinstance(final_state, dict) else []
+        )
+        total = TokenUsage()
+        for message in messages:
+            if not isinstance(message, AIMessage):
+                continue
+            meta = getattr(message, "usage_metadata", None)
+            if not meta:
+                continue
+            total.input_tokens += int(meta.get("input_tokens", 0) or 0)
+            total.output_tokens += int(meta.get("output_tokens", 0) or 0)
+            total.total_tokens += int(meta.get("total_tokens", 0) or 0)
+        return total

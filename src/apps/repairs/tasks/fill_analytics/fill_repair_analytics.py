@@ -203,6 +203,7 @@ class FillRepairAnalytics:
                     spo_ai_repo=deps.spo_ai_repo,
                     overall_ai_repo=deps.overall_ai_repo,
                     file_repo=deps.file_repo,
+                    storage=storage,
                 )
 
                 async for repairs in self._iter_candidates(session, grace_cutoff):
@@ -380,6 +381,15 @@ class FillRepairAnalytics:
             dynamogram_before=dyn_before_ai,
             dynamogram_after=dyn_after_ai,
             spo_results=spo_ai_results,
+        )
+
+        usage = ai_coordinator.pop_repair_usage(repair.id)
+        logger.info(
+            "Repair id=%s AI tokens: input=%s output=%s total=%s",
+            repair.id,
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.total_tokens,
         )
 
         if await self._should_finalize(
