@@ -1,4 +1,8 @@
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict
+
+from apps.wells.dto.internal.well import WellShortDTO
 
 
 class BrigadeDTO(BaseModel):
@@ -38,3 +42,35 @@ class BrigadesKPIDTO(BaseModel):
     without_violations: int
     avg_repair_hours: float | None
     frequent_repair_brigades: list[FrequentRepairBrigadeDTO]
+
+
+class RepairShortDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    abai_id: int
+    well_id: int | None
+    abai_well_id: int
+    repair_type_id: int
+    start_time: datetime
+    end_time: datetime | None
+
+
+class RepairStateEventDTO(BaseModel):
+    time: datetime
+    description: str
+
+
+class CurrentRepairDTO(BaseModel):
+    well: WellShortDTO
+    repair: RepairShortDTO
+    violations_count: int
+    por_percent: int
+    spo_percent: int
+    vehicles_count: int
+    last_event: RepairStateEventDTO | None
+
+
+class BrigadeRepairStateDTO(BaseModel):
+    is_in_repair: bool
+    current_repair: CurrentRepairDTO | None
