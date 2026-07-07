@@ -3,11 +3,11 @@ from collections.abc import AsyncGenerator, Sequence
 from datetime import datetime
 
 from apps.models_registry import *  # noqa
-from apps.org.repositories import NGDURepository
 from apps.telemetry.dto.internal.repositories import CreateTelemetryDTO
 from apps.telemetry.repositories import TelemetryRepository
 from apps.wells.repositories import WellRepository
 from core import get_logger
+from shared.constants.ngdu import AbaiNGDUIDsEnum
 from shared.database.sql.setup import session_makers
 from shared.integrations.wincc.models import NGDUWinccTelemetryModel
 from shared.integrations.wincc.repositories import (
@@ -31,48 +31,34 @@ class WinccLoadTelemetry:
             app_wells_ids = {well.name: well.id for well in app_wells}
             del app_wells
 
-            ngdu_repo = NGDURepository(app_session)
-            all_ngdu = await ngdu_repo.get_list()
-
-            ngdu_name_to_id_dict: dict[str, int] = {n.name: n.id for n in all_ngdu}
-        await self._load_kainar(ngdu_name_to_id_dict, app_wells_ids)
-        await self._load_dmg(ngdu_name_to_id_dict, app_wells_ids)
+        await self._load_kainar(app_wells_ids)
+        await self._load_dmg(app_wells_ids)
 
     async def _load_dmg(
         self,
-        ngdu_name_to_id_dict: dict[str, int],
         app_wells_ids: dict[str, int],
     ) -> None:
         logger.info("Loading DMG...")
         async with session_makers["dmg_telemetry"]() as dmg_session:
-            dmg_ngdu_name = "доссормунайгаз"
-            for k, v in ngdu_name_to_id_dict.items():
-                if dmg_ngdu_name in k.lower():
-                    dmg_ngdu_id = v
-                    dmg_tm_repo = DMGWinccTelemetryRepository(dmg_session)
-                    await self._load_ngdu(
-                        ngdu_id=dmg_ngdu_id,
-                        app_wells_ids=app_wells_ids,
-                        ngdu_tm_repo=dmg_tm_repo,
-                    )
+            dmg_tm_repo = DMGWinccTelemetryRepository(dmg_session)
+            await self._load_ngdu(
+                ngdu_id=AbaiNGDUIDsEnum.DMG,
+                app_wells_ids=app_wells_ids,
+                ngdu_tm_repo=dmg_tm_repo,
+            )
 
     async def _load_kainar(
         self,
-        ngdu_name_to_id_dict: dict[str, int],
         app_wells_ids: dict[str, int],
     ) -> None:
         logger.info("Loading Kainar...")
         async with session_makers["kainar_telemetry"]() as kainar_session:
-            kainar_ngdu_name = "кайнармунайгаз"
-            for k, v in ngdu_name_to_id_dict.items():
-                if kainar_ngdu_name in k.lower():
-                    kainar_ngdu_id = v
-                    kainar_tm_repo = KainarWinccTelemetryRepository(kainar_session)
-                    await self._load_ngdu(
-                        ngdu_id=kainar_ngdu_id,
-                        app_wells_ids=app_wells_ids,
-                        ngdu_tm_repo=kainar_tm_repo,
-                    )
+            kainar_tm_repo = KainarWinccTelemetryRepository(kainar_session)
+            await self._load_ngdu(
+                ngdu_id=AbaiNGDUIDsEnum.KMG,
+                app_wells_ids=app_wells_ids,
+                ngdu_tm_repo=kainar_tm_repo,
+            )
 
     async def _load_ngdu(
         self,
@@ -149,7 +135,7 @@ class WinccLoadTelemetry:
                     date_time=tm.Meas_date,
                     qv_liquid=tm.Qv_liq,
                     qm_oil=tm.Qm_oil,
-                    ngdu_id=dmg_ngdu_id,
+                    abai_ngdu_id=dmg_ngdu_id,
                     oil_field=tm.Oil_field,
                 ),
             )

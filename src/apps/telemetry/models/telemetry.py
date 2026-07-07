@@ -17,7 +17,7 @@ class Telemetry(AppBaseModel, IntPkMixin):
     date_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     qv_liquid: Mapped[float | None] = mapped_column(Float, nullable=True)
     qm_oil: Mapped[float | None] = mapped_column(Float, nullable=True)
-    ngdu_id: Mapped[int] = mapped_column(ForeignKey("org_ngdu.id"), nullable=False)
+    abai_ngdu_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     oil_field: Mapped[str | None] = mapped_column(String(10), nullable=True)
     gzu: Mapped[str | None] = mapped_column(String(10), nullable=True)
     otvod: Mapped[int | None] = mapped_column(String(10), nullable=True)
