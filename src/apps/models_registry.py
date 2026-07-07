@@ -1,7 +1,7 @@
 import inspect
 
 from apps.files.models.file import File
-from apps.org.models.brigade import Brigade
+from apps.org.models.brigade import Brigade, UniqueBrigade
 from apps.org.models.ngdu import NGDU
 from apps.org.models.org import Org, OrgType
 from apps.repairs.models.analytics import (
@@ -13,6 +13,7 @@ from apps.repairs.models.analytics import (
     RepairDynamogramAIResult,
     RepairSPOAIResult,
 )
+from apps.repairs.models.brigade import RepairBrigade
 from apps.repairs.models.docs import RepairDoc
 from apps.repairs.models.repair import Repair, RepairType
 from apps.repairs.models.reports import RepairSummary
@@ -27,7 +28,6 @@ from apps.wells.models.well import Well
 __all__ = (
     "NGDU",
     "SPO",
-    "SPOEvent",
     "Brigade",
     "Coord",
     "Dynamogram",
@@ -40,13 +40,16 @@ __all__ = (
     "RepairAnalyticsBrigadeErrorScreen",
     "RepairAnalyticsDynamogram",
     "RepairAnalyticsSPO",
+    "RepairBrigade",
     "RepairDoc",
     "RepairDynamogramAIResult",
     "RepairSPOAIResult",
     "RepairSummary",
     "RepairType",
+    "SPOEvent",
     "TechRegime",
     "Telemetry",
+    "UniqueBrigade",
     "Well",
     "WellCoord",
 )

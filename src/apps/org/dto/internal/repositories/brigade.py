@@ -14,3 +14,13 @@ class UpdateBrigadeDTO(RepositoryDTO):
     name_ru_short: str | None = None
     own: bool | None = None
     org_id: int | None = None
+
+
+class CreateUniqueBrigadeDTO(RepositoryDTO):
+    name: str
+    ngdu_id: int
+
+
+class UpdateUniqueBrigadeDTO(RepositoryDTO):
+    name: str | None = None
+    ngdu_id: int | None = None

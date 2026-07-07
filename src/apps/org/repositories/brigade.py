@@ -2,9 +2,11 @@ from collections.abc import Sequence
 
 from apps.org.dto.internal.repositories.brigade import (
     CreateBrigadeDTO,
+    CreateUniqueBrigadeDTO,
     UpdateBrigadeDTO,
+    UpdateUniqueBrigadeDTO,
 )
-from apps.org.models.brigade import Brigade
+from apps.org.models.brigade import Brigade, UniqueBrigade
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
 
@@ -47,3 +49,39 @@ class BrigadeRepository(
 
     async def delete_by_id(self, brigade_id: int) -> None:
         await self.delete(filters=(Brigade.id == brigade_id,))
+
+
+class UniqueBrigadeRepository(
+    AsyncAlchemyRepository[
+        CreateUniqueBrigadeDTO,
+        UpdateUniqueBrigadeDTO,
+        UniqueBrigade,
+    ],
+):
+    model = UniqueBrigade
+
+    async def get_by_id(self, unique_brigade_id: int) -> UniqueBrigade | None:
+        return await self.get_one(
+            QuerySpec(filters=(UniqueBrigade.id == unique_brigade_id,)),
+        )
+
+    async def get_by_name(self, name: str) -> UniqueBrigade | None:
+        return await self.get_one(
+            QuerySpec(filters=(UniqueBrigade.name == name,)),
+        )
+
+    async def list_all(self) -> Sequence[UniqueBrigade]:
+        return await self.get_list(QuerySpec(order_by=(UniqueBrigade.name,)))
+
+    async def update_by_id(
+        self,
+        unique_brigade_id: int,
+        data: UpdateUniqueBrigadeDTO,
+    ) -> UniqueBrigade:
+        return await self.update(
+            data=data,
+            filters=(UniqueBrigade.id == unique_brigade_id,),
+        )
+
+    async def delete_by_id(self, unique_brigade_id: int) -> None:
+        await self.delete(filters=(UniqueBrigade.id == unique_brigade_id,))
