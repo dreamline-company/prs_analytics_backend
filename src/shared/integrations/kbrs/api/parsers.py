@@ -13,11 +13,19 @@ from .constants import CHANNEL_MAP
 from .dtos import (
     DeviceDto,
     DirectoryDto,
+    ExtractedStringDto,
     MeasureRowDto,
+    MeasurementDetailsDto,
+    MeasurementEventDto,
+    MeasurementFullDto,
     MeasurementParsedDto,
+    MeasurementPassportDto,
     MeasurementRecordDto,
     MeasurementRowDto,
+    NumericCandidateDto,
     OwnerDto,
+    RawDatasetDto,
+    WorkTypeDto,
 )
 from .exceptions import ToucanDecodeError
 
@@ -46,6 +54,235 @@ class MidasStringCodec:
         return buf[start:end].decode("utf-16le", errors="replace"), end
 
 
+class BinaryExtractor:
+    ASCII_RE = re.compile(rb"[\x20-\x7e]{4,}")
+    EVENT_KEYWORDS = (
+        "remont",
+        "podem",
+        "pasport",
+        "passport",
+        "regim",
+        "режим",
+        "ремонт",
+        "паспорт",
+        "прибор",
+        "вкл",
+        "выкл",
+    )
+    WORK_TYPE_NAMES = {
+        38: "Remont podemnika",
+        42: "Regim v na obed",
+    }
+    EVENT_CHANNELS = {1, 2, 5, 83, 0x2001}
+
+    @staticmethod
+    def _looks_readable(text: str, *, min_len: int = 2) -> bool:
+        text = text.strip("\x00 \t\r\n")
+        if len(text) < min_len:
+            return False
+        bad = sum(1 for ch in text if ord(ch) < 32 and ch not in "\t\r\n")
+        if bad:
+            return False
+        readable = sum(1 for ch in text if ch.isprintable())
+        return readable / max(len(text), 1) > 0.85
+
+    @classmethod
+    def extract_ascii_strings(cls, data: bytes, *, min_len: int = 4) -> list[ExtractedStringDto]:
+        out: list[ExtractedStringDto] = []
+        for match in cls.ASCII_RE.finditer(data):
+            text = match.group(0).decode("latin1", errors="replace").strip()
+            if len(text) >= min_len:
+                out.append(ExtractedStringDto(offset=match.start(), encoding="ascii", text=text))
+        return out
+
+    @classmethod
+    def extract_prefixed_utf16_strings(cls, data: bytes, *, min_len: int = 2) -> list[ExtractedStringDto]:
+        out: list[ExtractedStringDto] = []
+        seen: set[tuple[int, str]] = set()
+        for pos in range(0, len(data) - 2):
+            for label, decoder in (
+                ("utf16le_len1", MidasStringCodec.decode_utf16_len1),
+                ("utf16le_len2", MidasStringCodec.decode_utf16_len2),
+            ):
+                try:
+                    text, end = decoder(data, pos)
+                except Exception:
+                    continue
+                text = text.strip("\x00 \t\r\n")
+                if end <= pos or end - pos > 512:
+                    continue
+                if not cls._looks_readable(text, min_len=min_len):
+                    continue
+                key = (pos, text)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(ExtractedStringDto(offset=pos, encoding=label, text=text))
+        return out
+
+    @classmethod
+    def extract_utf16_runs(cls, data: bytes, *, min_len: int = 4) -> list[ExtractedStringDto]:
+        out: list[ExtractedStringDto] = []
+        for start in (0, 1):
+            pos = start
+            while pos + 2 <= len(data):
+                run_start = pos
+                chars: list[str] = []
+                while pos + 2 <= len(data):
+                    code = struct.unpack_from("<H", data, pos)[0]
+                    ch = chr(code)
+                    if code in (9, 10, 13) or (32 <= code <= 0x04FF) or (0x2010 <= code <= 0x2122):
+                        chars.append(ch)
+                        pos += 2
+                    else:
+                        break
+                text = "".join(chars).strip("\x00 \t\r\n")
+                if cls._looks_readable(text, min_len=min_len):
+                    out.append(ExtractedStringDto(offset=run_start, encoding="utf16le_run", text=text))
+                pos = max(pos + 2, run_start + 2)
+        return out
+
+    @classmethod
+    def extract_strings(cls, data: bytes) -> list[ExtractedStringDto]:
+        items = (
+            cls.extract_ascii_strings(data)
+            + cls.extract_prefixed_utf16_strings(data)
+            + cls.extract_utf16_runs(data)
+        )
+        best: dict[tuple[int, str], ExtractedStringDto] = {}
+        for item in items:
+            text = " ".join(item.text.split())
+            if not text:
+                continue
+            key = (item.offset, text)
+            current = best.get(key)
+            if current is None or len(item.encoding) < len(current.encoding):
+                best[key] = ExtractedStringDto(offset=item.offset, encoding=item.encoding, text=text)
+        return sorted(best.values(), key=lambda item: (item.offset, item.encoding))
+
+    @staticmethod
+    def extract_numbers(data: bytes, *, limit: int = 5000) -> list[NumericCandidateDto]:
+        out: list[NumericCandidateDto] = []
+        for off in range(0, len(data) - 8, 4):
+            i32 = struct.unpack_from("<i", data, off)[0]
+            if -1_000_000 <= i32 <= 50_000_000 and i32 not in (0, -1):
+                out.append(NumericCandidateDto(offset=off, type_name="int32_le", value=i32))
+            u32 = struct.unpack_from("<I", data, off)[0]
+            if 946684800 <= u32 <= 2208988800:
+                out.append(NumericCandidateDto(offset=off, type_name="unix_ts_le", value=u32))
+            f64 = struct.unpack_from("<d", data, off)[0]
+            if -1_000_000.0 <= f64 <= 1_000_000.0 and abs(f64) > 0.000001:
+                out.append(NumericCandidateDto(offset=off, type_name="double_le", value=f64))
+            if len(out) >= limit:
+                break
+        return out
+
+    @staticmethod
+    def utc_datetime_from_timestamp(ts: int) -> dt.datetime:
+        return dt.datetime.fromtimestamp(ts, tz=dt.timezone.utc).replace(tzinfo=None)
+
+    @staticmethod
+    def format_duration(seconds: int) -> str:
+        seconds = max(0, int(seconds))
+        hours, rem = divmod(seconds, 3600)
+        minutes, secs = divmod(rem, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    @staticmethod
+    def _event_text(channel: int, raw: int) -> tuple[Optional[int], str]:
+        if channel == 1:
+            return None, "ВКЛ Прибора"
+        if channel == 2:
+            return None, "ВЫКЛ Прибора"
+        if channel == 5:
+            name = BinaryExtractor.WORK_TYPE_NAMES.get(raw, f"WorkType {raw}")
+            return raw, f"[{raw}] {name}"
+        if channel == 83:
+            return None, "Внешний накопитель"
+        if channel == 0x2001:
+            return None, "Паспорт: Вес на крюке"
+        return None, f"channel_{channel:04x}: {raw}"
+
+    @classmethod
+    def extract_binary_events(cls, data: bytes, *, sample_offset: Optional[int]) -> list[MeasurementEventDto]:
+        min_ts = int(dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc).timestamp())
+        max_ts = int(dt.datetime(2040, 1, 1, tzinfo=dt.timezone.utc).timestamp())
+        candidates: list[tuple[int, int, int, int]] = []
+
+        header_end = sample_offset or min(len(data), 4096)
+        for off in range(0, max(0, header_end - 9)):
+            ts = struct.unpack_from(">I", data, off)[0]
+            channel = struct.unpack_from(">H", data, off + 4)[0]
+            raw = struct.unpack_from(">i", data, off + 6)[0]
+            if min_ts <= ts <= max_ts and channel in cls.EVENT_CHANNELS:
+                candidates.append((off, ts, channel, raw))
+
+        if sample_offset is not None:
+            pos = sample_offset
+            while pos + 10 <= len(data):
+                ts = struct.unpack_from(">I", data, pos)[0]
+                channel = struct.unpack_from(">H", data, pos + 4)[0]
+                raw = struct.unpack_from(">i", data, pos + 6)[0]
+                if min_ts <= ts <= max_ts and channel in cls.EVENT_CHANNELS:
+                    candidates.append((pos, ts, channel, raw))
+                pos += 10
+
+        candidates = sorted(set(candidates), key=lambda item: (item[1], item[0], item[2], item[3]))
+        events: list[MeasurementEventDto] = []
+        for index, (off, ts, channel, raw) in enumerate(candidates):
+            code, text = cls._event_text(channel, raw)
+            if channel == 5:
+                next_ts = None
+                for _off, other_ts, other_channel, _raw in candidates[index + 1:]:
+                    if other_channel in {2, 5}:
+                        next_ts = other_ts
+                        break
+                if next_ts is not None and next_ts >= ts:
+                    text = f"{text} [{cls.format_duration(next_ts - ts)}]"
+            event_dt = cls.utc_datetime_from_timestamp(ts)
+            events.append(
+                MeasurementEventDto(
+                    offset=off,
+                    time_text=event_dt.strftime("%H:%M:%S"),
+                    code=code,
+                    text=text,
+                    raw_text=f"channel={channel} raw={raw}",
+                )
+            )
+        return events
+
+    @classmethod
+    def extract_events(cls, strings: list[ExtractedStringDto]) -> list[MeasurementEventDto]:
+        events: list[MeasurementEventDto] = []
+        time_re = re.compile(r"\b([0-2]\d:[0-5]\d:[0-5]\d)\b")
+        code_re = re.compile(r"\[(\d{1,5})\]")
+        seen: set[tuple[int, str]] = set()
+        for item in strings:
+            lower = item.text.lower()
+            has_event_shape = time_re.search(item.text) or any(keyword in lower for keyword in cls.EVENT_KEYWORDS)
+            if not has_event_shape:
+                continue
+            code_match = code_re.search(item.text)
+            time_match = time_re.search(item.text)
+            clean_text = item.text
+            if time_match:
+                clean_text = clean_text.replace(time_match.group(1), "", 1).strip()
+            key = (item.offset, item.text)
+            if key in seen:
+                continue
+            seen.add(key)
+            events.append(
+                MeasurementEventDto(
+                    offset=item.offset,
+                    time_text=time_match.group(1) if time_match else None,
+                    code=int(code_match.group(1)) if code_match else None,
+                    text=clean_text,
+                    raw_text=item.text,
+                )
+            )
+        return events
+
+
 class DirectoryDataParser:
     """Parser for DirectoryData returned by TNOConnect."""
 
@@ -58,6 +295,8 @@ class DirectoryDataParser:
 
         owners = cls.parse_owners_dataset(by_name["OwnersDataset"].raw)
         devices = cls.parse_directory_dataset(by_name["DirectoryDataset"].raw)
+        work_types = cls.parse_work_types_dataset(by_name["WorkTypesDataset"].raw) if "WorkTypesDataset" in by_name else []
+        raw_datasets = cls.parse_raw_datasets(fields)
         owner_map = {o.owner_id: o for o in owners}
         enriched_devices: list[DeviceDto] = []
         for d in devices:
@@ -73,7 +312,26 @@ class DirectoryDataParser:
                     owner_short_name=owner.owner_short_name if owner else "",
                 )
             )
-        return DirectoryDto(owners=owners, devices=enriched_devices)
+        return DirectoryDto(owners=owners, devices=enriched_devices, work_types=work_types, raw_datasets=raw_datasets)
+
+    @staticmethod
+    def parse_raw_datasets(fields: list[Any]) -> list[RawDatasetDto]:
+        datasets: list[RawDatasetDto] = []
+        for field in fields:
+            strings = BinaryExtractor.extract_strings(field.raw)
+            numbers = BinaryExtractor.extract_numbers(field.raw, limit=500)
+            value = field.value if isinstance(field.value, str) else ""
+            datasets.append(
+                RawDatasetDto(
+                    name=field.name,
+                    type_code=field.type_code,
+                    raw_size=len(field.raw),
+                    value_preview=value[:200],
+                    strings=strings,
+                    numbers=numbers,
+                )
+            )
+        return datasets
 
     @staticmethod
     def _looks_like_device_row(buf: bytes, pos: int) -> bool:
@@ -143,6 +401,40 @@ class DirectoryDataParser:
                 owners.append(OwnerDto(owner_id=owner_id, owner_name=name, owner_short_name=short_name))
                 seen.add(owner_id)
         return sorted(owners, key=lambda item: item.owner_id)
+
+    @staticmethod
+    def parse_work_types_dataset(raw: bytes) -> list[WorkTypeDto]:
+        strings = BinaryExtractor.extract_strings(raw)
+        meaningful = [
+            item for item in strings
+            if len(item.text) >= 2
+            and item.text not in {"true", "false"}
+            and not re.fullmatch(r"\d+", item.text)
+        ]
+        rows: list[WorkTypeDto] = []
+        seen_names: set[str] = set()
+        for item in meaningful:
+            nearby_ints: list[int] = []
+            for off in range(max(0, item.offset - 24), min(len(raw) - 4, item.offset + 4), 4):
+                value = struct.unpack_from("<i", raw, off)[0]
+                if 0 <= value <= 100_000 and value not in nearby_ints:
+                    nearby_ints.append(value)
+            work_type_id = nearby_ints[0] if nearby_ints else None
+            name = item.text.strip()
+            key = name.lower()
+            if key in seen_names:
+                continue
+            seen_names.add(key)
+            rows.append(
+                WorkTypeDto(
+                    work_type_id=work_type_id,
+                    name=name,
+                    offset=item.offset,
+                    raw_ints=nearby_ints,
+                    raw_strings=[name],
+                )
+            )
+        return rows
 
 
 class MeasureListDataParser:
@@ -217,7 +509,7 @@ class MeasurementBinaryParser:
             raw_records.append(
                 MeasurementRecordDto(
                     timestamp=ts,
-                    datetime=dt.datetime.fromtimestamp(ts),
+                    datetime=BinaryExtractor.utc_datetime_from_timestamp(ts),
                     channel=channel,
                     raw=raw,
                     value=value,
@@ -264,6 +556,136 @@ class MeasurementBinaryParser:
             raw_records=raw_records,
             rows=rows,
             header_ascii_hint=" ".join(ascii_text.split()),
+        )
+
+
+class MeasurementDetailsParser:
+    @staticmethod
+    def _read_fixed_ascii_int(data: bytes, offset: int, size: int = 10, *, default: Optional[int] = None) -> Optional[int]:
+        if offset + size > len(data):
+            return default
+        raw = data[offset:offset + size].replace(b"\x00", b"").strip()
+        if not raw:
+            return default
+        try:
+            return int(raw.decode("ascii"))
+        except Exception:
+            return default
+
+    @staticmethod
+    def _extract_passport(
+        data: bytes,
+        strings: list[ExtractedStringDto],
+        numbers: list[NumericCandidateDto],
+    ) -> MeasurementPassportDto:
+        values: dict[str, Any] = {}
+        for item in strings:
+            text = item.text
+            lower = text.lower()
+            if "нгду" in lower and "organization" not in values:
+                values["organization_candidate"] = text
+            if re.search(r"\bv\d+\.\d+", text, re.IGNORECASE):
+                values["device_version_candidate"] = text
+            if "дэл" in lower or "del" in lower:
+                values.setdefault("device_candidate", text)
+            if "скваж" in lower:
+                values.setdefault("well_text_candidate", text)
+            if "бригада" in lower:
+                values.setdefault("brigade_text_candidate", text)
+            if "цех" in lower:
+                values.setdefault("workshop_text_candidate", text)
+
+        numeric_values = [n for n in numbers if n.type_name == "int32_le"]
+        small_ints = [int(n.value) for n in numeric_values if 0 <= int(n.value) <= 10000]
+        if small_ints:
+            values["small_int_candidates"] = small_ints[:200]
+
+        organization = values.get("organization_candidate")
+        device_version = None
+        version_source = values.get("device_version_candidate")
+        if isinstance(version_source, str):
+            match = re.search(r"\bv(\d+\.\d+)", version_source, re.IGNORECASE)
+            if match:
+                device_version = match.group(1)
+
+        if len(data) >= 0x5C and data[:2] == b"\x55\xaa":
+            values["header_size_or_flags"] = struct.unpack_from(">H", data, 2)[0]
+            values["device_type"] = data[12] if len(data) > 12 else None
+            values["measurement_timestamp"] = struct.unpack_from(">I", data, 8)[0]
+            values["measurement_datetime"] = BinaryExtractor.utc_datetime_from_timestamp(
+                int(values["measurement_timestamp"]),
+            ).isoformat(sep=" ")
+            if len(data) >= 17:
+                values["device_id_be_offset_13"] = struct.unpack_from(">I", data, 13)[0]
+            if len(data) >= 8:
+                device_version = f"{data[6]:02x}.{data[7]:02x}"
+
+            # DEL-150 measurement header uses null-padded ASCII slots.
+            spu = MeasurementDetailsParser._read_fixed_ascii_int(data, 0x17, default=0)
+            workshop = MeasurementDetailsParser._read_fixed_ascii_int(data, 0x21)
+            brigade = MeasurementDetailsParser._read_fixed_ascii_int(data, 0x2B)
+            field_id = MeasurementDetailsParser._read_fixed_ascii_int(data, 0x35)
+            bush = MeasurementDetailsParser._read_fixed_ascii_int(data, 0x3F)
+            well = MeasurementDetailsParser._read_fixed_ascii_int(data, 0x49)
+
+            tare_weight_t = struct.unpack_from(">H", data, 0x55)[0] / 1000 if len(data) >= 0x57 else None
+            tackle_block_ratio = data[0x57] if len(data) > 0x57 else None
+            max_hook_weight_t = struct.unpack_from(">I", data, 0x58)[0] / 1000 if len(data) >= 0x5C else None
+
+            return MeasurementPassportDto(
+                device_id=values.get("device_id_be_offset_13") if isinstance(values.get("device_id_be_offset_13"), int) else None,
+                device_version=device_version,
+                organization=organization if isinstance(organization, str) else None,
+                workshop=workshop,
+                brigade=brigade,
+                spu=spu,
+                field_id=field_id,
+                bush=bush,
+                well=well,
+                max_hook_weight_t=max_hook_weight_t,
+                tackle_block_ratio=tackle_block_ratio,
+                tare_weight_t=tare_weight_t,
+                values=values,
+            )
+
+        return MeasurementPassportDto(
+            organization=organization if isinstance(organization, str) else None,
+            device_version=device_version,
+            values=values,
+        )
+
+    @classmethod
+    def parse(cls, data: bytes) -> MeasurementDetailsDto:
+        magic = data[:2].hex() if len(data) >= 2 else ""
+        try:
+            sample_offset: Optional[int] = MeasurementBinaryParser.detect_sample_offset(data)
+        except Exception:
+            sample_offset = None
+        header = data[:sample_offset] if sample_offset is not None else data
+        strings = BinaryExtractor.extract_strings(header)
+        numbers = BinaryExtractor.extract_numbers(header)
+        events = BinaryExtractor.extract_binary_events(data, sample_offset=sample_offset)
+        if not events:
+            events = BinaryExtractor.extract_events(strings)
+        ascii_text = "".join(chr(b) if 32 <= b < 127 else " " for b in header[:512])
+        return MeasurementDetailsDto(
+            magic=magic,
+            raw_size=len(data),
+            sample_offset=sample_offset,
+            passport=cls._extract_passport(header, strings, numbers),
+            events=events,
+            strings=strings,
+            numbers=numbers,
+            header_ascii_hint=" ".join(ascii_text.split()),
+        )
+
+
+class MeasurementFullParser:
+    @staticmethod
+    def parse(data: bytes) -> MeasurementFullDto:
+        return MeasurementFullDto(
+            chart=MeasurementBinaryParser.parse(data),
+            details=MeasurementDetailsParser.parse(data),
         )
 
 

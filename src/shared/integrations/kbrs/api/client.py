@@ -11,10 +11,13 @@ from .dtos import (
     ExportMeasurementResultDto,
     LoadMeasurementRequestDto,
     MeasureListFilterDto,
+    MeasurementDetailsDto,
+    MeasurementFullDto,
     MeasurementParsedDto,
     MeasureRowDto,
     OwnerDto,
     ToucanCredentialsDto,
+    WorkTypeDto,
 )
 from .exceptions import ToucanNotFoundError
 from .parsers import CsvMeasurementExporter
@@ -65,6 +68,9 @@ class ToucanBackendClient:
     def list_devices(self, owner_id: int | None = None) -> list[DeviceDto]:
         return self.directory_service.list_devices(owner_id=owner_id)
 
+    def list_work_types(self) -> list[WorkTypeDto]:
+        return self.directory_service.list_work_types()
+
     def search_devices(
         self,
         query: str = "",
@@ -113,6 +119,18 @@ class ToucanBackendClient:
         request: LoadMeasurementRequestDto,
     ) -> MeasurementParsedDto:
         return self.measurement_service.load_measurement(request)
+
+    def load_measurement_details(
+        self,
+        request: LoadMeasurementRequestDto,
+    ) -> MeasurementDetailsDto:
+        return self.measurement_service.load_measurement_details(request)
+
+    def load_full_measurement(
+        self,
+        request: LoadMeasurementRequestDto,
+    ) -> MeasurementFullDto:
+        return self.measurement_service.load_full_measurement(request)
 
     def load_latest_measuremload_latest_measurement_for_dayent_for_day(
         self,

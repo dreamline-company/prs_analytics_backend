@@ -14,12 +14,15 @@ from .dtos import (
     LoadMeasurementRequestDto,
     MeasureListFilterDto,
     MeasureRowDto,
+    MeasurementDetailsDto,
+    MeasurementFullDto,
     MeasurementParsedDto,
     OwnerDto,
     ToucanCredentialsDto,
+    WorkTypeDto,
 )
 from .exceptions import ToucanAuthenticationError, ToucanNotFoundError
-from .parsers import CsvMeasurementExporter, DirectoryDataParser, MeasureListDataParser, MeasurementBinaryParser
+from .parsers import CsvMeasurementExporter, DirectoryDataParser, MeasureListDataParser, MeasurementBinaryParser, MeasurementDetailsParser, MeasurementFullParser
 from .transport import ToucanRpcTransport
 
 
@@ -70,6 +73,9 @@ class ToucanDirectoryService:
         if owner_id is None:
             return list(self._directory.devices)
         return [device for device in self._directory.devices if device.owner_id == owner_id]
+
+    def list_work_types(self) -> list[WorkTypeDto]:
+        return list(self._directory.work_types)
 
     def search_devices(self, filters: DeviceSearchFilterDto) -> list[DeviceDto]:
         q = filters.query.lower().strip()
@@ -152,6 +158,14 @@ class ToucanMeasurementService:
     def load_measurement(self, request: LoadMeasurementRequestDto) -> MeasurementParsedDto:
         raw = self.load_raw_measurement(request)
         return MeasurementBinaryParser.parse(raw)
+
+    def load_measurement_details(self, request: LoadMeasurementRequestDto) -> MeasurementDetailsDto:
+        raw = self.load_raw_measurement(request)
+        return MeasurementDetailsParser.parse(raw)
+
+    def load_full_measurement(self, request: LoadMeasurementRequestDto) -> MeasurementFullDto:
+        raw = self.load_raw_measurement(request)
+        return MeasurementFullParser.parse(raw)
 
     def export_measurement_csv(self, *, request: LoadMeasurementRequestDto, csv_path: str | Path) -> ExportMeasurementResultDto:
         parsed = self.load_measurement(request)

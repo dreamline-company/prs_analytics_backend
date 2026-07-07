@@ -61,9 +61,46 @@ class DeviceDto:
 
 
 @dataclass(frozen=True, slots=True)
+class ExtractedStringDto:
+    offset: int
+    encoding: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class NumericCandidateDto:
+    offset: int
+    type_name: str
+    value: int | float
+
+
+@dataclass(frozen=True, slots=True)
+class RawDatasetDto:
+    name: str
+    type_code: int
+    raw_size: int
+    value_preview: str = ""
+    strings: list[ExtractedStringDto] = field(default_factory=list)
+    numbers: list[NumericCandidateDto] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkTypeDto:
+    work_type_id: Optional[int]
+    name: str
+    short_name: Optional[str] = None
+    description: Optional[str] = None
+    offset: Optional[int] = None
+    raw_ints: list[int] = field(default_factory=list)
+    raw_strings: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
 class DirectoryDto:
     owners: list[OwnerDto] = field(default_factory=list)
     devices: list[DeviceDto] = field(default_factory=list)
+    work_types: list[WorkTypeDto] = field(default_factory=list)
+    raw_datasets: list[RawDatasetDto] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +211,50 @@ class MeasurementParsedDto:
     raw_records: list[MeasurementRecordDto]
     rows: list[MeasurementRowDto]
     header_ascii_hint: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class MeasurementEventDto:
+    offset: int
+    time_text: Optional[str]
+    code: Optional[int]
+    text: str
+    raw_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class MeasurementPassportDto:
+    device_id: Optional[int] = None
+    device_version: Optional[str] = None
+    organization: Optional[str] = None
+    workshop: Optional[int] = None
+    brigade: Optional[int] = None
+    spu: Optional[int] = None
+    field_id: Optional[int] = None
+    bush: Optional[int] = None
+    well: Optional[int] = None
+    max_hook_weight_t: Optional[float] = None
+    tackle_block_ratio: Optional[int] = None
+    tare_weight_t: Optional[float] = None
+    values: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class MeasurementDetailsDto:
+    magic: str
+    raw_size: int
+    sample_offset: Optional[int]
+    passport: MeasurementPassportDto
+    events: list[MeasurementEventDto] = field(default_factory=list)
+    strings: list[ExtractedStringDto] = field(default_factory=list)
+    numbers: list[NumericCandidateDto] = field(default_factory=list)
+    header_ascii_hint: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class MeasurementFullDto:
+    chart: MeasurementParsedDto
+    details: MeasurementDetailsDto
 
 
 @dataclass(frozen=True, slots=True)
