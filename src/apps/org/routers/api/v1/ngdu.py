@@ -6,21 +6,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.org.dto.internal.ngdu import NGDUShortDTO
 from apps.org.dto.queries.ngdu import SearchNGDUByNameQuery
 from apps.org.dto.responses.ngdu import ListNGDUResponseDTO, SearchNGDUResponseDTO
+from apps.org.repositories.org import OrgRepository
 from apps.org.use_cases.list_ngdus import ListNGDUsUseCase
 from apps.org.use_cases.search_ngdu_by_name import SearchNGDUByNameUseCase
-from shared.dependencies.db import get_cm_session
+from shared.dependencies.db import get_app_session
 from shared.dto.api import AppResponse
-from shared.integrations.cm.repositories.ngdu import CMNGDURepository
 
 router = APIRouter(prefix="/ngdu", tags=["ngdu"])
 
 
 @router.get("", response_model=AppResponse[list[NGDUShortDTO]])
 async def list_ngdus(
-    cm_session: Annotated[AsyncSession, Depends(get_cm_session)],
+    session: Annotated[AsyncSession, Depends(get_app_session)],
 ) -> ListNGDUResponseDTO:
     use_case = ListNGDUsUseCase(
-        cm_ngdu_repository=CMNGDURepository(session=cm_session),
+        org_repository=OrgRepository(session=session),
     )
     ngdus = await use_case.execute()
     return ListNGDUResponseDTO(data=ngdus)
@@ -28,7 +28,7 @@ async def list_ngdus(
 
 @router.get("/search", response_model=AppResponse[list[NGDUShortDTO]])
 async def search_ngdu_by_name(
-    cm_session: Annotated[AsyncSession, Depends(get_cm_session)],
+    session: Annotated[AsyncSession, Depends(get_app_session)],
     name: Annotated[
         str,
         Query(min_length=1, max_length=30, description="NGDU name substring"),
@@ -36,7 +36,7 @@ async def search_ngdu_by_name(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> SearchNGDUResponseDTO:
     use_case = SearchNGDUByNameUseCase(
-        cm_ngdu_repository=CMNGDURepository(session=cm_session),
+        org_repository=OrgRepository(session=session),
     )
     ngdus = await use_case.execute(
         SearchNGDUByNameQuery(name=name, limit=limit),

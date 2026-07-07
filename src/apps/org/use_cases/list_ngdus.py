@@ -1,11 +1,14 @@
 from apps.org.dto.internal.ngdu import NGDUShortDTO
-from shared.integrations.cm.repositories.ngdu import CMNGDURepository
+from apps.org.repositories.org import OrgRepository
+from shared.constants.ngdu import AbaiNGDUIDsEnum
 
 
 class ListNGDUsUseCase:
-    def __init__(self, cm_ngdu_repository: CMNGDURepository) -> None:
-        self.cm_ngdu_repository = cm_ngdu_repository
+    def __init__(self, org_repository: OrgRepository) -> None:
+        self.org_repository = org_repository
 
     async def execute(self) -> list[NGDUShortDTO]:
-        ngdus = await self.cm_ngdu_repository.list_all()
-        return [NGDUShortDTO.model_validate(ngdu) for ngdu in ngdus]
+        orgs = await self.org_repository.list_by_abai_ids(
+            [item.value for item in AbaiNGDUIDsEnum],
+        )
+        return [NGDUShortDTO(id=org.id, name=org.name_ru) for org in orgs]

@@ -35,6 +35,27 @@ class OrgRepository(
             ),
         )
 
+    async def search_by_name_in_abai_ids(
+        self,
+        name: str,
+        abai_ids: Sequence[int],
+        *,
+        limit: int = 20,
+    ) -> Sequence[Org]:
+        if not abai_ids:
+            return ()
+
+        return await self.get_list(
+            QuerySpec(
+                filters=(
+                    Org.abai_id.in_(abai_ids),
+                    Org.name_ru.ilike(f"%{name}%"),
+                ),
+                order_by=(Org.name_ru,),
+                limit=limit,
+            ),
+        )
+
     async def update_by_abai_id(self, abai_id: int, data: UpdateOrgDTO) -> Org:
         return await self.update(
             data=data,
