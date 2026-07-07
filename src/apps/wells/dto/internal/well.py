@@ -7,3 +7,9 @@ class WellShortDTO(BaseModel):
     id: int
     abai_id: int
     name: str
+
+
+class WellMatrixItemDTO(BaseModel):
+    id: int
+    name: str
+    is_on_repair: bool

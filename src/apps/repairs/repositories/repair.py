@@ -70,6 +70,22 @@ class RepairRepository(
             ),
         )
 
+    async def list_active_by_well_abai_ids(
+        self,
+        abai_well_ids: Sequence[int],
+    ) -> Sequence[Repair]:
+        if not abai_well_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(
+                    Repair.abai_well_id.in_(abai_well_ids),
+                    Repair.end_time.is_(None),
+                ),
+                order_by=(Repair.start_time.desc(),),
+            ),
+        )
+
     async def list_by_repair_type_id(self, repair_type_id: int) -> Sequence[Repair]:
         return await self.get_list(
             QuerySpec(

@@ -25,3 +25,13 @@ class ABAIWellOrgRepository(
                 order_by=(WellOrg.id,),
             ),
         )
+
+    async def list_by_orgs(self, org_ids: Sequence[int]) -> Sequence[WellOrg]:
+        if not org_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(WellOrg.org.in_(org_ids),),
+                order_by=(WellOrg.id,),
+            ),
+        )

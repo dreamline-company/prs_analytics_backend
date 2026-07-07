@@ -35,6 +35,9 @@ class OrgRepository(
             ),
         )
 
+    async def list_all(self) -> Sequence[Org]:
+        return await self.get_list(QuerySpec(order_by=(Org.abai_id,)))
+
     async def search_by_name_in_abai_ids(
         self,
         name: str,
