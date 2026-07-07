@@ -22,11 +22,21 @@ class RepairBrigadeRepository(
             QuerySpec(filters=(RepairBrigade.id == repair_brigade_id,)),
         )
 
-    async def list_by_repair_id(self, repair_id: int) -> Sequence[RepairBrigade]:
+    async def get_by_repair_id(self, repair_id: int) -> RepairBrigade | None:
+        return await self.get_one(
+            QuerySpec(filters=(RepairBrigade.repair_id == repair_id,)),
+        )
+
+    async def list_by_repair_ids(
+        self,
+        repair_ids: Sequence[int],
+    ) -> Sequence[RepairBrigade]:
+        if not repair_ids:
+            return ()
         return await self.get_list(
             QuerySpec(
-                filters=(RepairBrigade.repair_id == repair_id,),
-                order_by=(RepairBrigade.id,),
+                filters=(RepairBrigade.repair_id.in_(repair_ids),),
+                order_by=(RepairBrigade.repair_id,),
             ),
         )
 

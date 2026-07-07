@@ -1,4 +1,7 @@
 from collections.abc import Sequence
+from datetime import date, datetime, time
+
+from sqlalchemy import or_
 
 from apps.repairs.dto.internal.repositories.repair import (
     CreateRepairDTO,
@@ -69,6 +72,26 @@ class RepairRepository(
                 order_by=(Repair.start_time.desc(),),
             ),
         )
+
+    async def find_covering_date(
+        self,
+        well_id: int,
+        target_date: date,
+    ) -> Repair | None:
+        day_start = datetime.combine(target_date, time.min)
+        day_end = datetime.combine(target_date, time.max)
+        rs = await self.get_list(
+            QuerySpec(
+                filters=(
+                    Repair.well_id == well_id,
+                    Repair.start_time <= day_end,
+                    or_(Repair.end_time.is_(None), Repair.end_time >= day_start),
+                ),
+                order_by=(Repair.start_time.desc(),),
+                limit=1,
+            ),
+        )
+        return rs[0] if rs else None
 
     async def list_active_by_well_abai_ids(
         self,

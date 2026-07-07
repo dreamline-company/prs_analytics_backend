@@ -1,14 +1,21 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
+from apps.org.repositories import UniqueBrigadeRepository
+from apps.repairs.dto.internal.repositories.brigade import CreateRepairBrigadeDTO
 from apps.repairs.dto.internal.repositories.reports import CreateRepairSummaryDTO
 from apps.repairs.dto.requests.summaries import (
     UploadParsedSummariesListDTO,
     UploadParsedSummaryDTO,
 )
+from apps.repairs.repositories.brigade import RepairBrigadeRepository
+from apps.repairs.repositories.repair import RepairRepository
 from apps.repairs.repositories.reports import RepairSummaryRepository
 from apps.wells.repositories import WellRepository
+from core import get_logger
 from shared.errors import HttpError
+
+logger = get_logger(__name__)
 
 
 class WellsNotFoundError(HttpError):
@@ -18,15 +25,21 @@ class WellsNotFoundError(HttpError):
 
 
 class UploadParsedSummariesUseCase:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         session: AsyncSession,
         well_repository: WellRepository,
         repair_summary_repository: RepairSummaryRepository,
+        repair_repository: RepairRepository,
+        repair_brigade_repository: RepairBrigadeRepository,
+        unique_brigade_repository: UniqueBrigadeRepository,
     ) -> None:
         self.session = session
         self.well_repository = well_repository
         self.repair_summary_repository = repair_summary_repository
+        self.repair_repository = repair_repository
+        self.repair_brigade_repository = repair_brigade_repository
+        self.unique_brigade_repository = unique_brigade_repository
 
     async def execute(self, payload: UploadParsedSummariesListDTO) -> int:
         summaries = payload.summaries
@@ -47,6 +60,8 @@ class UploadParsedSummariesUseCase:
 
         if new_dtos:
             await self.repair_summary_repository.bulk_create(new_dtos)
+
+        await self._link_brigades(summaries, wells_by_name)
 
         await self.session.commit()
         return len(new_dtos)
@@ -69,6 +84,46 @@ class UploadParsedSummariesUseCase:
             raise WellsNotFoundError(details={"well_names": sorted(missing)})
 
         return wells_by_name
+
+    async def _link_brigades(
+        self,
+        summaries: list[UploadParsedSummaryDTO],
+        wells_by_name: dict[str, object],
+    ) -> None:
+        for summary in summaries:
+            well_id = wells_by_name[summary.well_name].id
+            repair = await self.repair_repository.find_covering_date(
+                well_id=well_id,
+                target_date=summary.start_date,
+            )
+            if repair is None:
+                logger.warning(
+                    "No repair covering well_id=%s date=%s — skipping brigade link.",
+                    well_id,
+                    summary.start_date,
+                )
+                continue
+
+            if await self.repair_brigade_repository.get_by_repair_id(repair.id):
+                continue
+
+            brigade_name = f"Бригада №{summary.brigade_number}"
+            brigade = await self.unique_brigade_repository.get_by_name(brigade_name)
+            if brigade is None:
+                logger.warning(
+                    "UniqueBrigade name=%r not found — skipping link "
+                    "for repair_id=%s.",
+                    brigade_name,
+                    repair.id,
+                )
+                continue
+
+            await self.repair_brigade_repository.create(
+                CreateRepairBrigadeDTO(
+                    repair_id=repair.id,
+                    brigade_id=brigade.id,
+                ),
+            )
 
     @staticmethod
     def _build_create_dtos(

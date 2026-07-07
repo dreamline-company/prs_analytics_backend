@@ -11,6 +11,7 @@ class RepairBrigade(AppBaseModel, IntPkMixin, TimedMixinModel):
         BigInteger,
         ForeignKey("repairs_repair.id"),
         nullable=False,
+        unique=True,
     )
     brigade_id: Mapped[int] = mapped_column(
         BigInteger,

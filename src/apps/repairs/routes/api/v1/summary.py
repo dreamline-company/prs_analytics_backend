@@ -4,10 +4,13 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
+from apps.org.repositories import UniqueBrigadeRepository
 from apps.repairs.dto.internal.summary import RepairSummaryDTO
 from apps.repairs.dto.queries.summary import ListRepairSummariesByRepairIdQuery
 from apps.repairs.dto.requests.summaries import UploadParsedSummariesListDTO
 from apps.repairs.dto.responses.summary import ListRepairSummariesResponseDTO
+from apps.repairs.repositories.brigade import RepairBrigadeRepository
+from apps.repairs.repositories.repair import RepairRepository
 from apps.repairs.repositories.reports import RepairSummaryRepository
 from apps.repairs.use_cases.list_repair_summaries_by_repair_id import (
     ListRepairSummariesByRepairIdUseCase,
@@ -45,6 +48,9 @@ async def upload_parsed_xlsx_summary(
         session=session,
         well_repository=WellRepository(session=session),
         repair_summary_repository=RepairSummaryRepository(session=session),
+        repair_repository=RepairRepository(session=session),
+        repair_brigade_repository=RepairBrigadeRepository(session=session),
+        unique_brigade_repository=UniqueBrigadeRepository(session=session),
     )
     created = await use_case.execute(summaries)
     return {"created": created}
