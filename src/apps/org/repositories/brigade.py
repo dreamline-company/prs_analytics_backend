@@ -73,6 +73,14 @@ class UniqueBrigadeRepository(
     async def list_all(self) -> Sequence[UniqueBrigade]:
         return await self.get_list(QuerySpec(order_by=(UniqueBrigade.name,)))
 
+    async def list_by_ngdu_id(self, ngdu_id: int) -> Sequence[UniqueBrigade]:
+        return await self.get_list(
+            QuerySpec(
+                filters=(UniqueBrigade.ngdu_id == ngdu_id,),
+                order_by=(UniqueBrigade.name,),
+            ),
+        )
+
     async def update_by_id(
         self,
         unique_brigade_id: int,

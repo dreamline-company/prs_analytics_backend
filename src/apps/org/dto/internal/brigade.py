@@ -13,11 +13,11 @@ class BrigadeDTO(BaseModel):
 
     id: int
     name: str
-    cdng: str | None
     ngdu_id: int
-    fio: str | None
-    lift: str | None
-    field: str | None
-    device: str | None
+    cdng: str | None = None
+    fio: str | None = None
+    lift: str | None = None
+    field: str | None = None
+    device: str | None = None
     violations_count: int = 0
     is_in_repair: bool = False
