@@ -1,7 +1,9 @@
 import inspect
 
 from apps.files.models.file import File
+from apps.org.models.brigade import Brigade
 from apps.org.models.ngdu import NGDU
+from apps.org.models.org import Org, OrgType
 from apps.repairs.models.analytics import (
     RepairAIAnalysis,
     RepairAnalytics,
@@ -24,9 +26,12 @@ from apps.wells.models.well import Well
 __all__ = (
     "NGDU",
     "SPO",
+    "Brigade",
     "Coord",
     "Dynamogram",
     "File",
+    "Org",
+    "OrgType",
     "Repair",
     "RepairAIAnalysis",
     "RepairAnalytics",

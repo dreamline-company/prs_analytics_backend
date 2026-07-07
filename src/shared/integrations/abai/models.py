@@ -298,3 +298,117 @@ class TechModeProdOil(ABAIBaseModel):
         nullable=True,
         comment="Плотность нефти (т/м.куб)",
     )
+
+
+class Org(ABAIBaseModel):
+    __tablename__ = "org"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        comment="ID",
+    )
+
+    parent: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("org.id"),
+        nullable=True,
+        comment=(
+            "Вышестоящий объект орг. структуры "
+            "(исторические данные по полю выбирать из org_history)"
+        ),
+    )
+
+    name_ru: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment=(
+            "Наименование на русском языке "
+            "(исторические данные по полю выбирать из org_history)"
+        ),
+    )
+
+    name_short_ru: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment=(
+            "Краткое наименование на русском языке "
+            "(исторические данные по полю выбирать из org_history)"
+        ),
+    )
+
+    org_type: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        comment="Тип объекта орг. структуры. Ссылка на поле id таблицы org_type",
+    )
+
+
+class Brigade(ABAIBaseModel):
+    __tablename__ = "brigade"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        comment="ID",
+    )
+
+    name_ru: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Наименование на русском языке",
+    )
+
+    name_short_ru: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Краткое наименование на русском языке",
+    )
+
+    own: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+    )
+
+    org: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("org.id"),
+        nullable=True,
+        comment="Оргструктура",
+    )
+
+
+class WellOrg(ABAIBaseModel):
+    __tablename__ = "well_org"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        comment="ID",
+    )
+
+    well: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("well.id"),
+        nullable=True,
+        comment="Скважина. Ссылка на поле id таблицы well",
+    )
+
+    org: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("org.id"),
+        nullable=True,
+        comment="Объект орг. структуры. Ссылка на поле id таблицы org",
+    )
+
+    dbeg: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        comment="Дата начала действия",
+    )
+
+    dend: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        comment="Дата окончания действия",
+    )

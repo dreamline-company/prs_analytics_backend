@@ -4,11 +4,12 @@ from shared.database.sql.models import AbaiIdMixin, AppBaseModel, IntPkMixin
 
 
 class OrgType(AppBaseModel, IntPkMixin, AbaiIdMixin):
-    pass
+    __tablename__ = "org_type"
 
 
 class Org(AppBaseModel, IntPkMixin, AbaiIdMixin):
     __tablename__ = "org"
+
     parent_id: Mapped[int | None]
     name_ru: Mapped[str]
     name_ru_short: Mapped[str | None]
