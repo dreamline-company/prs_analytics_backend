@@ -74,3 +74,22 @@ class CurrentRepairDTO(BaseModel):
 class BrigadeRepairStateDTO(BaseModel):
     is_in_repair: bool
     current_repair: CurrentRepairDTO | None
+
+
+class BrigadeShortDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    ngdu_id: int
+
+
+class BrigadeDangerDTO(BaseModel):
+    type: str
+    time: datetime
+    description: str
+
+
+class BrigadeDangerZoneItemDTO(BaseModel):
+    brigade: BrigadeShortDTO
+    dangers: list[BrigadeDangerDTO]

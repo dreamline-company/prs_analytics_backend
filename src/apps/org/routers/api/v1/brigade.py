@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.org.dto.internal.brigade import (
+    BrigadeDangerZoneItemDTO,
     BrigadeDTO,
     BrigadeRepairStateDTO,
     BrigadesKPIDTO,
@@ -12,9 +13,11 @@ from apps.org.dto.queries.brigade import (
     GetBrigadeRepairStateQuery,
     GetBrigadesKPIQuery,
     ListBrigadesByNGDUIdQuery,
+    ListBrigadesInDangerZoneQuery,
 )
 from apps.org.dto.responses.brigade import (
     BrigadeRepairStateResponseDTO,
+    BrigadesInDangerZoneResponseDTO,
     BrigadesKPIResponseDTO,
     ListBrigadesResponseDTO,
 )
@@ -22,6 +25,9 @@ from apps.org.repositories import UniqueBrigadeRepository
 from apps.org.use_cases.get_brigade_repair_state import GetBrigadeRepairStateUseCase
 from apps.org.use_cases.get_brigades_kpi import GetBrigadesKPIUseCase
 from apps.org.use_cases.list_brigades_by_ngdu_id import ListBrigadesByNGDUIdUseCase
+from apps.org.use_cases.list_brigades_in_danger_zone import (
+    ListBrigadesInDangerZoneUseCase,
+)
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.repair import RepairRepository
 from apps.wells.repositories import WellRepository
@@ -73,6 +79,30 @@ async def get_brigades_kpi(
     )
     kpi = await use_case.execute(GetBrigadesKPIQuery(ngdu_id=ngdu_id))
     return BrigadesKPIResponseDTO(data=kpi)
+
+
+@router.get(
+    "/danger-zone",
+    response_model=AppResponse[list[BrigadeDangerZoneItemDTO]],
+)
+async def list_brigades_in_danger_zone(
+    app_session: Annotated[AsyncSession, Depends(get_app_session)],
+    cm_session: Annotated[AsyncSession, Depends(get_cm_session)],
+    ngdu_id: Annotated[int, Query(ge=1, description="Local Org.id of the NGDU")],
+) -> BrigadesInDangerZoneResponseDTO:
+    use_case = ListBrigadesInDangerZoneUseCase(
+        unique_brigade_repository=UniqueBrigadeRepository(session=app_session),
+        repair_brigade_repository=RepairBrigadeRepository(session=app_session),
+        repair_repository=RepairRepository(session=app_session),
+        cm_brigade_repository=CMBrigadeRepository(session=cm_session),
+        cm_brigade_error_screen_repository=CMBrigadeErrorScreenRepository(
+            session=cm_session,
+        ),
+    )
+    items = await use_case.execute(
+        ListBrigadesInDangerZoneQuery(ngdu_id=ngdu_id),
+    )
+    return BrigadesInDangerZoneResponseDTO(data=items)
 
 
 @router.get(

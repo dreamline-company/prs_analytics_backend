@@ -81,6 +81,10 @@ class GetBrigadeRepairStateUseCase:
             well = await self.well_repository.get_by_abai_id(
                 abai_id=repair.abai_well_id,
             )
+        if well is None and repair.well_id is not None:
+            well = await self.well_repository.get_by_id(id_=repair.well_id)
+        if well is None:
+            return self._empty()
 
         cm_brigade_ids = await self._resolve_cm_brigade_ids(brigade.name)
         violations_count, last_event = await self._violations_and_last_event(
@@ -91,7 +95,7 @@ class GetBrigadeRepairStateUseCase:
         return BrigadeRepairStateDTO(
             is_in_repair=True,
             current_repair=CurrentRepairDTO(
-                well=WellShortDTO.model_validate(well) if well is not None else None,
+                well=WellShortDTO.model_validate(well),
                 repair=RepairShortDTO.model_validate(repair),
                 violations_count=violations_count,
                 por_percent=0,

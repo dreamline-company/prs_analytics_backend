@@ -17,3 +17,9 @@ class GetBrigadeRepairStateQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     brigade_id: int = Field(ge=1)
+
+
+class ListBrigadesInDangerZoneQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ngdu_id: int = Field(ge=1)
