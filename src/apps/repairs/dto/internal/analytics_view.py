@@ -34,6 +34,27 @@ class AIResultDTO(BaseModel):
         return value
 
 
+class OverallAIVerdictDTO(BaseModel):
+    """Parsed structured output of the overall AI analysis (prompt v2+)."""
+
+    score: int
+    good_points: list[str] = []
+    risks_and_issues: list[str] = []
+    attention_points: list[str] = []
+    recommendations: list[str] = []
+
+
+class OverallAIResultDTO(BaseModel):
+    id: int
+    status: str
+    model_name: str | None
+    prompt_version: str | None
+    error: str | None
+    processed_at: datetime.datetime | None
+    verdict: OverallAIVerdictDTO | None
+    raw: str | None
+
+
 class DynamogramWithAIResultDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -81,4 +102,4 @@ class RepairAnalyticsViewDTO(BaseModel):
     dynamograms: DynamogramsPairDTO
     spos: list[SPOWithAIResultDTO]
     error_screens: list[BrigadeErrorScreenDTO]
-    overall_ai_analysis: AIResultDTO | None = None
+    overall_ai_analysis: OverallAIResultDTO | None = None

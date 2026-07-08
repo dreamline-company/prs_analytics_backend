@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.files.repositories.file import FileRepository
 from apps.models_registry import *  # noqa: F403
+from apps.org.repositories import UniqueBrigadeRepository
 from apps.org.repositories.org import OrgRepository
 from apps.org.use_cases.get_ngdu_for_well import GetNGDUForWellUseCase
 from apps.repairs.dto.internal.repositories.analytics import (
@@ -53,6 +54,7 @@ from apps.repairs.repositories.analytics import (
     RepairAnalyticsRepository,
     RepairAnalyticsSPORepository,
 )
+from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.docs import RepairDocRepository
 from apps.repairs.repositories.reports import RepairSummaryRepository
 from apps.repairs.tasks.fill_analytics.ai.agent_factory import (
@@ -87,6 +89,10 @@ from shared.database.sql.setup import session_makers
 from shared.dependencies.db import get_aioboto_client_factory
 from shared.integrations.abai.api.client import AbaiAsyncClient
 from shared.integrations.abai.repositories.well_orgs import ABAIWellOrgRepository
+from shared.integrations.cm.repositories.brigade_error_screens import (
+    CMBrigadeErrorScreenRepository,
+)
+from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
 from shared.integrations.kbrs.api import ToucanClientConfig, ToucanCredentialsDto
 from shared.integrations.kbrs.api.client import ToucanBackendClient
 
@@ -154,6 +160,7 @@ class FillRepairAnalytics:
             async with (
                 session_makers["app"]() as session,
                 session_makers["abai"]() as abai_session,
+                session_makers["cm"]() as cm_session,
             ):
                 deps = _Dependencies.build(session)
 
@@ -204,6 +211,12 @@ class FillRepairAnalytics:
                     overall_ai_repo=deps.overall_ai_repo,
                     file_repo=deps.file_repo,
                     storage=storage,
+                    repair_brigade_repo=RepairBrigadeRepository(session),
+                    unique_brigade_repo=UniqueBrigadeRepository(session),
+                    cm_brigade_repo=CMBrigadeRepository(cm_session),
+                    cm_brigade_error_screen_repo=CMBrigadeErrorScreenRepository(
+                        cm_session,
+                    ),
                 )
 
                 async for repairs in self._iter_candidates(session, grace_cutoff):

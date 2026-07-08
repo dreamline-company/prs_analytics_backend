@@ -5,9 +5,12 @@ loop so ``FillRepairAnalytics`` stays about orchestration, not persistence.
 """
 
 import mimetypes
+import re
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from apps.files.repositories.file import FileRepository
+from apps.org.repositories import UniqueBrigadeRepository
 from apps.repairs.dto.internal.repositories.ai_results import (
     CreateRepairAIAnalysisDTO,
     CreateRepairDynamogramAIResultDTO,
@@ -28,15 +31,26 @@ from apps.repairs.repositories.ai_results import (
     RepairDynamogramAIResultRepository,
     RepairSPOAIResultRepository,
 )
+from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.models.spo import SPO
 from core import get_logger
 from shared.database.s3.storage import AiobotoFileStorage, FileNotExistError
+from shared.integrations.cm.repositories.brigade_error_screens import (
+    CMBrigadeErrorScreenRepository,
+)
+from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
 
 from .base import TokenUsage
 from .dynamogram_processor import DynamogramAIProcessor, DynamogramProcessingInput
-from .overall_processor import OverallAIProcessor, OverallProcessingInput
+from .overall_processor import (
+    OverallAIProcessor,
+    OverallProcessingInput,
+    OverallViolationDTO,
+)
 from .spo_processor import SPOAIProcessor, SPOProcessingInput
+
+_BRIGADE_NUMBER_RE = re.compile(r"№\s*(\d+)")
 
 logger = get_logger(__name__)
 
@@ -53,6 +67,10 @@ class AICoordinator:
     overall_ai_repo: RepairAIAnalysisRepository
     file_repo: FileRepository
     storage: AiobotoFileStorage
+    repair_brigade_repo: RepairBrigadeRepository
+    unique_brigade_repo: UniqueBrigadeRepository
+    cm_brigade_repo: CMBrigadeRepository
+    cm_brigade_error_screen_repo: CMBrigadeErrorScreenRepository
     _usage_by_repair: dict[int, TokenUsage] = field(default_factory=dict)
 
     async def process_dynamogram(
@@ -172,6 +190,7 @@ class AICoordinator:
         if self._is_current(existing, self.overall_processor.prompt_version):
             return existing
 
+        violations = await self._fetch_repair_violations(repair)
         result = await self.overall_processor.process(
             OverallProcessingInput(
                 repair=repair,
@@ -182,6 +201,7 @@ class AICoordinator:
                     dynamogram_after.result if dynamogram_after else None
                 ),
                 spo_results=[r.result for r in spo_results if r.result is not None],
+                violations=violations,
             ),
         )
         self._record_usage(repair.id, result.usage)
@@ -258,3 +278,35 @@ class AICoordinator:
 
     def pop_repair_usage(self, repair_id: int) -> TokenUsage:
         return self._usage_by_repair.pop(repair_id, TokenUsage())
+
+    async def _fetch_repair_violations(
+        self,
+        repair: Repair,
+    ) -> list[OverallViolationDTO]:
+        link = await self.repair_brigade_repo.get_by_repair_id(repair.id)
+        if link is None:
+            return []
+        brigade = await self.unique_brigade_repo.get_by_id(link.brigade_id)
+        if brigade is None:
+            return []
+        match = _BRIGADE_NUMBER_RE.search(brigade.name)
+        if match is None:
+            return []
+        number = match.group(1)
+        cm_brigades = await self.cm_brigade_repo.list_by_name(number)
+        cm_ids = [cm.id for cm in cm_brigades]
+        if not cm_ids:
+            return []
+        end_time = repair.end_time or datetime.now()  # noqa: DTZ005
+        screens = await self.cm_brigade_error_screen_repo.list_by_brigade_ids_in_range(
+            cm_ids,
+            start_time=repair.start_time,
+            end_time=end_time,
+        )
+        return [
+            OverallViolationDTO(
+                timestamp=s.timestamp.isoformat(),
+                description=s.description or "",
+            )
+            for s in sorted(screens, key=lambda s: s.timestamp)
+        ]

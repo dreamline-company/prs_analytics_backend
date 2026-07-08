@@ -11,6 +11,8 @@ from apps.repairs.dto.internal.analytics_view import (
     BrigadeErrorScreenDTO,
     DynamogramsPairDTO,
     DynamogramWithAIResultDTO,
+    OverallAIResultDTO,
+    OverallAIVerdictDTO,
     RepairAnalyticsViewDTO,
     SPOWithAIResultDTO,
 )
@@ -111,9 +113,7 @@ class GetRepairAnalyticsViewUseCase:
             dynamograms=dynamograms,
             spos=spos,
             error_screens=error_screens,
-            overall_ai_analysis=(
-                AIResultDTO.model_validate(overall) if overall is not None else None
-            ),
+            overall_ai_analysis=self._build_overall(overall),
         )
 
     async def _build_dynamograms(self, analytics_id: int) -> DynamogramsPairDTO:
@@ -160,6 +160,30 @@ class GetRepairAnalyticsViewUseCase:
         if ai_results:
             dto.ai_result = AIResultDTO.model_validate(ai_results[0])
         return [dto]
+
+    @staticmethod
+    def _build_overall(overall) -> OverallAIResultDTO | None:  # noqa: ANN001
+        if overall is None:
+            return None
+        result = overall.result or {}
+        raw = result.get("raw") if isinstance(result, dict) else None
+        parsed = result.get("parsed") if isinstance(result, dict) else None
+        verdict = None
+        if isinstance(parsed, dict):
+            try:
+                verdict = OverallAIVerdictDTO.model_validate(parsed)
+            except ValueError:
+                verdict = None
+        return OverallAIResultDTO(
+            id=overall.id,
+            status=overall.status,
+            model_name=overall.model_name,
+            prompt_version=overall.prompt_version,
+            error=overall.error,
+            processed_at=overall.processed_at,
+            verdict=verdict,
+            raw=raw if isinstance(raw, str) else None,
+        )
 
     async def _build_error_screens(
         self,
