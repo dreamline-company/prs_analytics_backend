@@ -55,7 +55,7 @@ class RepairTransport(AppBaseModel, IntPkMixin):
 
     company: Mapped[str | None] = mapped_column(String(255), nullable=True)
     division: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    bp1: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    bpl: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     well_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
