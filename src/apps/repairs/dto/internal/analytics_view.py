@@ -83,6 +83,7 @@ class BrigadeErrorScreenDTO(BaseModel):
     id: int
     brigade_id: int
     screen: str | None
+    screen_url: str | None = None
     description: str | None
     is_processed: bool
     timestamp: datetime.datetime

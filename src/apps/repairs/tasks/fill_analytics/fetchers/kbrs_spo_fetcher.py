@@ -6,19 +6,21 @@ NGDU-centric routing:
   2. Map the NGDU's ABAI id to a kbrs ``owner_id`` through
      ``shared.constants.kbrs.OWNERS_MAP``.
   3. ``list_devices(owner_id)`` — all devices of that NGDU.
-  4. For each device, list measurements in the repair window
-     (``[start_time, end_time+1d]``); for each measurement load its passport
-     and compare ``passport.well`` (an integer well number) against the
-     digits extracted from ``well.name`` (e.g. ``VMB_0177`` → ``177``).
-  5. Every matching measurement is stored as one ``SPO`` row plus the
-     accompanying event set (``repairs_spo_event``, replaced on re-fetch).
+  4. For each device (in parallel), list measurements in the repair window
+     (``[start_time, end_time+1d]``); for each measurement fetch the raw
+     payload and peek at ``passport.well`` (fixed offset 0x49 in the DEL-150
+     header) — no full parsing until a match is found.
+  5. On first per-device match: parse the already-in-hand raw once, persist
+     as one ``SPO`` row plus its event set (``repairs_spo_event``, replaced
+     on re-fetch). No second RPC.
+
+Parallelism is bounded by ``ToucanClientPool`` size — each in-flight RPC
+holds a client checked out from the pool.
 
 Each stored SPO row carries:
   * ``file_id``       — raw binary measurement payload (master file).
   * ``chart_file_id`` — CSV export of the chart.
   * ``notes_file_id`` — JSON metadata blob (channels, time range, event count).
-
-The kbrs RPC client is synchronous, so I/O is offloaded to a thread.
 """
 
 import asyncio
@@ -41,8 +43,7 @@ from apps.wells.repositories.spo_event import SPOEventRepository
 from core import get_logger
 from shared.constants.kbrs import OWNERS_MAP
 from shared.database.s3.storage import AiobotoFileStorage
-from shared.integrations.kbrs.api import ToucanDecodeError
-from shared.integrations.kbrs.api.client import ToucanBackendClient
+from shared.integrations.kbrs.api import ToucanClientPool
 from shared.integrations.kbrs.api.dtos import (
     DeviceDto,
     LoadMeasurementRequestDto,
@@ -51,6 +52,11 @@ from shared.integrations.kbrs.api.dtos import (
     MeasureRowDto,
 )
 from shared.integrations.kbrs.api.enums import MeasureDateCondition
+from shared.integrations.kbrs.api.exceptions import ToucanDecodeError
+from shared.integrations.kbrs.api.parsers import (
+    MeasurementFullParser,
+    MeasurementPassportPeeker,
+)
 
 logger = get_logger(__name__)
 
@@ -84,14 +90,14 @@ def _owner_id_by_ngdu_abai_id(ngdu_abai_id: int) -> int | None:
 class KbrsSPOFetcher:
     def __init__(  # noqa: PLR0913
         self,
-        toucan_client: ToucanBackendClient,
+        pool: ToucanClientPool,
         storage: AiobotoFileStorage,
         file_repo: FileRepository,
         spo_repo: SPORepository,
         spo_event_repo: SPOEventRepository,
         get_ngdu_for_well: GetNGDUForWellUseCase,
     ) -> None:
-        self._toucan = toucan_client
+        self._pool = pool
         self._storage = storage
         self._file_repo = file_repo
         self._spo_repo = spo_repo
@@ -147,9 +153,8 @@ class KbrsSPOFetcher:
             well_name,
         )
 
-        devices: Sequence[DeviceDto] = await asyncio.to_thread(
-            self._toucan.list_devices,
-            owner_id,
+        devices: Sequence[DeviceDto] = await self._pool.call_with_retry(
+            lambda client: client.list_devices(owner_id=owner_id),
         )
         logger.info(
             "Repair id=%s: kbrs list_devices(owner_id=%s) → %s devices.",
@@ -162,19 +167,34 @@ class KbrsSPOFetcher:
 
         end = repair.end_time or datetime.now()  # noqa: DTZ005
 
-        spos: list[SPO] = []
-        for device in devices:
-            spo = await self._fetch_for_device(
-                repair=repair,
-                well_id=well_id,
-                target_well_number=target_well_number,
-                owner_id=owner_id,
-                device=device,
-                start=repair.start_time,
-                end=end,
+        device_tasks = [
+            asyncio.create_task(
+                self._fetch_for_device(
+                    repair=repair,
+                    well_id=well_id,
+                    target_well_number=target_well_number,
+                    owner_id=owner_id,
+                    device=device,
+                    start=repair.start_time,
+                    end=end,
+                ),
             )
-            if spo is not None:
-                spos.append(spo)
+            for device in devices
+        ]
+        results = await asyncio.gather(*device_tasks, return_exceptions=True)
+
+        spos: list[SPO] = []
+        for device, result in zip(devices, results, strict=True):
+            if isinstance(result, Exception):
+                logger.warning(
+                    "Repair id=%s device_id=%s fetch failed: %r",
+                    repair.id,
+                    device.device_id,
+                    result,
+                )
+                continue
+            if result is not None:
+                spos.append(result)
         return spos
 
     async def _fetch_for_device(  # noqa: PLR0913
@@ -198,84 +218,113 @@ class KbrsSPOFetcher:
             )
             return None
 
-        measures = await asyncio.to_thread(
-            self._list_measures,
-            owner_id=owner_id,
-            device_id=device_id_int,
-            start=start,
-            end=end,
+        measures = await self._pool.call_with_retry(
+            lambda client: client.list_measures(
+                MeasureListFilterDto(
+                    owner_id=owner_id,
+                    device_id=str(device_id_int),
+                    condition_date=MeasureDateCondition.INTERVAL,
+                    date_from=start,
+                    date_to=end + timedelta(days=1),
+                    page_count=50,
+                ),
+            ),
         )
         if not measures:
             return None
 
-        for measure in measures:
-            try:
-                full = await asyncio.to_thread(
-                    self._load_full,
-                    measure_id=measure.measure_id,
-                    device_id=measure.device_id,
-                    update_offset=measure.offset,
-                )
-            except ToucanDecodeError as e:
-                logger.warning("Measure is empty: %s", e)
-                continue
-            passport_well = full.details.passport.well
-            if passport_well is None:
-                continue
-            if int(passport_well) != target_well_number:
-                continue
+        matched = await self._first_matching_measure(
+            measures=measures,
+            target_well_number=target_well_number,
+        )
+        if matched is None:
+            return None
 
-            logger.info(
-                "Repair id=%s: matched device_id=%s measure_id=%s "
-                "(passport.well=%s == %s).",
+        measure, raw = matched
+        try:
+            full = await asyncio.to_thread(MeasurementFullParser.parse, raw)
+        except ToucanDecodeError as exc:
+            logger.warning(
+                "Repair id=%s device_id=%s measure_id=%s: matched by passport "
+                "but full parse failed (%s); skipping persist.",
                 repair.id,
                 device.device_id,
                 measure.measure_id,
-                passport_well,
-                target_well_number,
+                exc,
             )
+            return None
 
-            spo = await self._persist_measurement(
-                repair=repair,
-                well_id=well_id,
-                measure=measure,
-                full=full,
-            )
-            if spo is not None:
-                return spo
-        return None
-
-    def _list_measures(
-        self,
-        *,
-        owner_id: int,
-        device_id: int,
-        start: datetime,
-        end: datetime,
-    ) -> list[MeasureRowDto]:
-        return self._toucan.list_measures(
-            MeasureListFilterDto(
-                owner_id=owner_id,
-                device_id=str(device_id),
-                condition_date=MeasureDateCondition.INTERVAL,
-                date_from=start,
-                date_to=end + timedelta(days=1),
-                page_count=50,
-            ),
+        logger.info(
+            "Repair id=%s: matched device_id=%s measure_id=%s "
+            "(passport.well=%s == %s).",
+            repair.id,
+            device.device_id,
+            measure.measure_id,
+            target_well_number,
+            target_well_number,
         )
 
-    def _load_full(
+        return await self._persist_measurement(
+            repair=repair,
+            well_id=well_id,
+            measure=measure,
+            raw_bytes=raw,
+            full=full,
+        )
+
+    async def _first_matching_measure(
         self,
         *,
-        measure_id: int,
-        device_id: int,
-        update_offset: int,
-    ) -> MeasurementFullDto:
-        return self._toucan.load_full_measurement(
-            LoadMeasurementRequestDto(
-                measure_id=measure_id,
-            ),
+        measures: Sequence[MeasureRowDto],
+        target_well_number: int,
+    ) -> tuple[MeasureRowDto, bytes] | None:
+        """Probe measures in parallel; return the first passport match.
+
+        Uses the pool for RPC (each probe grabs a client for one RPC).
+        As soon as any probe returns a match, the rest are cancelled.
+        """
+
+        tasks = [
+            asyncio.create_task(
+                self._probe_measure(measure, target_well_number),
+            )
+            for measure in measures
+        ]
+        matched: tuple[MeasureRowDto, bytes] | None = None
+        try:
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    result = await coro
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Measure probe error: %r", exc)
+                    continue
+                if result is not None:
+                    matched = result
+                    break
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        return matched
+
+    async def _probe_measure(
+        self,
+        measure: MeasureRowDto,
+        target_well_number: int,
+    ) -> tuple[MeasureRowDto, bytes] | None:
+        # Only measure_id: passing device_id / update_offset makes the server
+        # return a different payload (delta/partial) without the passport
+        # header at offset 0x49. The original _load_full used the same
+        # single-param form; draft_kbrs.py explicitly comments the extras out.
+        request = LoadMeasurementRequestDto(measure_id=measure.measure_id)
+        raw = await self._pool.call_with_retry(
+            lambda client: client.measurement_service.load_raw_measurement(request),
         )
+        well = MeasurementPassportPeeker.read_well(raw)
+        if well is None or well != target_well_number:
+            return None
+        return measure, raw
 
     async def _persist_measurement(
         self,
@@ -283,6 +332,7 @@ class KbrsSPOFetcher:
         repair: Repair,
         well_id: int,
         measure: MeasureRowDto,
+        raw_bytes: bytes,
         full: MeasurementFullDto,
     ) -> SPO | None:
         parsed = full.chart
@@ -300,15 +350,6 @@ class KbrsSPOFetcher:
             await self._persist_events(existing.id, events)
             return existing
 
-        request = LoadMeasurementRequestDto(
-            measure_id=measure.measure_id,
-            device_id=measure.device_id,
-            update_offset=measure.offset,
-        )
-        raw_bytes = await asyncio.to_thread(
-            self._toucan.measurement_service.load_raw_measurement,
-            request,
-        )
         csv_bytes = self._render_csv(parsed)
         notes_bytes = self._render_notes(parsed)
 

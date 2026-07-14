@@ -62,6 +62,7 @@ class GetRepairAnalyticsViewUseCase:
         spo_ai_repository: RepairSPOAIResultRepository,
         overall_ai_repository: RepairAIAnalysisRepository,
         cm_brigade_error_screen_repository: CMBrigadeErrorScreenRepository,
+        cm_media_url_header: str,
     ) -> None:
         self.repair_repository = repair_repository
         self.wells_repository = wells_repository
@@ -77,6 +78,7 @@ class GetRepairAnalyticsViewUseCase:
         self.spo_ai_repository = spo_ai_repository
         self.overall_ai_repository = overall_ai_repository
         self.cm_brigade_error_screen_repository = cm_brigade_error_screen_repository
+        self.cm_media_url_header = cm_media_url_header
 
     async def execute(
         self,
@@ -187,15 +189,26 @@ class GetRepairAnalyticsViewUseCase:
 
     async def _build_error_screens(
         self,
-        analytics_id: int,
+        _analytics_id: int,
     ) -> list[BrigadeErrorScreenDTO]:
-        links = (
-            await self.analytics_brigade_error_screen_repository.list_by_analytics_id(
-                analytics_id,
-            )
-        )
-        cm_screen_ids = [link.cm_screen_id for link in links]
+        # links = (
+        #     await self.analytics_brigade_error_screen_repository.list_by_analytics_id(
+        #         _analytics_id,
+        #     )
+        # )
+        # cm_screen_ids = [link.cm_screen_id for link in links]
+        cm_screen_ids = [55364, 55362, 55358]
         screens = await self.cm_brigade_error_screen_repository.list_by_ids(
             cm_screen_ids,
         )
-        return [BrigadeErrorScreenDTO.model_validate(s) for s in screens]
+        return [
+            BrigadeErrorScreenDTO.model_validate(screen).model_copy(
+                update={"screen_url": self._build_screen_url(screen.screen)},
+            )
+            for screen in screens
+        ]
+
+    def _build_screen_url(self, screen: str | None) -> str | None:
+        if not screen:
+            return None
+        return f"{self.cm_media_url_header.rstrip('/')}/{screen.lstrip('/')}"

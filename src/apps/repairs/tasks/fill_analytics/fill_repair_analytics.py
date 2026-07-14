@@ -107,8 +107,11 @@ from shared.integrations.cm.repositories.brigade_error_screens import (
     CMBrigadeErrorScreenRepository,
 )
 from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
-from shared.integrations.kbrs.api import ToucanClientConfig, ToucanCredentialsDto
-from shared.integrations.kbrs.api.client import ToucanBackendClient
+from shared.integrations.kbrs.api import (
+    ToucanClientConfig,
+    ToucanClientPool,
+    ToucanCredentialsDto,
+)
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -123,7 +126,7 @@ class FillRepairAnalytics:
     def __init__(
         self,
         abai_client: AbaiAsyncClient | None = None,
-        toucan_client: ToucanBackendClient | None = None,
+        toucan_pool: ToucanClientPool | None = None,
         *,
         repair_id: int | None = None,
         well_id: int | None = None,
@@ -132,7 +135,7 @@ class FillRepairAnalytics:
             msg = "Pass either repair_id or well_id, not both."
             raise ValueError(msg)
         self._abai_client = abai_client
-        self._toucan_client = toucan_client
+        self._toucan_pool = toucan_pool
         self._repair_id = repair_id
         self._well_id = well_id
 
@@ -159,7 +162,7 @@ class FillRepairAnalytics:
             timeout=120,
             max_concurrent_downloads=100,
         )
-        toucan_client = self._toucan_client
+        toucan_pool = self._toucan_pool
         storage = AiobotoFileStorage(
             bucket_name=settings.PRS_REPAIRS_BUCKET_NAME,
             client_factory=get_aioboto_client_factory(),
@@ -197,14 +200,14 @@ class FillRepairAnalytics:
                 )
                 spo_fetcher = (
                     KbrsSPOFetcher(
-                        toucan_client=toucan_client,
+                        pool=toucan_pool,
                         storage=storage,
                         file_repo=deps.file_repo,
                         spo_repo=deps.spo_repo,
                         spo_event_repo=deps.spo_event_repo,
                         get_ngdu_for_well=get_ngdu_for_well,
                     )
-                    if toucan_client is not None
+                    if toucan_pool is not None
                     else None
                 )
                 ai_coordinator = AICoordinator(
@@ -291,8 +294,8 @@ class FillRepairAnalytics:
             )
         finally:
             await abai_client.aclose()
-            if toucan_client is not None:
-                toucan_client.close()
+            if toucan_pool is not None:
+                await toucan_pool.close()
 
     async def _process_repair(  # noqa: PLR0913
         self,
@@ -374,7 +377,7 @@ class FillRepairAnalytics:
         if spo_fetcher is None:
             logger.warning(
                 "Repair id=%s → spo_fetcher is None "
-                "(toucan_client not initialized), skipping SPO.",
+                "(toucan_pool not initialized), skipping SPO.",
                 repair.id,
             )
         elif effective_well_id is None or well is None or abai_well_id is None:
@@ -712,11 +715,10 @@ async def main(
         timeout=120,
         max_concurrent_downloads=100,
     )
-    toucan_client = ToucanBackendClient(
+    toucan_pool = await ToucanClientPool.create(
+        size=settings.KBRS_POOL_SIZE,
         config=ToucanClientConfig(host=settings.KBRS_HOST),
-    )
-    toucan_client.login(
-        ToucanCredentialsDto(
+        credentials=ToucanCredentialsDto(
             login=settings.KBRS_LOGIN,
             password=settings.KBRS_PASSWORD,
         ),
@@ -724,7 +726,7 @@ async def main(
 
     await FillRepairAnalytics(
         abai_client=abai_client,
-        toucan_client=toucan_client,
+        toucan_pool=toucan_pool,
         repair_id=repair_id,
         well_id=well_id,
     ).run()

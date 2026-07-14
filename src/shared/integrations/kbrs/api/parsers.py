@@ -689,6 +689,33 @@ class MeasurementFullParser:
         )
 
 
+class MeasurementPassportPeeker:
+    """Cheap passport field extraction — no chart/events/strings scan.
+
+    Used by hot matching paths (e.g. SPO fetcher) where we only need to
+    check whether a raw measurement belongs to the target well before
+    deciding whether to run the full parser.
+    """
+
+    # DEL-150 header layout, mirrors MeasurementDetailsParser._extract_passport.
+    _WELL_OFFSET = 0x49
+    _WELL_SIZE = 10
+    _MAGIC = b"\x55\xaa"
+
+    @classmethod
+    def read_well(cls, data: bytes) -> int | None:
+        end = cls._WELL_OFFSET + cls._WELL_SIZE
+        if len(data) < end or data[:2] != cls._MAGIC:
+            return None
+        raw = data[cls._WELL_OFFSET:end].replace(b"\x00", b"").strip()
+        if not raw:
+            return None
+        try:
+            return int(raw.decode("ascii"))
+        except (UnicodeDecodeError, ValueError):
+            return None
+
+
 class CsvMeasurementExporter:
     DEFAULT_FIELDS = [
         "timestamp",

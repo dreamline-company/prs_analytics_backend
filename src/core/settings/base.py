@@ -42,6 +42,9 @@ class Settings(CoreSettings):
     # CM DB
     CM_ASYNC_DATABASE_URL: str
 
+    # CM media
+    CM_MEDIA_URL_HEADER: str = "http://188.127.32.80:8000/media"
+
     # WINCC
     ODBC_DRIVER: str = "ODBC Driver 18 for SQL Server"
 
@@ -114,6 +117,7 @@ class Settings(CoreSettings):
     KBRS_HOST: str = "10.32.10.86"
     KBRS_LOGIN: str
     KBRS_PASSWORD: str
+    KBRS_POOL_SIZE: int = 10
 
     # S3 (minio)
     S3_ACCESS_KEY: str

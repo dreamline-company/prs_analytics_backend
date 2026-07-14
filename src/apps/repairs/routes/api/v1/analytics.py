@@ -36,6 +36,7 @@ from apps.repairs.use_cases.get_repair_timeline import GetRepairTimelineUseCase
 from apps.wells.repositories import WellRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
+from core.settings import get_settings
 from shared.dependencies.db import get_app_session, get_cm_session
 from shared.dto.api import AppResponse
 from shared.integrations.cm.repositories.brigade_error_screens import (
@@ -43,6 +44,7 @@ from shared.integrations.cm.repositories.brigade_error_screens import (
 )
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
+settings = get_settings()
 
 
 @router.get(
@@ -75,6 +77,7 @@ async def get_repair_analytics_view(
         cm_brigade_error_screen_repository=CMBrigadeErrorScreenRepository(
             session=cm_session,
         ),
+        cm_media_url_header=settings.CM_MEDIA_URL_HEADER,
     )
     view = await use_case.execute(GetRepairAnalyticsViewQuery(repair_id=repair_id))
     return RepairAnalyticsViewResponseDTO(data=view)
