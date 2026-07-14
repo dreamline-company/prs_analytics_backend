@@ -34,3 +34,11 @@ def build_spo_agent() -> CompiledStateGraph:
 
 def build_overall_agent() -> CompiledStateGraph:
     return create_agent(_chat_model())
+
+
+def build_kpi_por_agent() -> CompiledStateGraph:
+    return create_agent(_chat_model())
+
+
+def build_kpi_spo_analysis_agent() -> CompiledStateGraph:
+    return create_agent(_chat_model())

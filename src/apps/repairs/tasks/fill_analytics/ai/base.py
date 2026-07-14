@@ -11,6 +11,7 @@ project owner writes them later; the plumbing is stable.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -26,6 +27,18 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
 logger = get_logger(__name__)
+
+_JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
+
+
+def _loads_lenient(content: str) -> Any:  # noqa: ANN401
+    """Parse JSON, tolerating a surrounding ```json ... ``` markdown fence."""
+    for candidate in (content, _JSON_FENCE_RE.sub("", content.strip())):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 @dataclass(slots=True)
@@ -120,10 +133,10 @@ class BaseAIProcessor[InputT]:
             return {"raw": None}
         content = last.content
         if isinstance(content, str):
-            try:
-                return {"raw": content, "parsed": json.loads(content)}
-            except json.JSONDecodeError:
-                return {"raw": content}
+            parsed = _loads_lenient(content)
+            if parsed is not None:
+                return {"raw": content, "parsed": parsed}
+            return {"raw": content}
         return {"raw": content}
 
     @staticmethod

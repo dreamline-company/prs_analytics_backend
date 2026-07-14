@@ -105,6 +105,11 @@ class Settings(CoreSettings):
     ABAI_DOMAIN: str = "emg_new"
     ABAI_CONNECT_THROUGH: str = "abai.kmg.kz:443:10.32.10.98:8443"
 
+    # UTO transport
+    UTO_LOGIN: str
+    UTO_PASS: str
+    UTO_CONNECT_THROUGH: str | None = None
+
     # TOUCAN KBRS CLIENT
     KBRS_HOST: str = "10.32.10.86"
     KBRS_LOGIN: str

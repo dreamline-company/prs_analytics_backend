@@ -56,9 +56,12 @@ from apps.repairs.repositories.analytics import (
 )
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.docs import RepairDocRepository
+from apps.repairs.repositories.kpi import RepairKPIRepository
 from apps.repairs.repositories.reports import RepairSummaryRepository
 from apps.repairs.tasks.fill_analytics.ai.agent_factory import (
     build_dynamogram_agent,
+    build_kpi_por_agent,
+    build_kpi_spo_analysis_agent,
     build_overall_agent,
     build_spo_agent,
 )
@@ -77,6 +80,17 @@ from apps.repairs.tasks.fill_analytics.fetchers.abai_repair_doc_fetcher import (
 from apps.repairs.tasks.fill_analytics.fetchers.kbrs_spo_fetcher import (
     KbrsSPOFetcher,
 )
+from apps.repairs.tasks.fill_analytics.kpi.por_confirmation_processor import (
+    PORConfirmationProcessor,
+)
+from apps.repairs.tasks.fill_analytics.kpi.repair_kpi_calculator import (
+    RepairKPICalculator,
+)
+from apps.repairs.tasks.fill_analytics.kpi.spo_analysis_processor import (
+    SPOAnalysisProcessor,
+)
+from apps.telemetry.repositories.tech_regime import TechRegimeRepository
+from apps.telemetry.repositories.telemetry import TelemetryRepository
 from apps.wells.models.well import Well
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
@@ -218,6 +232,32 @@ class FillRepairAnalytics:
                         cm_session,
                     ),
                 )
+                kpi_calculator = RepairKPICalculator(
+                    kpi_repo=deps.kpi_repo,
+                    well_repo=deps.well_repo,
+                    summary_repo=deps.summary_repo,
+                    doc_repo=deps.doc_repo,
+                    analytics_spo_repo=deps.analytics_spo_repo,
+                    spo_event_repo=deps.spo_event_repo,
+                    file_repo=deps.file_repo,
+                    storage=storage,
+                    tech_regime_repo=deps.tech_regime_repo,
+                    telemetry_repo=deps.telemetry_repo,
+                    repair_brigade_repo=RepairBrigadeRepository(session),
+                    unique_brigade_repo=UniqueBrigadeRepository(session),
+                    cm_brigade_repo=CMBrigadeRepository(cm_session),
+                    cm_brigade_error_screen_repo=CMBrigadeErrorScreenRepository(
+                        cm_session,
+                    ),
+                    por_processor=PORConfirmationProcessor(
+                        build_kpi_por_agent(),
+                        model_name=settings.LLM_MODEL_NAME,
+                    ),
+                    spo_analysis_processor=SPOAnalysisProcessor(
+                        build_kpi_spo_analysis_agent(),
+                        model_name=settings.LLM_MODEL_NAME,
+                    ),
+                )
 
                 async for repairs in self._iter_candidates(session, grace_cutoff):
                     logger.debug("Batch: %s candidate repairs.", len(repairs))
@@ -230,6 +270,7 @@ class FillRepairAnalytics:
                                 doc_fetcher=doc_fetcher,
                                 spo_fetcher=spo_fetcher,
                                 ai_coordinator=ai_coordinator,
+                                kpi_calculator=kpi_calculator,
                                 grace_cutoff=grace_cutoff,
                             )
                             await session.commit()
@@ -262,6 +303,7 @@ class FillRepairAnalytics:
         doc_fetcher: AbaiRepairDocFetcher,
         spo_fetcher: KbrsSPOFetcher | None,
         ai_coordinator: AICoordinator,
+        kpi_calculator: RepairKPICalculator,
         grace_cutoff: datetime,
     ) -> bool:
         logger.info(
@@ -403,6 +445,13 @@ class FillRepairAnalytics:
             usage.input_tokens,
             usage.output_tokens,
             usage.total_tokens,
+        )
+
+        await kpi_calculator.compute_and_store(
+            analytics_id=analytics.id,
+            repair=repair,
+            dynamogram_before_ai=dyn_before_ai,
+            dynamogram_after_ai=dyn_after_ai,
         )
 
         if await self._should_finalize(
@@ -580,11 +629,14 @@ class _Dependencies:
         "dynamogram_ai_repo",
         "dynamogram_repo",
         "file_repo",
+        "kpi_repo",
         "overall_ai_repo",
         "spo_ai_repo",
         "spo_event_repo",
         "spo_repo",
         "summary_repo",
+        "tech_regime_repo",
+        "telemetry_repo",
         "well_repo",
     )
 
@@ -604,6 +656,9 @@ class _Dependencies:
         dynamogram_ai_repo: RepairDynamogramAIResultRepository,
         spo_ai_repo: RepairSPOAIResultRepository,
         overall_ai_repo: RepairAIAnalysisRepository,
+        kpi_repo: RepairKPIRepository,
+        tech_regime_repo: TechRegimeRepository,
+        telemetry_repo: TelemetryRepository,
     ) -> None:
         self.analytics_repo = analytics_repo
         self.analytics_dyn_repo = analytics_dyn_repo
@@ -618,6 +673,9 @@ class _Dependencies:
         self.dynamogram_ai_repo = dynamogram_ai_repo
         self.spo_ai_repo = spo_ai_repo
         self.overall_ai_repo = overall_ai_repo
+        self.kpi_repo = kpi_repo
+        self.tech_regime_repo = tech_regime_repo
+        self.telemetry_repo = telemetry_repo
 
     @classmethod
     def build(cls, session: AsyncSession) -> "_Dependencies":
@@ -635,6 +693,9 @@ class _Dependencies:
             dynamogram_ai_repo=RepairDynamogramAIResultRepository(session),
             spo_ai_repo=RepairSPOAIResultRepository(session),
             overall_ai_repo=RepairAIAnalysisRepository(session),
+            kpi_repo=RepairKPIRepository(session),
+            tech_regime_repo=TechRegimeRepository(session),
+            telemetry_repo=TelemetryRepository(session),
         )
 
 

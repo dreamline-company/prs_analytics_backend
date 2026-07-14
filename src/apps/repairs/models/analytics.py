@@ -162,3 +162,31 @@ class RepairAIAnalysis(
         unique=True,
         nullable=False,
     )
+
+
+class RepairKPI(AppBaseModel, IntPkMixin, TimedMixinModel):
+    """Computed KPI metrics for one repair (KPI ПРС).
+
+    Deterministic aggregation over the analytics collected for the repair
+    (dynamogram/SPO AI results, overall verdict, brigade violations). Values
+    live in a free-form ``metrics`` JSON blob so the KPI formula owner can add
+    or refine metrics without a schema migration — same convention the AI
+    result tables use for ``result``.
+    """
+
+    __tablename__ = "repairs_repair_kpi"
+
+    analytics_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("repairs_repair_analytics.id"),
+        unique=True,
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        server_default=text(f"'{AI_STATUS_PENDING}'"),
+    )
+    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    computed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

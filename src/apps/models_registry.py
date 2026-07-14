@@ -11,6 +11,7 @@ from apps.repairs.models.analytics import (
     RepairAnalyticsDynamogram,
     RepairAnalyticsSPO,
     RepairDynamogramAIResult,
+    RepairKPI,
     RepairSPOAIResult,
 )
 from apps.repairs.models.brigade import RepairBrigade
@@ -43,6 +44,7 @@ __all__ = (
     "RepairBrigade",
     "RepairDoc",
     "RepairDynamogramAIResult",
+    "RepairKPI",
     "RepairSPOAIResult",
     "RepairSummary",
     "RepairType",

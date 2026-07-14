@@ -5,10 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.files.repositories.file import FileRepository
 from apps.repairs.dto.internal.analytics_view import RepairAnalyticsViewDTO
+from apps.repairs.dto.internal.kpi import RepairKPIViewDTO
 from apps.repairs.dto.internal.timeline import RepairTimelineDTO
 from apps.repairs.dto.queries.analytics_view import GetRepairAnalyticsViewQuery
+from apps.repairs.dto.queries.kpi import GetRepairKPIQuery
 from apps.repairs.dto.queries.timeline import GetRepairTimelineQuery
 from apps.repairs.dto.responses.analytics_view import RepairAnalyticsViewResponseDTO
+from apps.repairs.dto.responses.kpi import RepairKPIResponseDTO
 from apps.repairs.dto.responses.timeline import RepairTimelineResponseDTO
 from apps.repairs.repositories.ai_results import (
     RepairAIAnalysisRepository,
@@ -22,11 +25,13 @@ from apps.repairs.repositories.analytics import (
     RepairAnalyticsSPORepository,
 )
 from apps.repairs.repositories.docs import RepairDocRepository
+from apps.repairs.repositories.kpi import RepairKPIRepository
 from apps.repairs.repositories.repair import RepairRepository
 from apps.repairs.repositories.reports import RepairSummaryRepository
 from apps.repairs.use_cases.get_repair_analytics_view import (
     GetRepairAnalyticsViewUseCase,
 )
+from apps.repairs.use_cases.get_repair_kpi import GetRepairKPIUseCase
 from apps.repairs.use_cases.get_repair_timeline import GetRepairTimelineUseCase
 from apps.wells.repositories import WellRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
@@ -97,3 +102,19 @@ async def get_repair_timeline(
     )
     timeline = await use_case.execute(GetRepairTimelineQuery(repair_id=repair_id))
     return RepairTimelineResponseDTO(data=timeline)
+
+
+@router.get(
+    "/by-repair/{repair_id}/kpi",
+    response_model=AppResponse[RepairKPIViewDTO],
+)
+async def get_repair_kpi(
+    app_session: Annotated[AsyncSession, Depends(get_app_session)],
+    repair_id: Annotated[int, Path(ge=1, description="Repair ID")],
+) -> RepairKPIResponseDTO:
+    use_case = GetRepairKPIUseCase(
+        analytics_repository=RepairAnalyticsRepository(session=app_session),
+        kpi_repository=RepairKPIRepository(session=app_session),
+    )
+    kpi = await use_case.execute(GetRepairKPIQuery(repair_id=repair_id))
+    return RepairKPIResponseDTO(data=kpi)
