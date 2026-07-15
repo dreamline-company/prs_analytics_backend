@@ -94,6 +94,45 @@ class DynamogramsPairDTO(BaseModel):
     after: DynamogramWithAIResultDTO | None = None
 
 
+class RepairTransportViewDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    repair_id: int
+
+    request_id: int | None
+    operation_code: str | None
+    operation_number: str | None
+
+    status_id: int | None
+    status_name: str | None
+    closure_status: str | None
+
+    department: str | None
+    position: str | None
+
+    operation_created_at: datetime.datetime | None
+    planned_start_at: datetime.datetime | None
+    planned_end_at: datetime.datetime | None
+    actual_date: datetime.datetime | None
+
+    engine_hours: float | None
+    mileage: float | None
+
+    transport_equipment_number: int | None
+
+    company: str | None
+    division: str | None
+    bpl: str | None
+
+    well_number: str | None
+    work_type: str | None
+
+    vehicle_number: str | None
+    vehicle_class_code: str | None
+    vehicle_class_name: str | None
+
+
 class RepairAnalyticsViewDTO(BaseModel):
     analytics_id: int
     repair_id: int
@@ -104,3 +143,4 @@ class RepairAnalyticsViewDTO(BaseModel):
     spos: list[SPOWithAIResultDTO]
     error_screens: list[BrigadeErrorScreenDTO]
     overall_ai_analysis: OverallAIResultDTO | None = None
+    transports: list[RepairTransportViewDTO] = []

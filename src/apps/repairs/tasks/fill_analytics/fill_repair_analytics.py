@@ -58,6 +58,7 @@ from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.docs import RepairDocRepository
 from apps.repairs.repositories.kpi import RepairKPIRepository
 from apps.repairs.repositories.reports import RepairSummaryRepository
+from apps.repairs.repositories.transport import RepairTransportRepository
 from apps.repairs.tasks.fill_analytics.ai.agent_factory import (
     build_dynamogram_agent,
     build_kpi_por_agent,
@@ -79,6 +80,9 @@ from apps.repairs.tasks.fill_analytics.fetchers.abai_repair_doc_fetcher import (
 )
 from apps.repairs.tasks.fill_analytics.fetchers.kbrs_spo_fetcher import (
     KbrsSPOFetcher,
+)
+from apps.repairs.tasks.fill_analytics.fetchers.uto_transport_fetcher import (
+    UtoTransportFetcher,
 )
 from apps.repairs.tasks.fill_analytics.kpi.por_confirmation_processor import (
     PORConfirmationProcessor,
@@ -112,6 +116,7 @@ from shared.integrations.kbrs.api import (
     ToucanClientPool,
     ToucanCredentialsDto,
 )
+from shared.integrations.uto.api.client import UtoWaybillClient
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -127,6 +132,7 @@ class FillRepairAnalytics:
         self,
         abai_client: AbaiAsyncClient | None = None,
         toucan_pool: ToucanClientPool | None = None,
+        uto_client: UtoWaybillClient | None = None,
         *,
         repair_id: int | None = None,
         well_id: int | None = None,
@@ -136,6 +142,7 @@ class FillRepairAnalytics:
             raise ValueError(msg)
         self._abai_client = abai_client
         self._toucan_pool = toucan_pool
+        self._uto_client = uto_client
         self._repair_id = repair_id
         self._well_id = well_id
 
@@ -163,6 +170,7 @@ class FillRepairAnalytics:
             max_concurrent_downloads=100,
         )
         toucan_pool = self._toucan_pool
+        uto_client = self._uto_client
         storage = AiobotoFileStorage(
             bucket_name=settings.PRS_REPAIRS_BUCKET_NAME,
             client_factory=get_aioboto_client_factory(),
@@ -208,6 +216,15 @@ class FillRepairAnalytics:
                         get_ngdu_for_well=get_ngdu_for_well,
                     )
                     if toucan_pool is not None
+                    else None
+                )
+                transport_fetcher = (
+                    UtoTransportFetcher(
+                        client=uto_client,
+                        summary_repo=deps.summary_repo,
+                        transport_repo=deps.transport_repo,
+                    )
+                    if uto_client is not None
                     else None
                 )
                 ai_coordinator = AICoordinator(
@@ -272,6 +289,7 @@ class FillRepairAnalytics:
                                 dyn_fetcher=dyn_fetcher,
                                 doc_fetcher=doc_fetcher,
                                 spo_fetcher=spo_fetcher,
+                                transport_fetcher=transport_fetcher,
                                 ai_coordinator=ai_coordinator,
                                 kpi_calculator=kpi_calculator,
                                 grace_cutoff=grace_cutoff,
@@ -296,8 +314,10 @@ class FillRepairAnalytics:
             await abai_client.aclose()
             if toucan_pool is not None:
                 await toucan_pool.close()
+            if uto_client is not None:
+                await asyncio.to_thread(uto_client.close)
 
-    async def _process_repair(  # noqa: PLR0913
+    async def _process_repair(  # noqa: PLR0913, PLR0912, C901
         self,
         *,
         repair: Repair,
@@ -305,6 +325,7 @@ class FillRepairAnalytics:
         dyn_fetcher: AbaiDynamogramFetcher,
         doc_fetcher: AbaiRepairDocFetcher,
         spo_fetcher: KbrsSPOFetcher | None,
+        transport_fetcher: UtoTransportFetcher | None,
         ai_coordinator: AICoordinator,
         kpi_calculator: RepairKPICalculator,
         grace_cutoff: datetime,
@@ -409,6 +430,21 @@ class FillRepairAnalytics:
                     spo_id=primary_spo.id,
                     analytics_spo_repo=deps.analytics_spo_repo,
                 )
+
+        if transport_fetcher is not None:
+            transports = await transport_fetcher.fetch_for_repair(repair)
+            logger.info(
+                "Repair id=%s transport rows upserted=%s (ids=%s)",
+                repair.id,
+                len(transports),
+                [t.id for t in transports],
+            )
+        else:
+            logger.warning(
+                "Repair id=%s → transport_fetcher is None "
+                "(uto_client not initialized), skipping transports.",
+                repair.id,
+            )
 
         # AI processing: per-item results feed the overall analysis.
         dyn_before_ai = (
@@ -640,6 +676,7 @@ class _Dependencies:
         "summary_repo",
         "tech_regime_repo",
         "telemetry_repo",
+        "transport_repo",
         "well_repo",
     )
 
@@ -654,6 +691,7 @@ class _Dependencies:
         spo_repo: SPORepository,
         spo_event_repo: SPOEventRepository,
         summary_repo: RepairSummaryRepository,
+        transport_repo: RepairTransportRepository,
         file_repo: FileRepository,
         well_repo: WellRepository,
         dynamogram_ai_repo: RepairDynamogramAIResultRepository,
@@ -671,6 +709,7 @@ class _Dependencies:
         self.spo_repo = spo_repo
         self.spo_event_repo = spo_event_repo
         self.summary_repo = summary_repo
+        self.transport_repo = transport_repo
         self.file_repo = file_repo
         self.well_repo = well_repo
         self.dynamogram_ai_repo = dynamogram_ai_repo
@@ -691,6 +730,7 @@ class _Dependencies:
             spo_repo=SPORepository(session),
             spo_event_repo=SPOEventRepository(session),
             summary_repo=RepairSummaryRepository(session),
+            transport_repo=RepairTransportRepository(session),
             file_repo=FileRepository(session),
             well_repo=WellRepository(session),
             dynamogram_ai_repo=RepairDynamogramAIResultRepository(session),
@@ -724,9 +764,18 @@ async def main(
         ),
     )
 
+    uto_client = UtoWaybillClient(
+        login=settings.UTO_LOGIN,
+        password=settings.UTO_PASS,
+        connect_to=settings.UTO_CONNECT_THROUGH,
+        verify=False,
+    )
+    await asyncio.to_thread(uto_client.login)
+
     await FillRepairAnalytics(
         abai_client=abai_client,
         toucan_pool=toucan_pool,
+        uto_client=uto_client,
         repair_id=repair_id,
         well_id=well_id,
     ).run()

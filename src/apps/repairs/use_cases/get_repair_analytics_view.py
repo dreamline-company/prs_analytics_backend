@@ -14,6 +14,7 @@ from apps.repairs.dto.internal.analytics_view import (
     OverallAIResultDTO,
     OverallAIVerdictDTO,
     RepairAnalyticsViewDTO,
+    RepairTransportViewDTO,
     SPOWithAIResultDTO,
 )
 from apps.repairs.dto.queries.analytics_view import GetRepairAnalyticsViewQuery
@@ -29,6 +30,7 @@ from apps.repairs.repositories.analytics import (
     RepairAnalyticsSPORepository,
 )
 from apps.repairs.repositories.repair import RepairRepository
+from apps.repairs.repositories.transport import RepairTransportRepository
 from apps.wells.repositories import WellRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
@@ -61,6 +63,7 @@ class GetRepairAnalyticsViewUseCase:
         dynamogram_ai_repository: RepairDynamogramAIResultRepository,
         spo_ai_repository: RepairSPOAIResultRepository,
         overall_ai_repository: RepairAIAnalysisRepository,
+        transport_repository: RepairTransportRepository,
         cm_brigade_error_screen_repository: CMBrigadeErrorScreenRepository,
         cm_media_url_header: str,
     ) -> None:
@@ -77,6 +80,7 @@ class GetRepairAnalyticsViewUseCase:
         self.dynamogram_ai_repository = dynamogram_ai_repository
         self.spo_ai_repository = spo_ai_repository
         self.overall_ai_repository = overall_ai_repository
+        self.transport_repository = transport_repository
         self.cm_brigade_error_screen_repository = cm_brigade_error_screen_repository
         self.cm_media_url_header = cm_media_url_header
 
@@ -105,6 +109,7 @@ class GetRepairAnalyticsViewUseCase:
 
         error_screens = await self._build_error_screens(analytics.id)
         overall = await self.overall_ai_repository.get_by_analytics_id(analytics.id)
+        transports = await self._build_transports(repair.id)
 
         return RepairAnalyticsViewDTO(
             analytics_id=analytics.id,
@@ -116,7 +121,15 @@ class GetRepairAnalyticsViewUseCase:
             spos=spos,
             error_screens=error_screens,
             overall_ai_analysis=self._build_overall(overall),
+            transports=transports,
         )
+
+    async def _build_transports(
+        self,
+        repair_id: int,
+    ) -> list[RepairTransportViewDTO]:
+        rows = await self.transport_repository.list_by_repair_id(repair_id)
+        return [RepairTransportViewDTO.model_validate(row) for row in rows]
 
     async def _build_dynamograms(self, analytics_id: int) -> DynamogramsPairDTO:
         link = await self.analytics_dynamogram_repository.get_by_analytics_id(

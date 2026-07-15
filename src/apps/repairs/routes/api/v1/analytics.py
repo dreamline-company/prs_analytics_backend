@@ -28,6 +28,7 @@ from apps.repairs.repositories.docs import RepairDocRepository
 from apps.repairs.repositories.kpi import RepairKPIRepository
 from apps.repairs.repositories.repair import RepairRepository
 from apps.repairs.repositories.reports import RepairSummaryRepository
+from apps.repairs.repositories.transport import RepairTransportRepository
 from apps.repairs.use_cases.get_repair_analytics_view import (
     GetRepairAnalyticsViewUseCase,
 )
@@ -74,6 +75,7 @@ async def get_repair_analytics_view(
         ),
         spo_ai_repository=RepairSPOAIResultRepository(session=app_session),
         overall_ai_repository=RepairAIAnalysisRepository(session=app_session),
+        transport_repository=RepairTransportRepository(session=app_session),
         cm_brigade_error_screen_repository=CMBrigadeErrorScreenRepository(
             session=cm_session,
         ),
