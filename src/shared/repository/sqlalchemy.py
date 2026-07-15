@@ -13,7 +13,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import DeclarativeBase, Load, InstrumentedAttribute
+from sqlalchemy.orm import DeclarativeBase, InstrumentedAttribute, Load
 from sqlalchemy.sql.elements import ColumnElement
 
 from core import get_logger
@@ -468,7 +468,7 @@ class AsyncAlchemyRepository[
             page_size=spec.page_size,
         )
 
-        logger.debug("Built model select query: %s", qs)
+        # logger.debug("Built model select query: %s", qs)
 
         return qs
 
@@ -506,7 +506,7 @@ class AsyncAlchemyRepository[
             page_size=spec.page_size,
         )
 
-        logger.debug("Built projection select query: %s", qs)
+        # logger.debug("Built projection select query: %s", qs)
 
         return qs
 

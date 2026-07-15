@@ -9,7 +9,7 @@ AVAILABLE_DB = Literal[
     "app",
     "abai",
     "cm",
-    "zhylyoi_telemetry",
+    "zhylmg_telemetry",
     "kainar_telemetry",
     "zhmg_telemetry",
     "dmg_telemetry",
@@ -24,6 +24,14 @@ engines: dict[AVAILABLE_DB, AsyncEngine] = {
     ),
     "kainar_telemetry": create_async_engine(
         url=settings.KAINAR_TELEMETRY_ASYNC_DATABASE_URL,
+        echo=is_echo,
+    ),
+    "zhmg_telemetry": create_async_engine(
+        url=settings.ZHMG_TELEMETRY_ASYNC_DATABASE_URL,
+        echo=is_echo,
+    ),
+    "zhylmg_telemetry": create_async_engine(
+        url=settings.ZHYLMG_TELEMETRY_ASYNC_DATABASE_URL,
         echo=is_echo,
     ),
     "app": create_async_engine(

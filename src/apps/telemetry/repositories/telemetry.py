@@ -62,10 +62,10 @@ class TelemetryRepository(
     async def delete_by_id(self, telemetry_id: int) -> None:
         await self.delete(filters=(Telemetry.id == telemetry_id,))
 
-    async def get_last_by_ngdu_id(self, ngdu_id: int) -> Telemetry | None:
+    async def get_last_by_ngdu_id(self, abai_ngdu_id: int) -> Telemetry | None:
         tms = await self.get_list(
             QuerySpec(
-                filters=(Telemetry.ngdu_id == ngdu_id,),
+                filters=(Telemetry.abai_ngdu_id == abai_ngdu_id,),
                 order_by=(Telemetry.date_time.desc(),),
                 limit=1,
             ),

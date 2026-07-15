@@ -11,7 +11,7 @@ class TelemetryDTO(BaseModel):
     date_time: datetime
     qv_liquid: float | None
     qm_oil: float | None
-    ngdu_id: int
+    abai_ngdu_id: int
     oil_field: str | None
     gzu: str | None
     otvod: int | None

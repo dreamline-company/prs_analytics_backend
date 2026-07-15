@@ -63,7 +63,10 @@ class ABAILoadTechRegime:
                         )
 
                     await app_session.commit()
-                    logger.info("Loaded tech regimes. Loaded items count: %s", regimes)
+                    logger.info(
+                        "Loaded tech regimes. Loaded items count: %s",
+                        len(regimes),
+                    )
 
                 except Exception:
                     logger.exception("Error while loading tech regimes")
