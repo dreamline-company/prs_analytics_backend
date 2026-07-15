@@ -60,6 +60,18 @@ class Settings(CoreSettings):
     DMG_USER: str
     DMG_PASSWORD: str
 
+    ZHMG_HOST: str
+    ZHMG_PORT: int
+    ZHMG_DATABASE: str
+    ZHMG_USER: str
+    ZHMG_PASSWORD: str
+
+    ZHYLMG_HOST: str
+    ZHYLMG_PORT: int
+    ZHYLMG_DATABASE: str
+    ZHYLMG_USER: str
+    ZHYLMG_PASSWORD: str
+
     @classmethod
     def _get_odbc_url(  # noqa: PLR0913
         cls,
@@ -100,6 +112,28 @@ class Settings(CoreSettings):
             self.KAINAR_USER,
             self.KAINAR_PASSWORD,
             self.KAINAR_DATABASE,
+        )
+
+    @property
+    def ZHMG_TELEMETRY_ASYNC_DATABASE_URL(self) -> str:  # noqa: N802
+        return self._get_odbc_url(
+            self.ODBC_DRIVER,
+            self.ZHMG_HOST,
+            self.ZHMG_PORT,
+            self.ZHMG_USER,
+            self.ZHMG_PASSWORD,
+            self.ZHMG_DATABASE,
+        )
+
+    @property
+    def ZHYLMG_TELEMETRY_ASYNC_DATABASE_URL(self) -> str:  # noqa: N802
+        return self._get_odbc_url(
+            self.ODBC_DRIVER,
+            self.ZHYLMG_HOST,
+            self.ZHYLMG_PORT,
+            self.ZHYLMG_USER,
+            self.ZHYLMG_PASSWORD,
+            self.ZHYLMG_DATABASE,
         )
 
     # ABAI WEB CLIENT

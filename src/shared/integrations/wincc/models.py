@@ -35,3 +35,11 @@ class KainarWinccTelemetry(NGDUWinccTelemetryModel):
 
 class DMGWinccTelemetry(NGDUWinccTelemetryModel):
     __tablename__ = "DMG_CITSS_TM"
+
+
+class ZHMGWinccTelemetry(NGDUWinccTelemetryModel):
+    __tablename__ = "ZHMG_CITS_TM"
+
+
+class ZHYLMGWinccTelemetry(NGDUWinccTelemetryModel):
+    __tablename__ = "ZHYLMG-CITS-TM"
