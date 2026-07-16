@@ -65,15 +65,41 @@ class DynamogramWithAIResultDTO(BaseModel):
     ai_result: AIResultDTO | None = None
 
 
+class SPOPassportDTO(BaseModel):
+    """Mirrors ``shared.integrations.kbrs.api.dtos.MeasurementPassportDto``.
+
+    Populated from the SPO ``passport.json`` sidecar in S3.
+    """
+
+    device_id: int | None = None
+    device_version: str | None = None
+    organization: str | None = None
+    workshop: int | None = None
+    brigade: int | None = None
+    spu: int | None = None
+    field_id: int | None = None
+    bush: int | None = None
+    well: int | None = None
+    max_hook_weight_t: float | None = None
+    tackle_block_ratio: int | None = None
+    tare_weight_t: float | None = None
+    values: dict[str, Any] = {}
+
+
 class SPOWithAIResultDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     file_id: int
     chart_file_id: int | None
+    chart_json_file_id: int | None
     notes_file_id: int | None
+    passport_file_id: int | None
     snapshot_time: datetime.datetime
+    start_time: datetime.datetime | None = None
+    end_time: datetime.datetime | None = None
     well_id: int
+    passport: SPOPassportDTO | None = None
     ai_result: AIResultDTO | None = None
 
 

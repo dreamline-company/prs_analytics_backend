@@ -38,7 +38,12 @@ from apps.wells.repositories import WellRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
 from core.settings import get_settings
-from shared.dependencies.db import get_app_session, get_cm_session
+from shared.database.s3.storage import AiobotoFileStorage
+from shared.dependencies.db import (
+    get_aioboto_client_factory,
+    get_app_session,
+    get_cm_session,
+)
 from shared.dto.api import AppResponse
 from shared.integrations.cm.repositories.brigade_error_screens import (
     CMBrigadeErrorScreenRepository,
@@ -76,6 +81,11 @@ async def get_repair_analytics_view(
         spo_ai_repository=RepairSPOAIResultRepository(session=app_session),
         overall_ai_repository=RepairAIAnalysisRepository(session=app_session),
         transport_repository=RepairTransportRepository(session=app_session),
+        file_repository=FileRepository(session=app_session),
+        storage=AiobotoFileStorage(
+            bucket_name=settings.PRS_REPAIRS_BUCKET_NAME,
+            client_factory=get_aioboto_client_factory(),
+        ),
         cm_brigade_error_screen_repository=CMBrigadeErrorScreenRepository(
             session=cm_session,
         ),

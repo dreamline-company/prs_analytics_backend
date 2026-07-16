@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from .constants import DEFAULT_VERSION
 from .enums import (
@@ -86,11 +86,11 @@ class RawDatasetDto:
 
 @dataclass(frozen=True, slots=True)
 class WorkTypeDto:
-    work_type_id: Optional[int]
+    work_type_id: int | None
     name: str
-    short_name: Optional[str] = None
-    description: Optional[str] = None
-    offset: Optional[int] = None
+    short_name: str | None = None
+    description: str | None = None
+    offset: int | None = None
     raw_ints: list[int] = field(default_factory=list)
     raw_strings: list[str] = field(default_factory=list)
 
@@ -106,20 +106,20 @@ class DirectoryDto:
 @dataclass(frozen=True, slots=True)
 class DeviceSearchFilterDto:
     query: str = ""
-    owner_id: Optional[int] = None
-    device_id: Optional[str] = None
+    owner_id: int | None = None
+    device_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class MeasureListFilterDto:
-    owner_id: Optional[int] = None
-    device_id: Optional[str] = None
-    list_condition: Optional[str] = None
+    owner_id: int | None = None
+    device_id: str | None = None
+    list_condition: str | None = None
     tree_group_type: TreeGroupType = TreeGroupType.DEVICES
     condition_date: MeasureDateCondition = MeasureDateCondition.MONTH
     condition_type: MeasureConditionType = MeasureConditionType.ACTUAL
-    date_from: Optional[dt.datetime] = None
-    date_to: Optional[dt.datetime] = None
+    date_from: dt.datetime | None = None
+    date_to: dt.datetime | None = None
     search_text: str = ""
     sort_by_measure_id: bool = False
     list_only: bool = True
@@ -137,7 +137,7 @@ class MeasureListFilterDto:
         device_id: int | str,
         day: dt.date,
         page_count: int = 50,
-    ) -> "MeasureListFilterDto":
+    ) -> MeasureListFilterDto:
         return cls(
             owner_id=owner_id,
             device_id=str(device_id),
@@ -183,20 +183,20 @@ class MeasurementRecordDto:
     datetime: dt.datetime
     channel: int
     raw: int
-    value: Optional[float] = None
-    name: Optional[str] = None
+    value: float | None = None
+    name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class MeasurementRowDto:
     timestamp: int
     datetime: dt.datetime
-    hook_weight_t: Optional[float] = None
-    h2s_mg_m3: Optional[float] = None
-    ch4_percent: Optional[float] = None
-    hook_weight_t_raw: Optional[int] = None
-    h2s_mg_m3_raw: Optional[int] = None
-    ch4_percent_raw: Optional[int] = None
+    hook_weight_t: float | None = None
+    h2s_mg_m3: float | None = None
+    ch4_percent: float | None = None
+    hook_weight_t_raw: int | None = None
+    h2s_mg_m3_raw: int | None = None
+    ch4_percent_raw: int | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -206,8 +206,8 @@ class MeasurementParsedDto:
     sample_offset: int
     records_count: int
     channels: list[int]
-    start: Optional[dt.datetime]
-    end: Optional[dt.datetime]
+    start: dt.datetime | None
+    end: dt.datetime | None
     raw_records: list[MeasurementRecordDto]
     rows: list[MeasurementRowDto]
     header_ascii_hint: str = ""
@@ -216,26 +216,66 @@ class MeasurementParsedDto:
 @dataclass(frozen=True, slots=True)
 class MeasurementEventDto:
     offset: int
-    time_text: Optional[str]
-    code: Optional[int]
+    time_text: str | None
+    code: int | None
     text: str
     raw_text: str
 
 
 @dataclass(frozen=True, slots=True)
 class MeasurementPassportDto:
-    device_id: Optional[int] = None
-    device_version: Optional[str] = None
-    organization: Optional[str] = None
-    workshop: Optional[int] = None
-    brigade: Optional[int] = None
-    spu: Optional[int] = None
-    field_id: Optional[int] = None
-    bush: Optional[int] = None
-    well: Optional[int] = None
-    max_hook_weight_t: Optional[float] = None
-    tackle_block_ratio: Optional[int] = None
-    tare_weight_t: Optional[float] = None
+    # № прибора / DEVICEID.
+    # В системе отображается как: "Прибор: ДЭЛ150 №11292".
+    device_id: int | None = None
+
+    # Версия прибора.
+    # В системе отображается рядом с прибором: "v11.29", "v12.32".
+    device_version: str | None = None
+
+    # Организация / НГДУ.
+    # Например: "НГДУ Жайыкмунайгаз", "НГДУ Жылыоймунайгаз".
+    # Обычно берётся не из measure.bin, а из OWNERID через OwnersDataset.
+    organization: str | None = None
+
+    # Цех.
+    # В системе отображается как: "Цех: 2".
+    workshop: int | None = None
+
+    # Бригада.
+    # В системе отображается как: "Бригада: 2".
+    brigade: int | None = None
+
+    # СПУ.
+    # В системе отображается как: "СПУ: 0" или строковое значение типа "eEEe1".
+    # Лучше хранить как str, потому что значение не всегда числовое.
+    spu: str | None = None
+
+    # Месторождение.
+    # В системе отображается как: "Месторожд.: 5".
+    field_id: int | None = None
+
+    # Куст.
+    # В системе отображается как: "Куст: 2".
+    bush: int | None = None
+
+    # Скважина.
+    # В системе отображается как: "Скважина: 332".
+    well: int | None = None
+
+    # Максимальная нагрузка на крюк, тс.
+    # В системе отображается как: "Макс.нагрузка на крюк: 40,000 тс".
+    max_hook_weight_t: float | None = None
+
+    # Передаточное число талевого блока.
+    # В системе отображается как: "Перед.число талевого блока: 6".
+    tackle_block_ratio: int | None = None
+
+    # Вес талевой системы, тс.
+    # В системе отображается как: "Вес талевой системы: 0,816 тс".
+    tare_weight_t: float | None = None
+
+    # Дополнительные/служебные значения, которые пока не замаплены в отдельные поля.
+    # Пользователю обычно не показываем, но сохраняем для диагностики и будущего расширения парсера.
     values: dict[str, Any] = field(default_factory=dict)
 
 
@@ -243,7 +283,7 @@ class MeasurementPassportDto:
 class MeasurementDetailsDto:
     magic: str
     raw_size: int
-    sample_offset: Optional[int]
+    sample_offset: int | None
     passport: MeasurementPassportDto
     events: list[MeasurementEventDto] = field(default_factory=list)
     strings: list[ExtractedStringDto] = field(default_factory=list)
@@ -263,6 +303,6 @@ class ExportMeasurementResultDto:
     csv_path: str
     records_count: int
     row_count: int
-    start: Optional[dt.datetime]
-    end: Optional[dt.datetime]
+    start: dt.datetime | None
+    end: dt.datetime | None
     channels: list[int]

@@ -18,7 +18,17 @@ class SPO(AppBaseModel, IntPkMixin):
         ForeignKey("files_file.id"),
         nullable=True,
     )
+    chart_json_file_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("files_file.id"),
+        nullable=True,
+    )
     notes_file_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("files_file.id"),
+        nullable=True,
+    )
+    passport_file_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("files_file.id"),
         nullable=True,

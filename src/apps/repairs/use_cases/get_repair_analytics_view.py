@@ -4,8 +4,12 @@ Aggregates data from the app DB (analytics, dynamograms, SPOs, AI results)
 and the CM DB (brigade error screens referenced by ``cm_screen_id``).
 """
 
+import json
+from datetime import datetime
+
 from starlette import status
 
+from apps.files.repositories.file import FileRepository
 from apps.repairs.dto.internal.analytics_view import (
     AIResultDTO,
     BrigadeErrorScreenDTO,
@@ -15,6 +19,7 @@ from apps.repairs.dto.internal.analytics_view import (
     OverallAIVerdictDTO,
     RepairAnalyticsViewDTO,
     RepairTransportViewDTO,
+    SPOPassportDTO,
     SPOWithAIResultDTO,
 )
 from apps.repairs.dto.queries.analytics_view import GetRepairAnalyticsViewQuery
@@ -34,10 +39,14 @@ from apps.repairs.repositories.transport import RepairTransportRepository
 from apps.wells.repositories import WellRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
+from core import get_logger
+from shared.database.s3.storage import AiobotoFileStorage
 from shared.errors import HttpError
 from shared.integrations.cm.repositories.brigade_error_screens import (
     CMBrigadeErrorScreenRepository,
 )
+
+logger = get_logger(__name__)
 
 
 class RepairAnalyticsNotFoundError(HttpError):
@@ -64,6 +73,8 @@ class GetRepairAnalyticsViewUseCase:
         spo_ai_repository: RepairSPOAIResultRepository,
         overall_ai_repository: RepairAIAnalysisRepository,
         transport_repository: RepairTransportRepository,
+        file_repository: FileRepository,
+        storage: AiobotoFileStorage,
         cm_brigade_error_screen_repository: CMBrigadeErrorScreenRepository,
         cm_media_url_header: str,
     ) -> None:
@@ -81,6 +92,8 @@ class GetRepairAnalyticsViewUseCase:
         self.spo_ai_repository = spo_ai_repository
         self.overall_ai_repository = overall_ai_repository
         self.transport_repository = transport_repository
+        self.file_repository = file_repository
+        self.storage = storage
         self.cm_brigade_error_screen_repository = cm_brigade_error_screen_repository
         self.cm_media_url_header = cm_media_url_header
 
@@ -171,10 +184,74 @@ class GetRepairAnalyticsViewUseCase:
         if spo is None:
             return []
         dto = SPOWithAIResultDTO.model_validate(spo)
+        start_time, end_time = await self._load_spo_times(spo.notes_file_id)
+        dto.start_time = start_time
+        dto.end_time = end_time
+        dto.passport = await self._load_spo_passport(spo.passport_file_id)
         ai_results = await self.spo_ai_repository.list_by_spo_ids([spo.id])
         if ai_results:
             dto.ai_result = AIResultDTO.model_validate(ai_results[0])
         return [dto]
+
+    async def _load_spo_times(
+        self,
+        notes_file_id: int | None,
+    ) -> tuple[datetime | None, datetime | None]:
+        """Read start/end from the SPO notes.json in S3."""
+
+        data = await self._load_json_file(notes_file_id, "notes")
+        if data is None:
+            return None, None
+        return _parse_iso(data.get("start")), _parse_iso(data.get("end"))
+
+    async def _load_spo_passport(
+        self,
+        passport_file_id: int | None,
+    ) -> SPOPassportDTO | None:
+        """Read passport JSON from S3 and coerce into a typed DTO."""
+
+        data = await self._load_json_file(passport_file_id, "passport")
+        if data is None:
+            return None
+        try:
+            return SPOPassportDTO.model_validate(data)
+        except ValueError:
+            logger.exception(
+                "SPO passport file id=%s does not match expected shape; skipping.",
+                passport_file_id,
+            )
+            return None
+
+    async def _load_json_file(
+        self,
+        file_id: int | None,
+        kind: str,
+    ) -> dict | None:
+        """Download and parse a JSON side-artifact by File.id.
+
+        Returns ``None`` on any failure (missing row, S3 miss, malformed
+        JSON, decode error). The view should never fail because of a stale
+        or missing side-artifact.
+        """
+
+        if file_id is None:
+            return None
+        try:
+            file_row = await self.file_repository.get_by_id(file_id)
+            if file_row is None or not file_row.file:
+                return None
+            payload = await self.storage.download_file(file_row.file)
+            data = json.loads(payload.getvalue().decode("utf-8"))
+        except Exception:
+            logger.exception(
+                "Failed to read SPO %s file id=%s; skipping.",
+                kind,
+                file_id,
+            )
+            return None
+        if not isinstance(data, dict):
+            return None
+        return data
 
     @staticmethod
     def _build_overall(overall) -> OverallAIResultDTO | None:  # noqa: ANN001
@@ -225,3 +302,12 @@ class GetRepairAnalyticsViewUseCase:
         if not screen:
             return None
         return f"{self.cm_media_url_header.rstrip('/')}/{screen.lstrip('/')}"
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None

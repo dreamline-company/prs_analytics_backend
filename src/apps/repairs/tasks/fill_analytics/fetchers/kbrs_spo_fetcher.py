@@ -27,6 +27,7 @@ import asyncio
 import json
 import re
 from collections.abc import Sequence
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from io import BytesIO
 
@@ -49,6 +50,7 @@ from shared.integrations.kbrs.api.dtos import (
     LoadMeasurementRequestDto,
     MeasureListFilterDto,
     MeasurementFullDto,
+    MeasurementPassportDto,
     MeasureRowDto,
 )
 from shared.integrations.kbrs.api.enums import MeasureDateCondition
@@ -346,12 +348,20 @@ class KbrsSPOFetcher:
             well_id=well_id,
             snapshot_time=snapshot_time,
         )
-        if existing is not None and existing.chart_file_id and existing.notes_file_id:
+        if (
+            existing is not None
+            and existing.chart_file_id
+            and existing.chart_json_file_id
+            and existing.notes_file_id
+            and existing.passport_file_id
+        ):
             await self._persist_events(existing.id, events)
             return existing
 
         csv_bytes = self._render_csv(parsed)
+        chart_json_bytes = self._render_chart_json(parsed)
         notes_bytes = self._render_notes(parsed)
+        passport_bytes = self._render_passport(full.details.passport)
 
         prefix = f"spo/{well_id}/{measure.measure_id}"
         master_file = await self._upload_and_register(
@@ -362,9 +372,17 @@ class KbrsSPOFetcher:
             payload=csv_bytes,
             s3_key=f"{prefix}/chart.csv",
         )
+        chart_json_file = await self._upload_and_register(
+            payload=chart_json_bytes,
+            s3_key=f"{prefix}/chart.json",
+        )
         notes_file = await self._upload_and_register(
             payload=notes_bytes,
             s3_key=f"{prefix}/notes.json",
+        )
+        passport_file = await self._upload_and_register(
+            payload=passport_bytes,
+            s3_key=f"{prefix}/passport.json",
         )
 
         if master_file is None:
@@ -375,7 +393,9 @@ class KbrsSPOFetcher:
                 CreateSPODTO(
                     file_id=master_file.id,
                     chart_file_id=chart_file.id if chart_file else None,
+                    chart_json_file_id=chart_json_file.id if chart_json_file else None,
                     notes_file_id=notes_file.id if notes_file else None,
+                    passport_file_id=passport_file.id if passport_file else None,
                     snapshot_time=snapshot_time,
                     well_id=well_id,
                 ),
@@ -385,7 +405,9 @@ class KbrsSPOFetcher:
                 data=UpdateSPODTO(
                     file_id=master_file.id,
                     chart_file_id=chart_file.id if chart_file else None,
+                    chart_json_file_id=chart_json_file.id if chart_json_file else None,
                     notes_file_id=notes_file.id if notes_file else None,
+                    passport_file_id=passport_file.id if passport_file else None,
                 ),
                 filters=(SPO.id == existing.id,),
             )
@@ -433,6 +455,37 @@ class KbrsSPOFetcher:
         return "".join(lines).encode("utf-8")
 
     @staticmethod
+    def _render_chart_json(parsed) -> bytes:  # noqa: ANN001
+        # Compact time-series shape for chart libs (ECharts / Highcharts /
+        # Chart.js all accept ``[[timestamp_ms, value], ...]`` natively).
+        # ``timestamp`` from the measurement is already unix seconds in UTC —
+        # multiplied by 1000 for milliseconds. ``value`` is left as ``null``
+        # for missing samples so gaps in one channel don't align others.
+        series_specs = (
+            ("hook_weight_t", "т"),
+            ("h2s_mg_m3", "мг/м³"),
+            ("ch4_percent", "%"),
+        )
+        series = [
+            {
+                "key": key,
+                "unit": unit,
+                "points": [
+                    [row.timestamp * 1000, getattr(row, key)]
+                    for row in parsed.rows
+                ],
+            }
+            for key, unit in series_specs
+        ]
+        payload = {
+            "start": parsed.start.isoformat() if parsed.start else None,
+            "end": parsed.end.isoformat() if parsed.end else None,
+            "row_count": len(parsed.rows),
+            "series": series,
+        }
+        return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    @staticmethod
     def _render_notes(parsed) -> bytes:  # noqa: ANN001
         meta = {
             "magic": parsed.magic,
@@ -444,6 +497,17 @@ class KbrsSPOFetcher:
             "header_hint": parsed.header_ascii_hint,
         }
         return json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8")
+
+    @staticmethod
+    def _render_passport(passport: MeasurementPassportDto) -> bytes:
+        # ``values`` may contain datetimes and other non-JSON types injected by
+        # the details parser — ``default=str`` renders them safely.
+        return json.dumps(
+            asdict(passport),
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ).encode("utf-8")
 
     async def _upload_and_register(
         self,
