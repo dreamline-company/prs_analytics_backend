@@ -25,6 +25,7 @@ class BrigadeDTO(BaseModel):
     device: str | None = None
     violations_count: int = 0
     is_in_repair: bool = False
+    repair_id: int | None = None
 
 
 class FrequentRepairBrigadeDTO(BaseModel):

@@ -80,13 +80,19 @@ class GetWellsMatrixUseCase:
         active_repairs = await self.repair_repository.list_active_by_well_abai_ids(
             [w.abai_id for w in wells],
         )
-        on_repair = {r.abai_well_id for r in active_repairs}
+        # ``list_active_by_well_abai_ids`` orders by ``start_time DESC`` so the
+        # first repair per well is the most recent active one — if there are
+        # ever duplicates, the latter (older) entry gets overwritten.
+        repair_id_by_abai_well: dict[int, int] = {}
+        for r in active_repairs:
+            repair_id_by_abai_well.setdefault(r.abai_well_id, r.id)
 
         return [
             WellMatrixItemDTO(
                 id=w.id,
                 name=w.name,
-                is_on_repair=w.abai_id in on_repair,
+                is_on_repair=w.abai_id in repair_id_by_abai_well,
+                repair_id=repair_id_by_abai_well.get(w.abai_id),
             )
             for w in sorted(wells, key=lambda w: w.name)
         ]

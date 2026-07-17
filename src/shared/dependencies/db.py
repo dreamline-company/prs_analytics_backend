@@ -32,7 +32,12 @@ async def get_abai_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-def get_aioboto_client_factory() -> Callable[[], AsyncContextManager[AiobotoClient]]:
+def get_aioboto_client_factory(
+    *,
+    endpoint_url: str | None = None,
+) -> Callable[[], AsyncContextManager[AiobotoClient]]:
+    endpoint = endpoint_url or settings.S3_ENDPOINT_URL
+
     def factory() -> "AsyncContextManager[AiobotoClient]":
         session = aioboto3.Session()
         return cast(
@@ -41,7 +46,7 @@ def get_aioboto_client_factory() -> Callable[[], AsyncContextManager[AiobotoClie
                 "s3",
                 aws_access_key_id=settings.S3_ACCESS_KEY,
                 aws_secret_access_key=settings.S3_SECRET_KEY,
-                endpoint_url=settings.S3_ENDPOINT_URL,
+                endpoint_url=endpoint,
                 config=Config(
                     signature_version="s3v4",
                     request_checksum_calculation="when_required",
@@ -51,3 +56,15 @@ def get_aioboto_client_factory() -> Callable[[], AsyncContextManager[AiobotoClie
         )
 
     return factory
+
+
+def get_aioboto_presign_client_factory() -> (
+    Callable[[], AsyncContextManager[AiobotoClient]]
+):
+    # Presigned URLs are frontend-facing. Signature is bound to the endpoint
+    # host, so we build a dedicated client against ``S3_PUBLIC_URL`` when it's
+    # configured — otherwise falls back to the internal endpoint so nothing
+    # breaks in single-host setups.
+    return get_aioboto_client_factory(
+        endpoint_url=settings.S3_PUBLIC_URL,
+    )

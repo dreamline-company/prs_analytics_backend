@@ -13,3 +13,4 @@ class WellMatrixItemDTO(BaseModel):
     id: int
     name: str
     is_on_repair: bool
+    repair_id: int | None = None

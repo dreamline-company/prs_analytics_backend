@@ -10,7 +10,11 @@ from apps.files.services.file import FileService
 from apps.files.use_cases.get_file_by_id import GetFileByIdUseCase
 from core.settings import get_settings
 from shared.database.s3.storage import AiobotoFileStorage
-from shared.dependencies.db import get_aioboto_client_factory, get_app_session
+from shared.dependencies.db import (
+    get_aioboto_client_factory,
+    get_aioboto_presign_client_factory,
+    get_app_session,
+)
 from shared.dto.api import AppResponse
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -36,6 +40,7 @@ async def get_file_by_id(
     storage = AiobotoFileStorage(
         bucket_name=settings.PRS_REPAIRS_BUCKET_NAME,
         client_factory=get_aioboto_client_factory(),
+        presign_client_factory=get_aioboto_presign_client_factory(),
     )
     file_service = FileService(session=session, storage=storage)
     use_case = GetFileByIdUseCase(file_service=file_service)

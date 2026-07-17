@@ -52,11 +52,15 @@ class ListBrigadesByNGDUIdUseCase:
             return []
 
         brigade_repairs = await self._load_brigade_repairs(brigades)
-        in_repair_ids = {
-            bid
-            for bid, repairs in brigade_repairs.items()
-            if any(r.end_time is None for r in repairs)
-        }
+        # Pick the most recently started open repair per brigade. If somehow
+        # more than one exists concurrently, the latest start wins.
+        active_repair_id_by_brigade: dict[int, int] = {}
+        for bid, repairs in brigade_repairs.items():
+            active = [r for r in repairs if r.end_time is None]
+            if not active:
+                continue
+            active.sort(key=lambda r: r.start_time, reverse=True)
+            active_repair_id_by_brigade[bid] = active[0].id
         violations_by_brigade = await self._count_violations(
             brigades,
             brigade_repairs,
@@ -65,7 +69,9 @@ class ListBrigadesByNGDUIdUseCase:
         result: list[BrigadeDTO] = []
         for brigade in brigades:
             dto = BrigadeDTO.model_validate(brigade)
-            dto.is_in_repair = brigade.id in in_repair_ids
+            repair_id = active_repair_id_by_brigade.get(brigade.id)
+            dto.is_in_repair = repair_id is not None
+            dto.repair_id = repair_id
             dto.violations_count = violations_by_brigade.get(brigade.id, 0)
             result.append(dto)
         return result

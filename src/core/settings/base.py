@@ -157,6 +157,11 @@ class Settings(CoreSettings):
     S3_ACCESS_KEY: str
     S3_SECRET_KEY: str
     S3_ENDPOINT_URL: str
+    # Host used to sign download URLs handed to the frontend. When set, the
+    # backend still talks to the internal ``S3_ENDPOINT_URL`` for uploads and
+    # reads, but presigned URLs point here (typically a reverse-proxied MinIO
+    # exposed to the browser). Leave empty to hand out the internal URL.
+    S3_PUBLIC_URL: str | None = None
 
     DYNAMOGRAM_BUCKET_NAME: str = "PRS-DYNAMOGRAM-BUCKET"
     SPO_BUCKET_NAME: str = "PRS-DYNAMOGRAM-BUCKET"  # спуско подъемные операции

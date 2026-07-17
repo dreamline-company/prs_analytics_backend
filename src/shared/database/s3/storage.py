@@ -25,6 +25,12 @@ class FileUploadError(S3Error): ...
 class AiobotoFileStorage:
     bucket_name: str
     client_factory: Callable[[], AbstractAsyncContextManager[AiobotoClient]]
+    # Optional separate client used only for ``generate_presigned_url`` so the
+    # signed URL points at a public host while server-side ops stay on the
+    # internal endpoint. When ``None``, presigning reuses ``client_factory``.
+    presign_client_factory: (
+        Callable[[], AbstractAsyncContextManager[AiobotoClient]] | None
+    ) = None
 
     async def download_file(self, file_path: str) -> BytesIO:
         file = BytesIO()
@@ -107,7 +113,8 @@ class AiobotoFileStorage:
         client is configured with, so this is exactly the domain URL the
         frontend needs.
         """
-        async with self.client_factory() as client:
+        factory = self.presign_client_factory or self.client_factory
+        async with factory() as client:
             return await client.generate_presigned_url(
                 ClientMethod="get_object",
                 Params={"Bucket": self.bucket_name, "Key": file_path},
