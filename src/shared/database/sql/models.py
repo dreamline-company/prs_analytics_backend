@@ -81,3 +81,10 @@ class CMBaseModel(DeclarativeBase):
     """An abstract base model for CM DB tables."""
 
     __abstract__ = True
+
+
+class SDMOBaseModel(DeclarativeBase):
+    """An abstract base model for SDMO DB tables."""
+
+    __table_args__ = {"schema": "sdmo"}
+    __abstract__ = True
