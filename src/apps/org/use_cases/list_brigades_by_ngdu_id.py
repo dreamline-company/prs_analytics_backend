@@ -10,7 +10,13 @@ from collections import defaultdict
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from apps.org.dto.internal.brigade import BrigadeDTO
+from apps.org.dto.internal.brigade import (
+    BrigadeDangerDTO,
+    BrigadeDTO,
+    BrigadeLegendDTO,
+)
+from apps.repairs.dto.internal.repair import RepairDTO
+from apps.wells.dto.internal.well import WellShortDTO
 
 if TYPE_CHECKING:
     from apps.org.dto.queries.brigade import ListBrigadesByNGDUIdQuery
@@ -19,27 +25,34 @@ if TYPE_CHECKING:
     from apps.repairs.models.repair import Repair
     from apps.repairs.repositories.brigade import RepairBrigadeRepository
     from apps.repairs.repositories.repair import RepairRepository
+    from apps.wells.models.well import Well
+    from apps.wells.repositories import WellRepository
+    from shared.integrations.cm.models import BrigadeErrorScreen
     from shared.integrations.cm.repositories.brigade_error_screens import (
         CMBrigadeErrorScreenRepository,
     )
     from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
 
+DANGER_TYPE_VIOLATION = "violation"
+
 _BRIGADE_NUMBER_RE = re.compile(r"№\s*(\d+)")
 
 
 class ListBrigadesByNGDUIdUseCase:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         unique_brigade_repository: UniqueBrigadeRepository,
         repair_brigade_repository: RepairBrigadeRepository,
         repair_repository: RepairRepository,
+        well_repository: WellRepository,
         cm_brigade_repository: CMBrigadeRepository,
         cm_brigade_error_screen_repository: CMBrigadeErrorScreenRepository,
     ) -> None:
         self.unique_brigade_repository = unique_brigade_repository
         self.repair_brigade_repository = repair_brigade_repository
         self.repair_repository = repair_repository
+        self.well_repository = well_repository
         self.cm_brigade_repository = cm_brigade_repository
         self.cm_brigade_error_screen_repository = cm_brigade_error_screen_repository
 
@@ -54,25 +67,52 @@ class ListBrigadesByNGDUIdUseCase:
         brigade_repairs = await self._load_brigade_repairs(brigades)
         # Pick the most recently started open repair per brigade. If somehow
         # more than one exists concurrently, the latest start wins.
-        active_repair_id_by_brigade: dict[int, int] = {}
+        active_repair_by_brigade: dict[int, Repair] = {}
         for bid, repairs in brigade_repairs.items():
             active = [r for r in repairs if r.end_time is None]
             if not active:
                 continue
             active.sort(key=lambda r: r.start_time, reverse=True)
-            active_repair_id_by_brigade[bid] = active[0].id
-        violations_by_brigade = await self._count_violations(
-            brigades,
-            brigade_repairs,
+            active_repair_by_brigade[bid] = active[0]
+        violations_by_brigade, active_dangers_by_brigade = (
+            await self._compute_violations(
+                brigades,
+                brigade_repairs,
+                active_repair_by_brigade,
+            )
+        )
+        wells_by_repair_id = await self._load_wells_for_active_repairs(
+            active_repair_by_brigade,
         )
 
         result: list[BrigadeDTO] = []
         for brigade in brigades:
             dto = BrigadeDTO.model_validate(brigade)
-            repair_id = active_repair_id_by_brigade.get(brigade.id)
-            dto.is_in_repair = repair_id is not None
-            dto.repair_id = repair_id
+            active_repair = active_repair_by_brigade.get(brigade.id)
+            dto.is_in_repair = active_repair is not None
+            dto.repair_id = active_repair.id if active_repair is not None else None
             dto.violations_count = violations_by_brigade.get(brigade.id, 0)
+            if active_repair is not None:
+                well = wells_by_repair_id.get(active_repair.id)
+                if well is not None:
+                    screens = active_dangers_by_brigade.get(brigade.id, [])
+                    dangers = [
+                        BrigadeDangerDTO(
+                            type=DANGER_TYPE_VIOLATION,
+                            time=s.timestamp,
+                            description=s.description or "",
+                        )
+                        for s in sorted(
+                            screens,
+                            key=lambda s: s.timestamp,
+                            reverse=True,
+                        )
+                    ]
+                    dto.legend = BrigadeLegendDTO(
+                        well=WellShortDTO.model_validate(well),
+                        repair=RepairDTO.model_validate(active_repair),
+                        dangers=dangers,
+                    )
             result.append(dto)
         return result
 
@@ -95,11 +135,12 @@ class ListBrigadesByNGDUIdUseCase:
                 result[link.brigade_id].append(repair)
         return result
 
-    async def _count_violations(
+    async def _compute_violations(
         self,
         brigades: list[UniqueBrigade],
         brigade_repairs: dict[int, list[Repair]],
-    ) -> dict[int, int]:
+        active_repair_by_brigade: dict[int, Repair],
+    ) -> tuple[dict[int, int], dict[int, list[BrigadeErrorScreen]]]:
         number_by_brigade_id = {
             b.id: number
             for b in brigades
@@ -107,22 +148,23 @@ class ListBrigadesByNGDUIdUseCase:
             and (number := self._extract_brigade_number(b.name)) is not None
         }
         if not number_by_brigade_id:
-            return {}
+            return {}, {}
 
         cm_ids_by_number = await self._load_cm_ids_by_number(
             set(number_by_brigade_id.values()),
         )
         if not cm_ids_by_number:
-            return {}
+            return {}, {}
 
         screens_by_cm_id = await self._load_screens_by_cm_id(
             cm_ids_by_number,
             brigade_repairs,
         )
         if not screens_by_cm_id:
-            return {}
+            return {}, {}
 
         counts: dict[int, int] = {}
+        active_dangers: dict[int, list[BrigadeErrorScreen]] = {}
         for brigade_id, repairs in brigade_repairs.items():
             number = number_by_brigade_id.get(brigade_id)
             if number is None:
@@ -131,14 +173,53 @@ class ListBrigadesByNGDUIdUseCase:
             candidate_screens = [
                 s for cm_id in cm_ids for s in screens_by_cm_id.get(cm_id, [])
             ]
-            hits = sum(
-                1
+            hits = [
+                screen
                 for screen in candidate_screens
                 if self._within_any_repair(screen.timestamp, repairs)
-            )
+            ]
             if hits:
-                counts[brigade_id] = hits
-        return counts
+                counts[brigade_id] = len(hits)
+            active_repair = active_repair_by_brigade.get(brigade_id)
+            if active_repair is not None:
+                end = active_repair.end_time or datetime.now()  # noqa: DTZ005
+                active_hits = [
+                    s
+                    for s in candidate_screens
+                    if active_repair.start_time <= s.timestamp <= end
+                ]
+                if active_hits:
+                    active_dangers[brigade_id] = active_hits
+        return counts, active_dangers
+
+    async def _load_wells_for_active_repairs(
+        self,
+        active_repair_by_brigade: dict[int, Repair],
+    ) -> dict[int, Well]:
+        if not active_repair_by_brigade:
+            return {}
+        abai_well_ids = {
+            r.abai_well_id
+            for r in active_repair_by_brigade.values()
+            if r.abai_well_id is not None
+        }
+        wells_by_abai_id: dict[int, Well] = {}
+        if abai_well_ids:
+            wells = await self.well_repository.list_by_abai_ids(list(abai_well_ids))
+            wells_by_abai_id = {w.abai_id: w for w in wells}
+
+        result: dict[int, Well] = {}
+        for repair in active_repair_by_brigade.values():
+            well = (
+                wells_by_abai_id.get(repair.abai_well_id)
+                if repair.abai_well_id is not None
+                else None
+            )
+            if well is None and repair.well_id is not None:
+                well = await self.well_repository.get_by_id(id_=repair.well_id)
+            if well is not None:
+                result[repair.id] = well
+        return result
 
     async def _load_cm_ids_by_number(
         self,

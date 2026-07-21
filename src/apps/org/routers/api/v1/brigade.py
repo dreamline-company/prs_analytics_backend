@@ -51,6 +51,7 @@ async def list_brigades_by_ngdu_id(
         unique_brigade_repository=UniqueBrigadeRepository(session=app_session),
         repair_brigade_repository=RepairBrigadeRepository(session=app_session),
         repair_repository=RepairRepository(session=app_session),
+        well_repository=WellRepository(session=app_session),
         cm_brigade_repository=CMBrigadeRepository(session=cm_session),
         cm_brigade_error_screen_repository=CMBrigadeErrorScreenRepository(
             session=cm_session,

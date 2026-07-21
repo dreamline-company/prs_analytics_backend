@@ -2,7 +2,21 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from apps.repairs.dto.internal.repair import RepairDTO
 from apps.wells.dto.internal.well import WellShortDTO
+
+
+class BrigadeDangerDTO(BaseModel):
+    type: str
+    time: datetime
+    description: str
+
+
+class BrigadeLegendDTO(BaseModel):
+    well: WellShortDTO
+    repair: RepairDTO
+    dangers: list[BrigadeDangerDTO]
+    status: str = "СПО"
 
 
 class BrigadeDTO(BaseModel):
@@ -26,6 +40,7 @@ class BrigadeDTO(BaseModel):
     violations_count: int = 0
     is_in_repair: bool = False
     repair_id: int | None = None
+    legend: BrigadeLegendDTO | None = None
 
 
 class FrequentRepairBrigadeDTO(BaseModel):
@@ -83,12 +98,6 @@ class BrigadeShortDTO(BaseModel):
     id: int
     name: str
     ngdu_id: int
-
-
-class BrigadeDangerDTO(BaseModel):
-    type: str
-    time: datetime
-    description: str
 
 
 class BrigadeDangerZoneItemDTO(BaseModel):
