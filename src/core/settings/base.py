@@ -41,6 +41,8 @@ class Settings(CoreSettings):
     ABAI_ASYNC_DATABASE_URL: str
     # CM DB
     CM_ASYNC_DATABASE_URL: str
+    # SDMO DB (MySQL)
+    SDMO_ASYNC_DATABASE_URL: str
 
     # CM media
     CM_MEDIA_URL_HEADER: str = "http://188.127.32.80:8000/media"

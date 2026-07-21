@@ -9,6 +9,7 @@ AVAILABLE_DB = Literal[
     "app",
     "abai",
     "cm",
+    "sdmo",
     "zhylmg_telemetry",
     "kainar_telemetry",
     "zhmg_telemetry",
@@ -39,6 +40,7 @@ engines: dict[AVAILABLE_DB, AsyncEngine] = {
         echo=is_echo,
     ),
     "cm": create_async_engine(url=settings.CM_ASYNC_DATABASE_URL, echo=is_echo),
+    "sdmo": create_async_engine(url=settings.SDMO_ASYNC_DATABASE_URL, echo=is_echo),
 }
 
 session_makers = {

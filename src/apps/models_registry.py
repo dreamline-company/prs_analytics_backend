@@ -19,6 +19,7 @@ from apps.repairs.models.docs import RepairDoc
 from apps.repairs.models.repair import Repair, RepairType
 from apps.repairs.models.reports import RepairSummary
 from apps.repairs.models.transport import RepairTransport
+from apps.telemetry.models.sdmo import SdmoFcData, SdmoFcReg, SdmoStation
 from apps.telemetry.models.tech_regime import TechRegime
 from apps.telemetry.models.telemetry import Telemetry
 from apps.wells.models.coords import Coord, WellCoord
@@ -51,6 +52,9 @@ __all__ = (
     "RepairTransport",
     "RepairType",
     "SPOEvent",
+    "SdmoFcData",
+    "SdmoFcReg",
+    "SdmoStation",
     "TechRegime",
     "Telemetry",
     "UniqueBrigade",
