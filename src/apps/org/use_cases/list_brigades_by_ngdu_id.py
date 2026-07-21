@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from apps.org.dto.internal.brigade import (
@@ -17,6 +17,9 @@ from apps.org.dto.internal.brigade import (
 )
 from apps.repairs.dto.internal.repair import RepairDTO
 from apps.wells.dto.internal.well import WellShortDTO
+from core.settings import get_settings
+
+_YEAR = timedelta(days=365)
 
 if TYPE_CHECKING:
     from apps.org.dto.queries.brigade import ListBrigadesByNGDUIdQuery
@@ -84,6 +87,9 @@ class ListBrigadesByNGDUIdUseCase:
         wells_by_repair_id = await self._load_wells_for_active_repairs(
             active_repair_by_brigade,
         )
+        frequent_repair_abai_well_ids = await self._frequent_repair_abai_well_ids(
+            active_repair_by_brigade,
+        )
 
         result: list[BrigadeDTO] = []
         for brigade in brigades:
@@ -93,6 +99,9 @@ class ListBrigadesByNGDUIdUseCase:
             dto.repair_id = active_repair.id if active_repair is not None else None
             dto.violations_count = violations_by_brigade.get(brigade.id, 0)
             if active_repair is not None:
+                dto.is_frequent_repair = (
+                    active_repair.abai_well_id in frequent_repair_abai_well_ids
+                )
                 well = wells_by_repair_id.get(active_repair.id)
                 if well is not None:
                     screens = active_dangers_by_brigade.get(brigade.id, [])
@@ -115,6 +124,27 @@ class ListBrigadesByNGDUIdUseCase:
                     )
             result.append(dto)
         return result
+
+    async def _frequent_repair_abai_well_ids(
+        self,
+        active_repair_by_brigade: dict[int, Repair],
+    ) -> set[int]:
+        abai_well_ids = list(
+            {
+                r.abai_well_id
+                for r in active_repair_by_brigade.values()
+                if r.abai_well_id is not None
+            },
+        )
+        if not abai_well_ids:
+            return set()
+        threshold = get_settings().FREQUENT_REPAIR_THRESHOLD
+        since = datetime.now() - _YEAR  # noqa: DTZ005
+        counts = await self.repair_repository.count_by_well_abai_ids_since(
+            abai_well_ids,
+            since=since,
+        )
+        return {abai_id for abai_id, count in counts.items() if count > threshold}
 
     async def _load_brigade_repairs(
         self,

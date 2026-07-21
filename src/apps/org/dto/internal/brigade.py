@@ -40,6 +40,7 @@ class BrigadeDTO(BaseModel):
     violations_count: int = 0
     is_in_repair: bool = False
     repair_id: int | None = None
+    is_frequent_repair: bool = False
     legend: BrigadeLegendDTO | None = None
 
 

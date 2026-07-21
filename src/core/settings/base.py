@@ -205,3 +205,6 @@ class Settings(CoreSettings):
     LLM_BASE_URL: str | None = None
     LLM_API_KEY: SecretStr
     LLM_MODEL_NAME: str
+
+    # REPAIRS:
+    FREQUENT_REPAIR_THRESHOLD: int = 3

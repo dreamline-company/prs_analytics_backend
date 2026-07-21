@@ -1,4 +1,5 @@
-from apps.wells.dto.internal.well import WellMatrixItemDTO, WellShortDTO
+from apps.wells.dto.internal.well import WellShortDTO
+from apps.wells.dto.internal.well_matrix import WellMatrixItemDTO
 from shared.dto.api import AppResponse
 
 

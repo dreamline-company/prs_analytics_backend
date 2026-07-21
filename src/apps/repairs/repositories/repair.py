@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import date, datetime, time
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_, select
 
 from apps.repairs.dto.internal.repositories.repair import (
     CreateRepairDTO,
@@ -99,6 +99,25 @@ class RepairRepository(
             ),
         )
         return rs[0] if rs else None
+
+    async def count_by_well_abai_ids_since(
+        self,
+        abai_well_ids: Sequence[int],
+        *,
+        since: datetime,
+    ) -> dict[int, int]:
+        if not abai_well_ids:
+            return {}
+        stmt = (
+            select(Repair.abai_well_id, func.count(Repair.id))
+            .where(
+                Repair.abai_well_id.in_(abai_well_ids),
+                Repair.start_time >= since,
+            )
+            .group_by(Repair.abai_well_id)
+        )
+        result = await self.session.execute(stmt)
+        return {row[0]: row[1] for row in result.all()}
 
     async def list_active_by_well_abai_ids(
         self,
