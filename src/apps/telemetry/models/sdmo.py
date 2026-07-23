@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -75,16 +76,25 @@ class SdmoFcReg(AppBaseModel, IntPkMixin, TimedMixinModel):
 
 class SdmoFcData(AppBaseModel, IntPkMixin, TimedMixinModel):
     __tablename__ = "telemetry_sdmo_fc_data"
+    # ВНИМАНИЕ: fc_data_day_parted — НЕ одна строка в сутки, а внутрисуточный ряд
+    # (~1 отсчёт каждые 2 минуты на станцию). Уникальность держим по натуральному
+    # ключу строки-источника (sdmo_id), а не по (station, day). Композитный индекс
+    # (sdmo_station_id, savetime) обслуживает оконные выборки детекторов.
     __table_args__ = (
-        UniqueConstraint(
+        Index(
+            "ix_telemetry_sdmo_fc_data_station_savetime",
             "sdmo_station_id",
-            "day",
-            name="uq_telemetry_sdmo_fc_data_station_day",
+            "savetime",
         ),
     )
 
     # Исходный fc_data_day_parted.id из БД SDMO — курсор инкрементальной загрузки.
-    sdmo_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    sdmo_id: Mapped[int] = mapped_column(
+        BigInteger,
+        unique=True,
+        index=True,
+        nullable=False,
+    )
     # Ссылка на станцию (== SdmoStation.sdmo_id).
     sdmo_station_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
     day: Mapped[date] = mapped_column(Date, index=True, nullable=False)

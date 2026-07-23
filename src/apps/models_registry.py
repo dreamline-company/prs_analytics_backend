@@ -1,5 +1,9 @@
 import inspect
 
+from apps.detectors.rod_breaks.models.detection import (
+    RodBreakDetection,
+    RodBreakRun,
+)
 from apps.files.models.file import File
 from apps.org.models.brigade import Brigade, UniqueBrigade
 from apps.org.models.ngdu import NGDU
@@ -51,6 +55,8 @@ __all__ = (
     "RepairSummary",
     "RepairTransport",
     "RepairType",
+    "RodBreakDetection",
+    "RodBreakRun",
     "SPOEvent",
     "SdmoFcData",
     "SdmoFcReg",
