@@ -127,3 +127,9 @@ redisdata/*
 src/audios/*
 # temp
 src/migrations/versions
+
+# Claude Code session handoff (see .claude/skills/checkpoint)
+.claude/CONTEXT.md
+
+# Backtest reports (see src/apps/detectors/rod_breaks/backtest)
+reports/
