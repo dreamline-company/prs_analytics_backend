@@ -10,6 +10,8 @@ from datetime import datetime
 from starlette import status
 
 from apps.files.repositories.file import FileRepository
+from apps.org.dto.internal.brigade import BrigadeShortDTO
+from apps.org.repositories.brigade import UniqueBrigadeRepository
 from apps.repairs.dto.internal.analytics_view import (
     AIResultDTO,
     BrigadeErrorScreenDTO,
@@ -17,7 +19,9 @@ from apps.repairs.dto.internal.analytics_view import (
     DynamogramWithAIResultDTO,
     OverallAIResultDTO,
     OverallAIVerdictDTO,
+    RepairAnalyticsOverallInfoDTO,
     RepairAnalyticsViewDTO,
+    RepairMetaDTO,
     RepairTransportViewDTO,
     SPOPassportDTO,
     SPOWithAIResultDTO,
@@ -34,8 +38,10 @@ from apps.repairs.repositories.analytics import (
     RepairAnalyticsRepository,
     RepairAnalyticsSPORepository,
 )
+from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.repair import RepairRepository
 from apps.repairs.repositories.transport import RepairTransportRepository
+from apps.wells.dto.internal.well import WellShortDTO
 from apps.wells.repositories import WellRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
@@ -61,6 +67,8 @@ class GetRepairAnalyticsViewUseCase:
         *,
         repair_repository: RepairRepository,
         wells_repository: WellRepository,
+        repair_brigade_repository: RepairBrigadeRepository,
+        unique_brigade_repository: UniqueBrigadeRepository,
         analytics_repository: RepairAnalyticsRepository,
         analytics_dynamogram_repository: RepairAnalyticsDynamogramRepository,
         analytics_brigade_error_screen_repository: (
@@ -80,6 +88,8 @@ class GetRepairAnalyticsViewUseCase:
     ) -> None:
         self.repair_repository = repair_repository
         self.wells_repository = wells_repository
+        self.repair_brigade_repository = repair_brigade_repository
+        self.unique_brigade_repository = unique_brigade_repository
         self.analytics_repository = analytics_repository
         self.analytics_dynamogram_repository = analytics_dynamogram_repository
         self.analytics_brigade_error_screen_repository = (
@@ -117,6 +127,21 @@ class GetRepairAnalyticsViewUseCase:
                 details={"repair_id": query.repair_id},
             )
 
+        brigade = None
+        brigade_link = await self.repair_brigade_repository.get_by_repair_id(repair.id)
+        if brigade_link is not None:
+            unique_brigade = await self.unique_brigade_repository.get_by_id(
+                brigade_link.brigade_id,
+            )
+            if unique_brigade is not None:
+                brigade = BrigadeShortDTO.model_validate(unique_brigade)
+
+        overall_info = RepairAnalyticsOverallInfoDTO(
+            well=WellShortDTO.model_validate(well),
+            brigade=brigade,
+            repair=RepairMetaDTO.model_validate(repair),
+        )
+
         dynamograms = await self._build_dynamograms(analytics.id)
         spos = await self._build_spos(analytics.id)
 
@@ -130,6 +155,7 @@ class GetRepairAnalyticsViewUseCase:
             is_finalized=analytics.is_finalized,
             repair_docs_id=analytics.repair_docs_id,
             summary_id=analytics.summary_id,
+            overall_info=overall_info,
             dynamograms=dynamograms,
             spos=spos,
             error_screens=error_screens,

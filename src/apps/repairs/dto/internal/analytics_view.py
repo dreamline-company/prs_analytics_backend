@@ -11,6 +11,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from apps.org.dto.internal.brigade import BrigadeShortDTO
+from apps.wells.dto.internal.well import WellShortDTO
+
 
 class AIResultDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -159,12 +162,31 @@ class RepairTransportViewDTO(BaseModel):
     vehicle_class_name: str | None
 
 
+class RepairMetaDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    start_time: datetime.datetime
+    end_time: datetime.datetime | None = None
+
+
+class RepairAnalyticsOverallInfoDTO(BaseModel):
+    """Top-level context for the repair being viewed: which well, which brigade
+    (nullable — a repair may have no assigned brigade), and repair timing.
+    """
+
+    well: WellShortDTO
+    brigade: BrigadeShortDTO | None = None
+    repair: RepairMetaDTO
+
+
 class RepairAnalyticsViewDTO(BaseModel):
     analytics_id: int
     repair_id: int
     is_finalized: bool
     repair_docs_id: int | None
     summary_id: int | None
+    overall_info: RepairAnalyticsOverallInfoDTO
     dynamograms: DynamogramsPairDTO
     spos: list[SPOWithAIResultDTO]
     error_screens: list[BrigadeErrorScreenDTO]

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.files.repositories.file import FileRepository
+from apps.org.repositories.brigade import UniqueBrigadeRepository
 from apps.repairs.dto.internal.analytics_view import RepairAnalyticsViewDTO
 from apps.repairs.dto.internal.kpi import RepairKPIViewDTO
 from apps.repairs.dto.internal.timeline import RepairTimelineDTO
@@ -24,6 +25,7 @@ from apps.repairs.repositories.analytics import (
     RepairAnalyticsRepository,
     RepairAnalyticsSPORepository,
 )
+from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.docs import RepairDocRepository
 from apps.repairs.repositories.kpi import RepairKPIRepository
 from apps.repairs.repositories.repair import RepairRepository
@@ -65,6 +67,8 @@ async def get_repair_analytics_view(
     use_case = GetRepairAnalyticsViewUseCase(
         wells_repository=WellRepository(session=app_session),
         repair_repository=RepairRepository(session=app_session),
+        repair_brigade_repository=RepairBrigadeRepository(session=app_session),
+        unique_brigade_repository=UniqueBrigadeRepository(session=app_session),
         analytics_repository=RepairAnalyticsRepository(session=app_session),
         analytics_dynamogram_repository=RepairAnalyticsDynamogramRepository(
             session=app_session,
