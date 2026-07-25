@@ -1,5 +1,3 @@
-from datetime import date, datetime
-
 from pydantic import BaseModel, ConfigDict
 
 
@@ -34,12 +32,5 @@ class SdmoFcRegDTO(BaseModel):
     lora_bytes_size: int | None
 
 
-class SdmoFcDataDTO(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    sdmo_id: int
-    sdmo_station_id: int
-    day: date
-    savetime: datetime
-    data: dict | None
+# Читать fc_data DTO-моделью (108 колонок) сейчас не нужно — детектор берёт
+# отдельные регистры SQL-выборкой. При появлении API можно добавить.

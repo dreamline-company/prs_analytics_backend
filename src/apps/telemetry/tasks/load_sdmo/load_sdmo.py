@@ -1,3 +1,7 @@
+# DEPRECATED: однопроцессный загрузчик с глобальным курсором. Оставлен для
+# совместимости. Используйте bulk_load.py (разовая заливка) и incremental_load.py
+# (регулярный дозалив) — они опираются на общее ядро loader.py.
+
 import asyncio
 import re
 from collections.abc import AsyncGenerator, Sequence
@@ -5,10 +9,10 @@ from typing import ClassVar
 
 from apps.models_registry import *  # noqa: F403
 from apps.telemetry.dto.internal.repositories import (
-    CreateSdmoFcDataDTO,
     CreateSdmoFcRegDTO,
     CreateSdmoStationDTO,
 )
+from apps.telemetry.models.sdmo import SDMO_REGISTERS
 from apps.telemetry.repositories import (
     SdmoFcDataRepository,
     SdmoFcRegRepository,
@@ -142,17 +146,8 @@ class SdmoLoadTelemetry:
                     last_id,
                     station_ids,
                 ):
-                    await app_fc_data_repo.bulk_create(
-                        [
-                            CreateSdmoFcDataDTO(
-                                sdmo_id=row.id,
-                                sdmo_station_id=row.station_id,
-                                day=row.day,
-                                savetime=row.savetime,
-                                data=row.data,
-                            )
-                            for row in rows
-                        ],
+                    await app_fc_data_repo.copy_rows(
+                        [self._to_record(row) for row in rows],
                     )
                     await app_session.commit()
                     total += len(rows)
@@ -166,6 +161,32 @@ class SdmoLoadTelemetry:
                 logger.exception("Error while loading SDMO fc_data")
                 await app_session.rollback()
                 raise
+
+    @classmethod
+    def _to_record(cls, row: FcDataDayParted) -> tuple:
+        """Развернуть строку-источник в широкий кортеж под FC_DATA_COPY_COLUMNS.
+
+        Регистры из JSON `data` раскладываются по колонкам r_<addr> в порядке
+        SDMO_REGISTERS; отсутствующие регистры → None.
+        """
+        data = row.data or {}
+        return (
+            row.id,
+            row.station_id,
+            row.day,
+            row.savetime,
+            *(cls._reg_value(data, addr) for addr in SDMO_REGISTERS),
+        )
+
+    @staticmethod
+    def _reg_value(data: dict, addr: int) -> float | None:
+        value = data.get(str(addr))
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     @classmethod
     def _resolve_well_id(

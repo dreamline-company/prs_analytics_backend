@@ -6,6 +6,11 @@ from apps.celery_app import celery_app
 from apps.detectors.rod_breaks.tasks.run_detection import (  # noqa: F401
     run_rod_break_detection,
 )
+
+# Импорт регистрирует таску инкрементальной загрузки телеметрии SDMO.
+from apps.telemetry.tasks.load_sdmo.incremental_load import (  # noqa: F401
+    load_sdmo_incremental,
+)
 from core.settings import get_settings
 
 settings = get_settings()
@@ -23,6 +28,11 @@ celery_app.conf.update(
 )
 
 celery_app.conf.beat_schedule = {
+    # Инкрементальная догрузка телеметрии SDMO — каждые 30 минут.
+    "telemetry-sdmo-incremental": {
+        "task": "telemetry.sdmo.incremental_load",
+        "schedule": crontab(minute="*/30"),
+    },
     # Ежедневный прогон детектора обрыва штанги (R2) по флоту type_1900=6.
     # В 06:00 — после ночной загрузки телеметрии (load_sdmo).
     "detectors-rod-breaks-daily": {

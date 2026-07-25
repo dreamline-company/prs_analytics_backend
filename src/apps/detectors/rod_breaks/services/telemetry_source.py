@@ -1,7 +1,7 @@
 from datetime import datetime
 
 import sqlalchemy as sa
-from sqlalchemy import ColumnElement, Numeric, cast, func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.detectors.rod_breaks import config
@@ -30,10 +30,11 @@ class RodBreakTelemetrySource:
         self.repo = SdmoFcDataRepository(session)
 
     def _moment_expr(self) -> ColumnElement:
-        return cast(SdmoFcData.data[config.MOMENT_REGISTER].astext, Numeric)
+        # Регистры лежат типизированными колонками r_<addr> (float4).
+        return getattr(SdmoFcData, f"r_{config.MOMENT_REGISTER}")
 
     def _speed_expr(self) -> ColumnElement:
-        return cast(SdmoFcData.data[config.SPEED_REGISTER].astext, Numeric)
+        return getattr(SdmoFcData, f"r_{config.SPEED_REGISTER}")
 
     def _bucket_expr(self) -> ColumnElement:
         return func.date_bin(

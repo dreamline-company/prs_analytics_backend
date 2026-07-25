@@ -1,5 +1,3 @@
-from datetime import date, datetime
-
 from shared.dto.repositories import RepositoryDTO
 
 
@@ -53,17 +51,5 @@ class UpdateSdmoFcRegDTO(RepositoryDTO):
     lora_bytes_size: int | None = None
 
 
-class CreateSdmoFcDataDTO(RepositoryDTO):
-    sdmo_id: int
-    sdmo_station_id: int
-    day: date
-    savetime: datetime
-    data: dict | None = None
-
-
-class UpdateSdmoFcDataDTO(RepositoryDTO):
-    sdmo_id: int | None = None
-    sdmo_station_id: int | None = None
-    day: date | None = None
-    savetime: datetime | None = None
-    data: dict | None = None
+# fc_data грузится широкой строкой (108 колонок r_<addr>) напрямую dict'ами через
+# SdmoFcDataRepository.copy_rows — отдельный Create/Update DTO не нужен.

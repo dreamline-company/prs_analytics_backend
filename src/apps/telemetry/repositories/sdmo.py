@@ -1,18 +1,31 @@
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, datetime
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from apps.telemetry.dto.internal.repositories.sdmo import (
-    CreateSdmoFcDataDTO,
     CreateSdmoFcRegDTO,
     CreateSdmoStationDTO,
-    UpdateSdmoFcDataDTO,
     UpdateSdmoFcRegDTO,
     UpdateSdmoStationDTO,
 )
-from apps.telemetry.models.sdmo import SdmoFcData, SdmoFcReg, SdmoStation
+from apps.telemetry.models.sdmo import (
+    SDMO_REGISTERS,
+    SdmoFcData,
+    SdmoFcReg,
+    SdmoStation,
+)
+from shared.dto.repositories import RepositoryDTO
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
+
+# Порядок колонок для COPY в telemetry_sdmo_fc_data (id/created_at заполняет БД).
+FC_DATA_COPY_COLUMNS: tuple[str, ...] = (
+    "sdmo_id",
+    "sdmo_station_id",
+    "day",
+    "savetime",
+    *(f"r_{addr}" for addr in SDMO_REGISTERS),
+)
 
 
 class SdmoStationRepository(
@@ -68,7 +81,7 @@ class SdmoFcRegRepository(
 
 
 class SdmoFcDataRepository(
-    AsyncAlchemyRepository[CreateSdmoFcDataDTO, UpdateSdmoFcDataDTO, SdmoFcData],
+    AsyncAlchemyRepository[RepositoryDTO, RepositoryDTO, SdmoFcData],
 ):
     model = SdmoFcData
 
@@ -81,6 +94,54 @@ class SdmoFcDataRepository(
         )
         return rows[0].sdmo_id if rows else 0
 
+    async def get_last_cursor_by_station(
+        self,
+        station_ids: Sequence[int] | None = None,
+    ) -> dict[int, tuple[datetime, int]]:
+        """Курсор ``(max savetime, sdmo_id при этом savetime)`` на станцию.
+
+        Пара нужна для keyset-пагинации источника по индексу
+        ``trend(station_id, savetime, day)``: ``id`` в индекс не входит и
+        служит только tiebreak'ом внутри одинакового savetime. Станции без
+        строк в результат не попадают (вызывающий берёт ``(None, 0)`` по
+        умолчанию — «грузим с начала»).
+        """
+        stmt = (
+            select(
+                SdmoFcData.sdmo_station_id,
+                SdmoFcData.savetime,
+                SdmoFcData.sdmo_id,
+            )
+            .distinct(SdmoFcData.sdmo_station_id)
+            .order_by(
+                SdmoFcData.sdmo_station_id,
+                SdmoFcData.savetime.desc(),
+                SdmoFcData.sdmo_id.desc(),
+            )
+        )
+        if station_ids:
+            stmt = stmt.where(SdmoFcData.sdmo_station_id.in_(station_ids))
+        result = await self.session.execute(stmt)
+        return {row[0]: (row[1], row[2]) for row in result.all()}
+
+    async def copy_rows(self, records: Sequence[tuple]) -> None:
+        """Массовая вставка через asyncpg COPY (быстрее executemany в разы).
+
+        ``records`` — кортежи в порядке ``FC_DATA_COPY_COLUMNS``. COPY идёт по
+        соединению текущей сессии (в её транзакции); коммитит вызывающий.
+        """
+        if not records:
+            return
+        conn = await self.session.connection()
+        raw = await conn.get_raw_connection()
+        asyncpg_conn = raw.driver_connection
+        await asyncpg_conn.copy_records_to_table(
+            SdmoFcData.__tablename__,
+            records=records,
+            columns=FC_DATA_COPY_COLUMNS,
+            schema_name="public",
+        )
+
     async def list_by_station(
         self,
         sdmo_station_id: int,
@@ -88,23 +149,23 @@ class SdmoFcDataRepository(
         return await self.get_list(
             QuerySpec(
                 filters=(SdmoFcData.sdmo_station_id == sdmo_station_id,),
-                order_by=(SdmoFcData.day,),
+                order_by=(SdmoFcData.savetime,),
             ),
         )
 
     async def list_by_station_period(
         self,
         sdmo_station_id: int,
-        start_day: date,
-        end_day: date,
+        start: date,
+        end: date,
     ) -> Sequence[SdmoFcData]:
         return await self.get_list(
             QuerySpec(
                 filters=(
                     SdmoFcData.sdmo_station_id == sdmo_station_id,
-                    SdmoFcData.day >= start_day,
-                    SdmoFcData.day <= end_day,
+                    SdmoFcData.savetime >= start,
+                    SdmoFcData.savetime <= end,
                 ),
-                order_by=(SdmoFcData.day,),
+                order_by=(SdmoFcData.savetime,),
             ),
         )
