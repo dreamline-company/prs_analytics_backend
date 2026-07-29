@@ -126,7 +126,7 @@ redisdata/*
 #Audios
 src/audios/*
 # temp
-src/migrations/versions
+#src/migrations/versions
 
 # Claude Code session handoff (see .claude/skills/checkpoint)
 .claude/CONTEXT.md
