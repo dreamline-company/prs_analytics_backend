@@ -40,7 +40,8 @@ OPEN_REPAIR_DURATION = timedelta(days=1)
 MERGE_GAP_HOURS = 24
 # Транзиент: момент восстановился до > RECOVER_RATIO * base_moment
 # в течение RECOVER_HORIZON_BUCKETS после последней сработавшей корзины.
-RECOVER_HORIZON_BUCKETS = 12
+# 96 корзин × 0.25ч = 24ч горизонт восстановления (масштаб под config.BUCKET_HOURS).
+RECOVER_HORIZON_BUCKETS = 96
 RECOVER_RATIO = 0.5
 # Полное окно бэктеста (детерминированные границы для repro).
 BACKTEST_START = datetime(1970, 1, 1)  # noqa: DTZ001 — savetime хранится naive UTC
@@ -119,8 +120,18 @@ class WellResult:
 
     @property
     def recall(self) -> float | None:
-        denom = self.tp + self.fn
-        return self.tp / denom if denom else None
+        """Доля ремонтов «обрыв» в покрытии, пойманных хотя бы одним эпизодом.
+
+        Считается по РЕМОНТАМ, а не по TP-эпизодам: один ремонт могут поймать
+        несколько эпизодов, а эпизод — совпасть с ремонтом вне покрытия, поэтому
+        ``tp`` (счётчик эпизодов) в числитель recall брать нельзя. ``tp`` —
+        только для precision.
+        """
+        total = len(self.rod_break_repairs_in_coverage)
+        if not total:
+            return None
+        detected = total - len(self.missed_repair_ids)
+        return detected / total
 
 
 async def collect_targets(session: AsyncSession) -> list[WellTarget]:

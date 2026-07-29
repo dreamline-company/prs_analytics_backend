@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+from apps.detectors.rod_breaks import config
 from apps.detectors.rod_breaks.dto.internal.bucket import Bucket2h
 from apps.detectors.rod_breaks.rule import evaluate, is_flagged
 
@@ -25,7 +26,9 @@ def _bucket(
 def test_vmb0640_rod_break_fires() -> None:
     # Калибр: обрыв 46-й штанги. Обвал момента при сохранённой скорости.
     buckets = [_bucket(i, 120.0, 130.0) for i in range(10)]
-    buckets += [_bucket(10, 10.0, 130.0), _bucket(11, 8.0, 128.0)]
+    buckets += [
+        _bucket(10 + k, 10.0 - k, 130.0 - k) for k in range(config.SUSTAIN_BUCKETS)
+    ]
 
     result = evaluate(buckets)
 
@@ -64,11 +67,7 @@ def test_incomplete_median_not_flagged() -> None:
 def test_fired_at_is_first_of_series() -> None:
     # Дата сработки = левая граница ПЕРВОЙ корзины устойчивой серии.
     buckets = [_bucket(i, 120.0, 130.0) for i in range(6)]
-    buckets += [
-        _bucket(6, 5.0, 130.0),
-        _bucket(7, 5.0, 130.0),
-        _bucket(8, 5.0, 130.0),
-    ]
+    buckets += [_bucket(6 + k, 5.0, 130.0) for k in range(config.SUSTAIN_BUCKETS + 1)]
 
     result = evaluate(buckets)
 

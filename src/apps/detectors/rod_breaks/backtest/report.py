@@ -81,6 +81,15 @@ def _fmt_num(value: float | None) -> str:
     return f"{value:.1f}" if value is not None else "—"
 
 
+def _fmt_recall(result: WellResult) -> str:
+    """Recall с дробью ремонтов, чтобы не путать с TP-эпизодами: ``90% (9/10)``."""
+    total = len(result.rod_break_repairs_in_coverage)
+    if not total:
+        return "—"
+    detected = total - len(result.missed_repair_ids)
+    return f"{_fmt_pct(result.recall)} ({detected}/{total})"
+
+
 def _shorten(text: str, limit: int = 160) -> str:
     text = text.strip().replace("\n", " ")
     return text if len(text) <= limit else text[: limit - 1] + "…"
@@ -135,7 +144,8 @@ def _polyline_from(
 
 
 def _y_range_moment(
-    series: Sequence[Bucket2h], base_moment: float | None,
+    series: Sequence[Bucket2h],
+    base_moment: float | None,
 ) -> tuple[float, float]:
     values = [b.mom_min for b in series]
     if base_moment:
@@ -346,7 +356,8 @@ def _render_svg(result: WellResult) -> str:
         'font-family="system-ui, sans-serif">',
         # Moment panel
         _panel_frame(
-            _PANEL_TOPS[0], "Момент (mom_min, регистр 1991) + порог 0.4×med24",
+            _PANEL_TOPS[0],
+            "Момент (mom_min, регистр 1991) + порог 0.4×med24",
         ),
         _repair_bands(
             [r for r in result.rod_break_repairs if r.is_rod_break],
@@ -356,7 +367,11 @@ def _render_svg(result: WellResult) -> str:
             _COL_ROD_BREAK_REPAIR,
         ),
         _repair_bands(
-            result.other_repairs, t0, span_s, _PANEL_TOPS[0], _COL_OTHER_REPAIR,
+            result.other_repairs,
+            t0,
+            span_s,
+            _PANEL_TOPS[0],
+            _COL_OTHER_REPAIR,
         ),
         _y_ticks(mom_range, _PANEL_TOPS[0]),
         mom_thr,
@@ -373,7 +388,11 @@ def _render_svg(result: WellResult) -> str:
             _COL_ROD_BREAK_REPAIR,
         ),
         _repair_bands(
-            result.other_repairs, t0, span_s, _PANEL_TOPS[1], _COL_OTHER_REPAIR,
+            result.other_repairs,
+            t0,
+            span_s,
+            _PANEL_TOPS[1],
+            _COL_OTHER_REPAIR,
         ),
         _y_ticks(spd_range, _PANEL_TOPS[1]),
         spd_thr,
@@ -516,7 +535,7 @@ def render_well_page(result: WellResult, path: Path) -> None:
         f'<div class="metric">FP transient<b>{result.fp_transient}</b></div>'
         f'<div class="metric">FP other-repair<b>{result.fp_other_repair}</b></div>'
         f'<div class="metric">FP no-repair<b>{result.fp_no_repair}</b></div>'
-        f'<div class="metric">Recall<b>{_fmt_pct(result.recall)}</b></div>'
+        f'<div class="metric">Recall<b>{_fmt_recall(result)}</b></div>'
         f'<div class="metric">Precision strict<b>{_fmt_pct(result.strict_precision)}</b></div>'
         f'<div class="metric">Precision soft<b>{_fmt_pct(result.soft_precision)}</b></div>'
         f'<div class="metric">Ремонты по обрыву<b>{len(result.rod_break_repairs)}</b>'
@@ -576,7 +595,13 @@ def render_index(
     total_fo = sum(r.fp_other_repair for r in results)
     total_fn_no = sum(r.fp_no_repair for r in results)
     total_fp = total_ft + total_fo + total_fn_no
-    global_recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) else None
+    # Recall — по РЕМОНТАМ (детектировано в покрытии / всего в покрытии), не по
+    # TP-эпизодам: см. WellResult.recall.
+    total_detected = sum(
+        len(r.rod_break_repairs_in_coverage) - len(r.missed_repair_ids) for r in results
+    )
+    total_in_cov = sum(len(r.rod_break_repairs_in_coverage) for r in results)
+    global_recall = total_detected / total_in_cov if total_in_cov else None
     global_strict = total_tp / (total_tp + total_fp) if (total_tp + total_fp) else None
     global_soft = (
         total_tp / (total_tp + total_ft + total_fn_no)
@@ -598,7 +623,7 @@ def render_index(
         f'<div class="metric">FP transient<b>{total_ft}</b></div>'
         f'<div class="metric">FP other-repair<b>{total_fo}</b></div>'
         f'<div class="metric">FP no-repair<b>{total_fn_no}</b></div>'
-        f'<div class="metric">Recall<b>{_fmt_pct(global_recall)}</b></div>'
+        f'<div class="metric">Recall<b>{_fmt_pct(global_recall)} ({total_detected}/{total_in_cov})</b></div>'
         f'<div class="metric">Precision strict<b>{_fmt_pct(global_strict)}</b></div>'
         f'<div class="metric">Precision soft<b>{_fmt_pct(global_soft)}</b></div>'
         "</div>"
@@ -624,7 +649,7 @@ def render_index(
             f"<td>{r.fp_transient}</td>"
             f"<td>{r.fp_other_repair}</td>"
             f"<td>{r.fp_no_repair}</td>"
-            f"<td>{_fmt_pct(r.recall)}</td>"
+            f"<td>{_fmt_recall(r)}</td>"
             f"<td>{_fmt_pct(r.strict_precision)}</td>"
             f"<td>{_fmt_pct(r.soft_precision)}</td>"
             f"<td>{escape(skipped)}</td>"

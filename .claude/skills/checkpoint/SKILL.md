@@ -7,41 +7,41 @@ Save a handoff of the current session so a future session can resume it.
 
 ## What to do
 
-1. From the current session context, draft the handoff using exactly these sections (in Russian, matching the user's working language):
+1. From the current session context, draft the handoff using exactly these sections. Section headers stay in English (they are the file format); the content is written in the user's working language:
 
 ```
-## Задача
-<Одно-два предложения: что решаем в этой сессии.>
+## Task
+<One or two sentences: what this session is solving.>
 
-## Что сделано
-<Список коротких пунктов: конкретные действия, изменения, находки. Без воды.>
+## Done
+<List of short bullet points: concrete actions, changes, findings. No filler.>
 
-## Ключевые решения (и почему)
-<Список: решение → короткое обоснование. Только реально принятые решения, не рассмотренные варианты.>
+## Key decisions (and why)
+<List: decision → short rationale. Only decisions actually made, not options considered.>
 
-## Затронутые файлы
-<Список путей относительно корня репо. Если правили — пометь "правил". Если только читали для контекста — пометь "читал".>
+## Files touched
+<List of paths relative to the repo root. If edited — mark "edited". If only read for context — mark "read".>
 
-## Открытые вопросы
-<Что осталось нерешённым или ждёт ответа пользователя. Если пусто — напиши "нет".>
+## Open questions
+<What remains unresolved or is waiting on the user. If empty — write "none".>
 
-## Следующий шаг
-<Одно конкретное действие, с которого начнётся следующая сессия. Не список — один шаг.>
+## Next step
+<One concrete action the next session starts with. Not a list — a single step.>
 ```
 
 2. Show the full draft to the user in a code block. Do NOT write the file yet.
 
-3. Ask: "Записать как есть или поправить?"
+3. Ask (in the user's working language): "Write it as is, or edit?"
 
 4. If the user asks for edits, apply them and show the updated draft again. Repeat until confirmed.
 
 5. On confirmation, write the draft to `.claude/CONTEXT.md` (full overwrite — never append). Create the `.claude/` directory if it does not exist.
 
-6. Confirm the write in one line, e.g. "Записал в `.claude/CONTEXT.md`. Восстановить в след. сессии — `/checkpoint-load`."
+6. Confirm the write in one line, e.g. "Saved to `.claude/CONTEXT.md`. Restore next session with `/checkpoint-load`." (in the user's working language).
 
 ## Rules
 
 - Full overwrite every time. Never append, never keep backups.
-- Do not put long-lived facts (rules, architecture, preferences) here — those belong in auto-memory. This file is only "где я остановился в этой конкретной задаче".
+- Do not put long-lived facts (rules, architecture, preferences) here — those belong in auto-memory. This file is only "where I left off in this specific task".
 - Keep it compact. Every section should be scannable in seconds.
 - Never write the file without explicit user confirmation of the draft.

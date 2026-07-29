@@ -10,7 +10,7 @@ T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 def _raw(idx: int, mom_min: float, spd: float) -> RawBucket:
     return RawBucket(
-        start_ts=T0 + timedelta(hours=2 * idx),
+        start_ts=T0 + timedelta(hours=config.BUCKET_HOURS * idx),
         mom_min=mom_min,
         spd=spd,
         sample_count=60,
@@ -42,11 +42,13 @@ def test_trailing_window_ignores_gaps() -> None:
 
 def test_pipeline_rod_break_end_to_end() -> None:
     # Полный чистый конвейер: сырые корзины -> бакетизатор -> правило.
-    raw = [_raw(i, 120.0, 130.0) for i in range(20)]
-    raw += [_raw(20, 8.0, 130.0), _raw(21, 7.0, 129.0)]
+    # Прогрев >= MIN_MEDIAN_BUCKETS, затем SUSTAIN_BUCKETS корзин обрыва подряд.
+    n = config.MIN_MEDIAN_BUCKETS + 4
+    raw = [_raw(i, 120.0, 130.0) for i in range(n)]
+    raw += [_raw(n + k, 8.0 - k, 130.0 - k) for k in range(config.SUSTAIN_BUCKETS)]
 
     series = bucketizer.build_series(raw)
     result = evaluate(series)
 
     assert result.fired is True
-    assert result.fired_at == T0 + timedelta(hours=2 * 20)
+    assert result.fired_at == T0 + timedelta(hours=config.BUCKET_HOURS * n)
