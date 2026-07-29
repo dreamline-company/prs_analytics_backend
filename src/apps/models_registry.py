@@ -1,5 +1,9 @@
 import inspect
 
+from apps.detectors.rod_breaks.models.detection import (
+    RodBreakDetection,
+    RodBreakRun,
+)
 from apps.files.models.file import File
 from apps.org.models.brigade import Brigade, UniqueBrigade
 from apps.org.models.ngdu import NGDU
@@ -19,6 +23,7 @@ from apps.repairs.models.docs import RepairDoc
 from apps.repairs.models.repair import Repair, RepairType
 from apps.repairs.models.reports import RepairSummary
 from apps.repairs.models.transport import RepairTransport
+from apps.telemetry.models.sdmo import SdmoFcData, SdmoFcReg, SdmoStation
 from apps.telemetry.models.tech_regime import TechRegime
 from apps.telemetry.models.telemetry import Telemetry
 from apps.wells.models.coords import Coord, WellCoord
@@ -50,7 +55,12 @@ __all__ = (
     "RepairSummary",
     "RepairTransport",
     "RepairType",
+    "RodBreakDetection",
+    "RodBreakRun",
     "SPOEvent",
+    "SdmoFcData",
+    "SdmoFcReg",
+    "SdmoStation",
     "TechRegime",
     "Telemetry",
     "UniqueBrigade",
