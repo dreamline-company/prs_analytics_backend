@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import date, datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import RowMapping, delete, select
 
 from apps.telemetry.dto.internal.repositories.sdmo import (
     CreateSdmoFcRegDTO,
@@ -16,7 +16,18 @@ from apps.telemetry.models.sdmo import (
     SdmoStation,
 )
 from shared.dto.repositories import RepositoryDTO
-from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
+from shared.repository.sqlalchemy import (
+    AsyncAlchemyRepository,
+    ProjectionQuerySpec,
+    QuerySpec,
+)
+
+# Регистры параметров СДМО для API (type_1900 = 1/6/16; имена из
+# telemetry_sdmo_fc_reg): 1998 «Скорость ротора», 1991 «Момент штанги/на валу»,
+# 1614 «Ток двигателя».
+ROTOR_SPEED_REGISTER = 1998
+PUMP_MOMENT_REGISTER = 1991
+ENGINE_CURRENT_REGISTER = 1614
 
 # Порядок колонок для COPY в telemetry_sdmo_fc_data (id/created_at заполняет БД).
 FC_DATA_COPY_COLUMNS: tuple[str, ...] = (
@@ -166,6 +177,39 @@ class SdmoFcDataRepository(
                     SdmoFcData.savetime >= start,
                     SdmoFcData.savetime <= end,
                 ),
+                order_by=(SdmoFcData.savetime,),
+            ),
+        )
+
+    async def list_parameters_by_stations_period(
+        self,
+        station_sdmo_ids: Sequence[int],
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> Sequence[RowMapping]:
+        """Ряд (savetime, rotor_speed, pump_moment, engine_current) по станциям."""
+        filters: list = [SdmoFcData.sdmo_station_id.in_(station_sdmo_ids)]
+        if start_time is not None:
+            filters.append(SdmoFcData.savetime >= start_time)
+        if end_time is not None:
+            filters.append(SdmoFcData.savetime <= end_time)
+
+        return await self.get_projection_list(
+            ProjectionQuerySpec(
+                joins=(),
+                fields=(
+                    SdmoFcData.savetime,
+                    getattr(SdmoFcData, f"r_{ROTOR_SPEED_REGISTER}").label(
+                        "rotor_speed",
+                    ),
+                    getattr(SdmoFcData, f"r_{PUMP_MOMENT_REGISTER}").label(
+                        "pump_moment",
+                    ),
+                    getattr(SdmoFcData, f"r_{ENGINE_CURRENT_REGISTER}").label(
+                        "engine_current",
+                    ),
+                ),
+                filters=tuple(filters),
                 order_by=(SdmoFcData.savetime,),
             ),
         )

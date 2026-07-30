@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -32,5 +34,19 @@ class SdmoFcRegDTO(BaseModel):
     lora_bytes_size: int | None
 
 
-# Читать fc_data DTO-моделью (108 колонок) сейчас не нужно — детектор берёт
-# отдельные регистры SQL-выборкой. При появлении API можно добавить.
+# Читать fc_data полной DTO-моделью (108 колонок) сейчас не нужно — детектор и
+# API берут отдельные регистры SQL-выборкой.
+
+
+class SdmoParametersDTO(BaseModel):
+    """Срез параметров СДМО на один отсчёт savetime.
+
+    Значения сырые, как в telemetry_sdmo_fc_data (koef из fc_reg не применён).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    savetime: datetime
+    rotor_speed: float | None
+    pump_moment: float | None
+    engine_current: float | None
