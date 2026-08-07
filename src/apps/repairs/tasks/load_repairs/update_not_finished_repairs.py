@@ -78,7 +78,9 @@ class UpdateNotFinishedRepairs:
         repairs_repo: RepairRepository,
     ) -> AsyncIterator[Sequence[Repair]]:
         last_r_abai_id = None
-        now = datetime.now(tz=settings.ZONE_INFO)
+        # start_time хранится как naive в локальной зоне — сравнивать нужно
+        # с naive-значением, иначе asyncpg падает на TIMESTAMP WITHOUT TIME ZONE.
+        now = datetime.now(tz=settings.ZONE_INFO).replace(tzinfo=None)
         start_time_greater = now - self.MAX_OLD_NF_REPAIR
         while True:
             filters = []
