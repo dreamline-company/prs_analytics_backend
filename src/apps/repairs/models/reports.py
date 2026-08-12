@@ -17,10 +17,14 @@ from shared.database.sql.models import AppBaseModel, IntPkMixin
 class RepairSummary(AppBaseModel, IntPkMixin):  # Сводка ПРС
     __tablename__ = "repairs_repair_reports"
     __table_args__ = (
+        # Сводка уникальна в разрезе «скважина × сутки × смена»: за одни сутки
+        # на скважине работают две вахты (1-я и 2-я смена), каждая сдаёт свой
+        # отчёт.
         UniqueConstraint(
             "well_id",
             "date",
-            name="uq_repairs_repair_reports_well_id_date",
+            "shift_type_number",
+            name="uq_repairs_repair_reports_well_id_date_shift",
         ),
     )
 

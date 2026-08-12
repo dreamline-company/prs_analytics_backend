@@ -1,6 +1,30 @@
 import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class UploadParsedSummariesResultDTO(BaseModel):
+    """Итог загрузки батча распарсенных сводок."""
+
+    received: int = Field(0, description="Сколько записей пришло в запросе")
+    created: int = Field(0, description="Сколько сводок добавлено")
+    updated: int = Field(0, description="Сколько существующих сводок перезаписано")
+    deduplicated: int = Field(
+        0,
+        description="Сколько дублей схлопнуто внутри батча",
+    )
+    skipped_unknown_well: int = Field(
+        0,
+        description="Сколько записей пропущено из-за неизвестной скважины",
+    )
+    unknown_wells: list[str] = Field(
+        default_factory=list,
+        description="Имена скважин, которых нет в справочнике",
+    )
+    linked_brigades: int = Field(
+        0,
+        description="Сколько связок «ремонт ↔ бригада» создано",
+    )
 
 
 class RepairSummaryDTO(BaseModel):

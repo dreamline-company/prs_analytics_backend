@@ -70,6 +70,16 @@ class UniqueBrigadeRepository(
             QuerySpec(filters=(UniqueBrigade.name == name,)),
         )
 
+    async def list_by_names(self, names: Sequence[str]) -> Sequence[UniqueBrigade]:
+        if not names:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(UniqueBrigade.name.in_(names),),
+                order_by=(UniqueBrigade.name,),
+            ),
+        )
+
     async def list_all(self) -> Sequence[UniqueBrigade]:
         return await self.get_list(QuerySpec(order_by=(UniqueBrigade.name,)))
 

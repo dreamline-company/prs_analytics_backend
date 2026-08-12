@@ -2,6 +2,7 @@ from collections.abc import Iterable, Sequence
 from datetime import date
 
 from sqlalchemy import select, tuple_
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from apps.repairs.dto.internal.repositories.reports import (
     CreateRepairSummaryDTO,
@@ -9,6 +10,14 @@ from apps.repairs.dto.internal.repositories.reports import (
 )
 from apps.repairs.models.reports import RepairSummary
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
+
+# Ключ уникальности сводки: скважина × сутки × смена.
+SummaryKey = tuple[int, date, int]
+
+# PostgreSQL не принимает больше 32767 параметров на запрос, а сводки грузятся
+# месячными файлами по несколько тысяч строк — режем на чанки.
+_UPSERT_CHUNK = 2000
+_KEYS_CHUNK = 5000
 
 
 class RepairSummaryRepository(
@@ -36,19 +45,66 @@ class RepairSummaryRepository(
             ),
         )
 
-    async def list_existing_well_date_pairs(
+    async def list_existing_keys(
         self,
-        pairs: Iterable[tuple[int, date]],
-    ) -> set[tuple[int, date]]:
-        pairs_list = list(pairs)
-        if not pairs_list:
+        keys: Iterable[SummaryKey],
+    ) -> set[SummaryKey]:
+        """Вернуть те ключи (well_id, date, shift), что уже есть в БД."""
+        keys_list = list(keys)
+        if not keys_list:
             return set()
 
-        qs = select(RepairSummary.well_id, RepairSummary.date).where(
-            tuple_(RepairSummary.well_id, RepairSummary.date).in_(pairs_list),
-        )
-        rows = await self.fetch_all(qs)
-        return {(row["well_id"], row["date"]) for row in rows}
+        found: set[SummaryKey] = set()
+        for offset in range(0, len(keys_list), _KEYS_CHUNK):
+            chunk = keys_list[offset : offset + _KEYS_CHUNK]
+            qs = select(
+                RepairSummary.well_id,
+                RepairSummary.date,
+                RepairSummary.shift_type_number,
+            ).where(
+                tuple_(
+                    RepairSummary.well_id,
+                    RepairSummary.date,
+                    RepairSummary.shift_type_number,
+                ).in_(chunk),
+            )
+            rows = await self.fetch_all(qs)
+            found.update(
+                (row["well_id"], row["date"], row["shift_type_number"]) for row in rows
+            )
+        return found
+
+    async def bulk_upsert(self, data: Sequence[CreateRepairSummaryDTO]) -> None:
+        """Вставить сводки, обновив содержимое при совпадении ключа.
+
+        Повторная загрузка того же файла не падает на UNIQUE, а перезаписывает
+        отчёт свежей версией — сводки за сутки уточняются задним числом.
+        """
+        if not data:
+            return
+
+        values = [item.model_dump() for item in data]
+        for offset in range(0, len(values), _UPSERT_CHUNK):
+            stmt = pg_insert(RepairSummary).values(
+                values[offset : offset + _UPSERT_CHUNK],
+            )
+            await self.session.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=[
+                        RepairSummary.well_id,
+                        RepairSummary.date,
+                        RepairSummary.shift_type_number,
+                    ],
+                    set_={
+                        "second_well_id": stmt.excluded.second_well_id,
+                        "brigade_number": stmt.excluded.brigade_number,
+                        "pump_type": stmt.excluded.pump_type,
+                        "car": stmt.excluded.car,
+                        "device_number": stmt.excluded.device_number,
+                        "shift_details": stmt.excluded.shift_details,
+                    },
+                ),
+            )
 
     async def list_by_date(self, summary_date: date) -> Sequence[RepairSummary]:
         return await self.get_list(

@@ -100,6 +100,39 @@ class RepairRepository(
         )
         return rs[0] if rs else None
 
+    async def list_covering_range(
+        self,
+        well_ids: Sequence[int],
+        abai_well_ids: Sequence[int],
+        *,
+        date_from: date,
+        date_to: date,
+    ) -> Sequence[Repair]:
+        """Ремонты этих скважин, пересекающие интервал [date_from, date_to].
+
+        Батчевый аналог ``find_covering_date`` — один запрос вместо запроса на
+        каждую сводку. Скважина ищется по обоим ключам: ``Repair.well_id``
+        загрузчиком не заполняется, реальная связь живёт в ``abai_well_id``.
+        """
+        if not well_ids and not abai_well_ids:
+            return ()
+
+        range_start = datetime.combine(date_from, time.min)
+        range_end = datetime.combine(date_to, time.max)
+        return await self.get_list(
+            QuerySpec(
+                filters=(
+                    or_(
+                        Repair.well_id.in_(well_ids),
+                        Repair.abai_well_id.in_(abai_well_ids),
+                    ),
+                    Repair.start_time <= range_end,
+                    or_(Repair.end_time.is_(None), Repair.end_time >= range_start),
+                ),
+                order_by=(Repair.start_time.desc(),),
+            ),
+        )
+
     async def count_by_well_abai_ids_since(
         self,
         abai_well_ids: Sequence[int],

@@ -5,7 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
 from apps.org.repositories import UniqueBrigadeRepository
-from apps.repairs.dto.internal.summary import RepairSummaryDTO
+from apps.repairs.dto.internal.summary import (
+    RepairSummaryDTO,
+    UploadParsedSummariesResultDTO,
+)
 from apps.repairs.dto.queries.summary import ListRepairSummariesByRepairIdQuery
 from apps.repairs.dto.requests.summaries import UploadParsedSummariesListDTO
 from apps.repairs.dto.responses.summary import ListRepairSummariesResponseDTO
@@ -43,7 +46,7 @@ async def list_repair_summaries_by_repair_id(
 async def upload_parsed_xlsx_summary(
     summaries: UploadParsedSummariesListDTO,
     session: Annotated[AsyncSession, Depends(get_app_session)],
-) -> dict[str, int]:
+) -> UploadParsedSummariesResultDTO:
     use_case = UploadParsedSummariesUseCase(
         session=session,
         well_repository=WellRepository(session=session),
@@ -52,5 +55,4 @@ async def upload_parsed_xlsx_summary(
         repair_brigade_repository=RepairBrigadeRepository(session=session),
         unique_brigade_repository=UniqueBrigadeRepository(session=session),
     )
-    created = await use_case.execute(summaries)
-    return {"created": created}
+    return await use_case.execute(summaries)
