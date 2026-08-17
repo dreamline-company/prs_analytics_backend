@@ -28,6 +28,9 @@ class NGDUWinccTelemetryModel(WinccTelemetryBaseModel):
     Qv_liq: Mapped[float] = mapped_column(Float, nullable=True)
     Qm_oil: Mapped[float] = mapped_column(Float, nullable=True)
 
+    Qv_water: Mapped[float] = mapped_column(Float, nullable=True)
+    Qm_water: Mapped[float] = mapped_column(Float, nullable=True)
+
 
 class KainarWinccTelemetry(NGDUWinccTelemetryModel):
     __tablename__ = "EMG-KMG-TM"

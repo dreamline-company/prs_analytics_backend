@@ -183,6 +183,8 @@ class WinccLoadTelemetry:
                     date_time=tm.Meas_date,
                     qv_liquid=tm.Qv_liq,
                     qm_oil=tm.Qm_oil,
+                    qv_water=tm.Qv_water,
+                    qm_water=tm.Qm_water,
                     abai_ngdu_id=dmg_ngdu_id,
                     oil_field=tm.Oil_field,
                 ),
