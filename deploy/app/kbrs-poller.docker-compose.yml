@@ -1,0 +1,12 @@
+services:
+  kbrs_poller:
+    extends:
+      file: compose.common.yml
+      service: common
+    container_name: prs_eff_kbrs_poller
+    command: python -m apps.kbrs.tasks.poll_measures.poll_measures
+    restart: unless-stopped
+
+networks:
+  prs_effectiveness_network:
+    name: prs_effectiveness_network

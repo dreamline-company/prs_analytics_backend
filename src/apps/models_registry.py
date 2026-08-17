@@ -5,6 +5,7 @@ from apps.detectors.rod_breaks.models.detection import (
     RodBreakRun,
 )
 from apps.files.models.file import File
+from apps.kbrs.models.measure import KbrsMeasure
 from apps.org.models.brigade import Brigade, UniqueBrigade
 from apps.org.models.ngdu import NGDU
 from apps.org.models.org import Org, OrgType
@@ -39,6 +40,7 @@ __all__ = (
     "Coord",
     "Dynamogram",
     "File",
+    "KbrsMeasure",
     "Org",
     "OrgType",
     "Repair",

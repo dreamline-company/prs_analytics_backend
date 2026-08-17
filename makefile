@@ -1,4 +1,4 @@
-.PHONY: help run-api up-redis down-redis logs-redis up-api down-api logs-api up-celery down-celery logs-celery
+.PHONY: help run-api up-redis down-redis logs-redis up-api down-api logs-api up-celery down-celery logs-celery up-kbrs-poller down-kbrs-poller logs-kbrs-poller
 
 PROJECT_NAME ?= prs_effectiveness
 ENV_FILE ?= src/.env
@@ -9,6 +9,7 @@ DOCKER_COMPOSE = docker compose --env-file $(ENV_FILE) -p $(PROJECT_NAME)
 REDIS_COMPOSE = $(DOCKER_COMPOSE) -f deploy/redis/docker-compose.yml
 API_COMPOSE = $(DOCKER_COMPOSE) -f deploy/app/api.docker-compose.yml
 CELERY_COMPOSE = $(DOCKER_COMPOSE) -f deploy/app/celery.docker-compose.yml
+KBRS_POLLER_COMPOSE = $(DOCKER_COMPOSE) -f deploy/app/kbrs-poller.docker-compose.yml
 LOG_FOLLOW = $(if $(filter 1 true yes on,$(FOLLOW)),-f,)
 LOG_OPTIONS = --tail $(TAIL) $(LOG_FOLLOW)
 
@@ -44,3 +45,12 @@ down-celery: ## Stop and remove Celery beat service containers.
 
 logs-celery: ## Show Celery beat logs. Use TAIL=100 and FOLLOW=1 to control output.
 	$(CELERY_COMPOSE) logs $(LOG_OPTIONS) celery_beat
+
+up-kbrs-poller: ## Build and start the KBRS measure poller in detached mode.
+	$(KBRS_POLLER_COMPOSE) up -d --build
+
+down-kbrs-poller: ## Stop and remove the KBRS measure poller containers.
+	$(KBRS_POLLER_COMPOSE) down
+
+logs-kbrs-poller: ## Show KBRS poller logs. Use TAIL=100 and FOLLOW=1 to control output.
+	$(KBRS_POLLER_COMPOSE) logs $(LOG_OPTIONS) kbrs_poller

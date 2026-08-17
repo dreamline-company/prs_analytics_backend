@@ -155,6 +155,16 @@ class Settings(CoreSettings):
     KBRS_PASSWORD: str
     KBRS_POOL_SIZE: int = 10
 
+    # Фоновый опросчик замеров КБРС (apps/kbrs/tasks/poll_measures):
+    # период опроса, keepalive-пинг простаивающих сессий, скользящее окно
+    # списка замеров, «живость» замера (перечитываем, пока end_time ближе
+    # к now, чем grace) и размер страницы TNOMeasureList.
+    KBRS_POLL_INTERVAL_SECONDS: int = 60
+    KBRS_KEEPALIVE_INTERVAL_SECONDS: int = 240
+    KBRS_POLL_WINDOW_HOURS: int = 24
+    KBRS_POLL_REFRESH_GRACE_MINUTES: int = 120
+    KBRS_POLL_PAGE_COUNT: int = 200
+
     # S3 (minio)
     S3_ACCESS_KEY: str
     S3_SECRET_KEY: str

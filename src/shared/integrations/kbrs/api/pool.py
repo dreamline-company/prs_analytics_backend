@@ -141,6 +141,52 @@ class ToucanClientPool:
         assert last_error is not None
         raise last_error
 
+    async def keepalive_all(self, fn: Callable[[ToucanBackendClient], object]) -> int:
+        """Ping every currently idle client to keep its Toucan session alive.
+
+        Drains the idle queue, runs ``fn`` on each drained client concurrently
+        (in threads), then returns healthy clients to the pool. A client whose
+        ping raises ``ToucanTransportError`` is recycled — closed and replaced
+        by a freshly-logged-in one. Clients checked out by other coroutines at
+        call time are skipped: they are mid-RPC and thus already alive.
+
+        Returns the number of successfully pinged clients.
+        """
+
+        if self._closed:
+            return 0
+
+        idle: list[ToucanBackendClient] = []
+        while True:
+            try:
+                idle.append(self._q.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        if not idle:
+            return 0
+
+        async def _ping(client: ToucanBackendClient) -> bool:
+            try:
+                await asyncio.to_thread(fn, client)
+            except ToucanTransportError as exc:
+                logger.warning("Keepalive ping failed; recycling client: %s", exc)
+                await self._recycle(client)
+                return False
+            except Exception:  # noqa: BLE001
+                # Не-транспортная ошибка не означает, что сессия мертва.
+                logger.warning(
+                    "Keepalive ping raised a non-transport error.",
+                    exc_info=True,
+                )
+                self._q.put_nowait(client)
+                return True
+            else:
+                self._q.put_nowait(client)
+                return True
+
+        results = await asyncio.gather(*(_ping(client) for client in idle))
+        return sum(results)
+
     async def close(self) -> None:
         if self._closed:
             return
