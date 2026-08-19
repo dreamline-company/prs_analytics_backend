@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import bindparam, insert, select, update
 
 from apps.wells.dto.internal.repositories.well import CreateWellDTO, UpdateWellDTO
 from apps.wells.models.well import Well
@@ -96,6 +96,30 @@ class WellRepository(
             update(Well)
             .where(Well.abai_id.in_(abai_ids))
             .values(is_deleted=is_deleted),
+        )
+
+    async def update_coords_by_abai_ids(
+        self,
+        coords_id_by_abai_id: dict[int, int | None],
+    ) -> None:
+        """Проставить coords_id пачкой (один executemany вместо N UPDATE)."""
+        if not coords_id_by_abai_id:
+            return
+
+        # Core-выражение по таблице, а не по модели: ORM-сессия иначе принимает
+        # список параметров за bulk update по первичному ключу.
+        table = Well.__table__
+        stmt = (
+            update(table)
+            .where(table.c.abai_id == bindparam("b_abai_id"))
+            .values(coords_id=bindparam("b_coords_id"))
+        )
+        await self.session.execute(
+            stmt,
+            [
+                {"b_abai_id": abai_id, "b_coords_id": coords_id}
+                for abai_id, coords_id in coords_id_by_abai_id.items()
+            ],
         )
 
     async def update_names_by_abai_id(self, names_by_abai_id: dict[int, str]) -> None:

@@ -1,6 +1,5 @@
 from datetime import date, datetime
 
-from geoalchemy2 import Geometry
 from sqlalchemy import (
     DOUBLE_PRECISION,
     BigInteger,
@@ -13,8 +12,35 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import UserDefinedType
 
 from shared.database.sql.models import ABAIBaseModel
+
+
+class PgPoint(UserDefinedType):
+    """Родной тип PostgreSQL ``point``.
+
+    В ABAI координаты лежат геометрическими типами Postgres, а не PostGIS:
+    объявлять их как ``Geometry`` нельзя — SELECT оборачивал бы колонку в
+    ``ST_AsEWKB()``, которой для типа ``point`` не существует. Драйвер отдаёт
+    значение как ``asyncpg.Point``.
+    """
+
+    cache_ok = True
+
+    def get_col_spec(self, **kw: object) -> str:
+        _ = kw
+        return "point"
+
+
+class PgPolygon(UserDefinedType):
+    """Родной тип PostgreSQL ``polygon`` (см. :class:`PgPoint`)."""
+
+    cache_ok = True
+
+    def get_col_spec(self, **kw: object) -> str:
+        _ = kw
+        return "polygon"
 
 
 class Well(ABAIBaseModel):
@@ -101,13 +127,13 @@ class SpatialObject(ABAIBaseModel):
     )
 
     coord_point: Mapped[object | None] = mapped_column(
-        Geometry(geometry_type="POINT"),
+        PgPoint(),
         nullable=True,
         comment="Координаты объекта типа ТОЧКА",
     )
 
     coord_polygon: Mapped[object | None] = mapped_column(
-        Geometry(geometry_type="POLYGON"),
+        PgPolygon(),
         nullable=True,
         comment="Координаты объекта типа ПОЛИГОН",
     )

@@ -15,10 +15,12 @@ from apps.telemetry.repositories.tech_regime import TechRegimeRepository
 from apps.telemetry.repositories.telemetry import TelemetryRepository
 from apps.wells.dto.internal.well import WellShortDTO
 from apps.wells.dto.internal.well_card import WellCardDTO
+from apps.wells.dto.internal.well_coords import WellCoordMapPointDTO
 from apps.wells.dto.internal.well_matrix import WellMatrixItemDTO
 from apps.wells.dto.internal.well_matrix_incidents import WellMatrixIncidentDTO
 from apps.wells.dto.queries.well import (
     GetWellCardQuery,
+    GetWellCoordsQuery,
     GetWellMatrixIncidentsQuery,
     GetWellsMatrixQuery,
     SearchWellsByNameQuery,
@@ -26,14 +28,17 @@ from apps.wells.dto.queries.well import (
 from apps.wells.dto.responses.well import (
     SearchWellsResponseDTO,
     WellCardResponseDTO,
+    WellCoordsResponseDTO,
     WellMatrixIncidentsResponseDTO,
     WellsMatrixResponseDTO,
 )
+from apps.wells.repositories.coords import WellCoordRepository
 from apps.wells.repositories.status_history import WellStatusHistoryRepository
 from apps.wells.repositories.well import WellRepository
 from apps.wells.repositories.well_expl import WellExplRepository
-from apps.wells.services import NGDUWellsService
+from apps.wells.services import CoordPointService, NGDUWellsService
 from apps.wells.use_cases.get_well_card import GetWellCardUseCase
+from apps.wells.use_cases.get_well_coords import GetWellCoordsUseCase
 from apps.wells.use_cases.get_well_matrix_incidents import (
     GetWellMatrixIncidentsUseCase,
 )
@@ -120,6 +125,27 @@ async def get_well_matrix_incidents(
     return WellMatrixIncidentsResponseDTO(data=incidents)
 
 
+@router.get("/coords", response_model=AppResponse[list[WellCoordMapPointDTO]])
+async def get_well_coords(
+    app_session: Annotated[AsyncSession, Depends(get_app_session)],
+    abai_session: Annotated[AsyncSession, Depends(get_abai_session)],
+    ngdu_id: Annotated[
+        int | None,
+        Query(ge=1, description="Optional local Org.id of the NGDU to filter by"),
+    ] = None,
+) -> WellCoordsResponseDTO:
+    use_case = GetWellCoordsUseCase(
+        well_coord_repository=WellCoordRepository(session=app_session),
+        ngdu_wells_service=NGDUWellsService(
+            org_repository=OrgRepository(session=app_session),
+            well_repository=WellRepository(session=app_session),
+            abai_well_org_repository=ABAIWellOrgRepository(session=abai_session),
+        ),
+    )
+    points = await use_case.execute(GetWellCoordsQuery(ngdu_id=ngdu_id))
+    return WellCoordsResponseDTO(data=points)
+
+
 @router.get("/{well_id}/card", response_model=AppResponse[WellCardDTO])
 async def get_well_card(
     session: Annotated[AsyncSession, Depends(get_app_session)],
@@ -132,6 +158,9 @@ async def get_well_card(
         sdmo_station_repository=SdmoStationRepository(session=session),
         sdmo_fc_data_repository=SdmoFcDataRepository(session=session),
         well_status_history_repository=WellStatusHistoryRepository(session=session),
+        coord_point_service=CoordPointService(
+            well_coord_repository=WellCoordRepository(session=session),
+        ),
     )
     card = await use_case.execute(GetWellCardQuery(well_id=well_id))
     return WellCardResponseDTO(data=card)

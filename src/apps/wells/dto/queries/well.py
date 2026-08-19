@@ -24,3 +24,9 @@ class GetWellMatrixIncidentsQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ngdu_id: int = Field(ge=1)
+
+
+class GetWellCoordsQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ngdu_id: int | None = Field(default=None, ge=1)

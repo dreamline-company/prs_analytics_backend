@@ -19,6 +19,7 @@ from apps.wells.dto.internal.well_card import (
 from apps.wells.dto.queries.well import GetWellCardQuery
 from apps.wells.repositories.status_history import WellStatusHistoryRepository
 from apps.wells.repositories.well import WellRepository
+from apps.wells.services import CoordPointService
 from shared.errors import HttpError
 
 # «Дней с дебитом 0» пока не считается — источника нет, отдаём 0.
@@ -41,6 +42,7 @@ class GetWellCardUseCase:
         sdmo_station_repository: SdmoStationRepository,
         sdmo_fc_data_repository: SdmoFcDataRepository,
         well_status_history_repository: WellStatusHistoryRepository,
+        coord_point_service: CoordPointService,
     ) -> None:
         self.well_repository = well_repository
         self.telemetry_repository = telemetry_repository
@@ -48,6 +50,7 @@ class GetWellCardUseCase:
         self.sdmo_station_repository = sdmo_station_repository
         self.sdmo_fc_data_repository = sdmo_fc_data_repository
         self.well_status_history_repository = well_status_history_repository
+        self.coord_point_service = coord_point_service
 
     async def execute(self, query: GetWellCardQuery) -> WellCardDTO:
         well = await self.well_repository.get_by_id(id_=query.well_id)
@@ -70,6 +73,7 @@ class GetWellCardUseCase:
         last_status = await self.well_status_history_repository.get_last_by_well_id(
             well_id=well.id,
         )
+        coord = await self.coord_point_service.resolve(well.coords_id)
 
         oil_rate = telemetry.qm_oil if telemetry else None
         liquid_rate = telemetry.qv_liquid if telemetry else None
@@ -81,6 +85,7 @@ class GetWellCardUseCase:
             status=(
                 WellCardStatusDTO.model_validate(last_status) if last_status else None
             ),
+            coord=coord,
             passport=WellCardPassportDTO(
                 oil_rate=oil_rate,
                 liquid_rate=liquid_rate,

@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from apps.wells.dto.internal.coord_point import WellCoordPointDTO
+
 
 class WellCardStatusDTO(BaseModel):
     """Последняя запись из wells_well_status_history."""
@@ -34,4 +36,5 @@ class WellCardDTO(BaseModel):
     well_name: str
     device: str | None
     status: WellCardStatusDTO | None
+    coord: WellCoordPointDTO | None
     passport: WellCardPassportDTO
