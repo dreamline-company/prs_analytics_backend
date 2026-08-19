@@ -46,6 +46,16 @@ class TechRegimeRepository(
             ),
         )
 
+    async def get_last_by_abai_well_id(self, abai_well_id: int) -> TechRegime | None:
+        regimes = await self.get_list(
+            QuerySpec(
+                filters=(TechRegime.abai_well_id == abai_well_id,),
+                order_by=(TechRegime.start_date.desc(), TechRegime.id.desc()),
+                limit=1,
+            ),
+        )
+        return regimes[0] if regimes else None
+
     async def list_by_abai_well_id(
         self,
         abai_well_id: int,

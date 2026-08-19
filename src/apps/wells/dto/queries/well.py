@@ -12,3 +12,15 @@ class GetWellsMatrixQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ngdu_id: int = Field(ge=1)
+
+
+class GetWellCardQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    well_id: int = Field(ge=1)
+
+
+class GetWellMatrixIncidentsQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ngdu_id: int = Field(ge=1)

@@ -11,6 +11,11 @@ from apps.detectors.rod_breaks.tasks.run_detection import (  # noqa: F401
 from apps.telemetry.tasks.load_sdmo.incremental_load import (  # noqa: F401
     load_sdmo_incremental,
 )
+
+# Импорт регистрирует таску инкрементальной загрузки способов эксплуатации.
+from apps.wells.tasks.load_well_expl.load_well_expl import (  # noqa: F401
+    load_well_expl_incremental,
+)
 from core.settings import get_settings
 
 settings = get_settings()
@@ -32,6 +37,11 @@ celery_app.conf.beat_schedule = {
     "telemetry-sdmo-incremental": {
         "task": "telemetry.sdmo.incremental_load",
         "schedule": crontab(minute="*/30"),
+    },
+    # Ежедневная догрузка периодов эксплуатации из ABAI (новые id + правки dend).
+    "wells-well-expl-incremental": {
+        "task": "wells.well_expl.incremental_load",
+        "schedule": crontab(hour=5, minute=30),
     },
     # Ежедневный прогон детектора обрыва штанги (R2) по флоту type_1900=6.
     # В 06:00 — после ночной загрузки телеметрии (load_sdmo).

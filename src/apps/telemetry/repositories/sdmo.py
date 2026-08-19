@@ -24,10 +24,11 @@ from shared.repository.sqlalchemy import (
 
 # Регистры параметров СДМО для API (type_1900 = 1/6/16; имена из
 # telemetry_sdmo_fc_reg): 1998 «Скорость ротора», 1991 «Момент штанги/на валу»,
-# 1614 «Ток двигателя».
+# 1614 «Ток двигателя», 1997 «Относительное заполнение насоса».
 ROTOR_SPEED_REGISTER = 1998
 PUMP_MOMENT_REGISTER = 1991
 ENGINE_CURRENT_REGISTER = 1614
+PUMP_FILL_REGISTER = 1997
 
 # Порядок колонок для COPY в telemetry_sdmo_fc_data (id/created_at заполняет БД).
 FC_DATA_COPY_COLUMNS: tuple[str, ...] = (
@@ -180,6 +181,47 @@ class SdmoFcDataRepository(
                 order_by=(SdmoFcData.savetime,),
             ),
         )
+
+    async def get_last_pump_parameters_by_stations(
+        self,
+        station_sdmo_ids: Sequence[int],
+    ) -> RowMapping | None:
+        """Последний отсчёт (savetime, момент, скорость, заполнение) по станциям.
+
+        Запрос делается по одной станции за раз: равенство по
+        sdmo_station_id + LIMIT 1 — это обратный index scan по
+        ``ix_telemetry_sdmo_fc_data_station_savetime``, тогда как фильтр
+        ``IN (...)`` с ``ORDER BY savetime DESC`` заставил бы сортировать все
+        строки станций (сотни тысяч на станцию). У скважины обычно одна станция.
+        """
+        rows: list[RowMapping] = []
+        for station_sdmo_id in station_sdmo_ids:
+            found = await self.get_projection_list(
+                ProjectionQuerySpec(
+                    joins=(),
+                    fields=(
+                        SdmoFcData.savetime,
+                        getattr(SdmoFcData, f"r_{PUMP_MOMENT_REGISTER}").label(
+                            "pump_moment",
+                        ),
+                        getattr(SdmoFcData, f"r_{ROTOR_SPEED_REGISTER}").label(
+                            "pump_speed",
+                        ),
+                        getattr(SdmoFcData, f"r_{PUMP_FILL_REGISTER}").label(
+                            "pump_fill",
+                        ),
+                    ),
+                    filters=(SdmoFcData.sdmo_station_id == station_sdmo_id,),
+                    order_by=(SdmoFcData.savetime.desc(),),
+                    limit=1,
+                ),
+            )
+            rows.extend(found)
+
+        if not rows:
+            return None
+
+        return max(rows, key=lambda row: row["savetime"])
 
     async def list_parameters_by_stations_period(
         self,

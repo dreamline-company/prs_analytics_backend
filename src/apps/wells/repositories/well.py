@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-from sqlalchemy import insert, update
+from sqlalchemy import insert, select, update
 
 from apps.wells.dto.internal.repositories.well import CreateWellDTO, UpdateWellDTO
 from apps.wells.models.well import Well
@@ -32,6 +32,10 @@ class WellRepository(
                 filters=(Well.name == name,),
             ),
         )
+
+    async def list_abai_ids(self) -> set[int]:
+        result = await self.session.execute(select(Well.abai_id))
+        return set(result.scalars().all())
 
     async def list_by_abai_ids(self, abai_ids: Sequence[int]) -> Sequence[Well]:
         if not abai_ids:

@@ -412,3 +412,73 @@ class WellOrg(ABAIBaseModel):
         nullable=True,
         comment="Дата окончания действия",
     )
+
+
+class WellExplType(ABAIBaseModel):
+    __tablename__ = "well_expl_type"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        comment="ID",
+    )
+
+    name_ru: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Наименование на русском языке",
+    )
+
+    name_short_ru: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Краткое наименование на русском языке",
+    )
+
+    tbd_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        comment="Идентификатор в справочнике-источнике",
+    )
+
+    code: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Мнемокод способа эксплуатации",
+    )
+
+
+class WellExpl(ABAIBaseModel):
+    __tablename__ = "well_expl"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        comment="ID",
+    )
+
+    well: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("well.id"),
+        nullable=True,
+        comment="Скважина. Ссылка на поле id таблицы well",
+    )
+
+    expl: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("well_expl_type.id"),
+        nullable=True,
+        comment="Способ эксплуатации. Ссылка на поле id таблицы well_expl_type",
+    )
+
+    dbeg: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        comment="Дата начала действия",
+    )
+
+    dend: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        comment="Дата окончания действия",
+    )

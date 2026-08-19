@@ -31,7 +31,9 @@ from apps.wells.models.coords import Coord, WellCoord
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.models.spo import SPO
 from apps.wells.models.spo_event import SPOEvent
+from apps.wells.models.status_history import WellStatusHistory
 from apps.wells.models.well import Well
+from apps.wells.models.well_expl import WellExpl, WellExplType
 
 __all__ = (
     "NGDU",
@@ -68,6 +70,9 @@ __all__ = (
     "UniqueBrigade",
     "Well",
     "WellCoord",
+    "WellExpl",
+    "WellExplType",
+    "WellStatusHistory",
 )
 
 from shared.database.sql.models import AppBaseModel

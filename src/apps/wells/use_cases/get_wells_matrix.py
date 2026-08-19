@@ -1,15 +1,11 @@
 """Build a matrix of wells under a given NGDU.
 
 Resolution chain:
-  1. Load the NGDU-typed ``Org`` by local id → collect all descendant orgs
-     via ``parent_id`` (stored as ABAI id).
-  2. Query ABAI ``well_org`` for rows whose ``org`` is in that descendant
-     set → group by well, pick the current one (latest ``dbeg``).
-  3. Include only wells whose current well_org is still within the NGDU
-     subtree (i.e. the well hasn't been moved elsewhere).
-  4. Fetch local ``Well``s by their ABAI ids; mark ``is_on_repair`` when
-     an unfinished ``Repair`` exists for the same ``abai_well_id``.
-  5. For wells currently on repair, build a legend: the active repair,
+  1. Resolve the NGDU's wells via ``NGDUWellsService`` (org subtree → ABAI
+     ``well_org`` → local ``Well``s).
+  2. Mark ``is_on_repair`` when an unfinished ``Repair`` exists for the same
+     ``abai_well_id``.
+  3. For wells currently on repair, build a legend: the active repair,
      the unique brigade linked to it (nullable), and — if a brigade is
      found — the danger-zone violation screens accumulated during that
      repair's interval.
@@ -19,7 +15,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from apps.org.dto.internal.brigade import BrigadeDangerDTO, BrigadeShortDTO
@@ -31,17 +27,13 @@ _YEAR = timedelta(days=365)
 
 if TYPE_CHECKING:
     from apps.org.models.brigade import UniqueBrigade
-    from apps.org.models.org import Org
     from apps.org.repositories.brigade import UniqueBrigadeRepository
-    from apps.org.repositories.org import OrgRepository
     from apps.repairs.models.repair import Repair
     from apps.repairs.repositories.brigade import RepairBrigadeRepository
     from apps.repairs.repositories.repair import RepairRepository
     from apps.wells.dto.queries.well import GetWellsMatrixQuery
     from apps.wells.models.well import Well
-    from apps.wells.repositories.well import WellRepository
-    from shared.integrations.abai.models import WellOrg
-    from shared.integrations.abai.repositories.well_orgs import ABAIWellOrgRepository
+    from apps.wells.services import NGDUWellsService
     from shared.integrations.cm.models import BrigadeErrorScreen
     from shared.integrations.cm.repositories.brigade_error_screens import (
         CMBrigadeErrorScreenRepository,
@@ -57,60 +49,25 @@ class GetWellsMatrixUseCase:
     def __init__(  # noqa: PLR0913
         self,
         *,
-        org_repository: OrgRepository,
-        well_repository: WellRepository,
+        ngdu_wells_service: NGDUWellsService,
         repair_repository: RepairRepository,
         repair_brigade_repository: RepairBrigadeRepository,
         unique_brigade_repository: UniqueBrigadeRepository,
         cm_brigade_repository: CMBrigadeRepository,
         cm_brigade_error_screen_repository: CMBrigadeErrorScreenRepository,
-        abai_well_org_repository: ABAIWellOrgRepository,
     ) -> None:
-        self.org_repository = org_repository
-        self.well_repository = well_repository
+        self.ngdu_wells_service = ngdu_wells_service
         self.repair_repository = repair_repository
         self.repair_brigade_repository = repair_brigade_repository
         self.unique_brigade_repository = unique_brigade_repository
         self.cm_brigade_repository = cm_brigade_repository
         self.cm_brigade_error_screen_repository = cm_brigade_error_screen_repository
-        self.abai_well_org_repository = abai_well_org_repository
 
     async def execute(
         self,
         query: GetWellsMatrixQuery,
     ) -> list[WellMatrixItemDTO]:
-        ngdu = await self.org_repository.get_by_id(query.ngdu_id)
-        if ngdu is None:
-            return []
-
-        descendants_abai_ids = await self._descendants_abai_ids(ngdu)
-        if not descendants_abai_ids:
-            return []
-
-        well_orgs = await self.abai_well_org_repository.list_by_orgs(
-            list(descendants_abai_ids),
-        )
-        if not well_orgs:
-            return []
-
-        current_by_well: dict[int, WellOrg] = {}
-        for row in well_orgs:
-            if row.well is None or row.org is None:
-                continue
-            existing = current_by_well.get(row.well)
-            if existing is None or self._is_newer(row, existing):
-                current_by_well[row.well] = row
-
-        well_abai_ids = [
-            well_abai_id
-            for well_abai_id, current in current_by_well.items()
-            if current.org in descendants_abai_ids
-        ]
-        if not well_abai_ids:
-            return []
-
-        wells = await self.well_repository.list_by_abai_ids(well_abai_ids)
-        wells = [w for w in wells if not w.is_deleted]
+        wells = await self.ngdu_wells_service.list_wells(query.ngdu_id)
         if not wells:
             return []
 
@@ -317,32 +274,6 @@ class GetWellsMatrixUseCase:
         for s in screens:
             result[s.brigade_id].append(s)
         return result
-
-    async def _descendants_abai_ids(self, ngdu: Org) -> set[int]:
-        all_orgs = await self.org_repository.list_all()
-        children_by_parent: dict[int, list[Org]] = defaultdict(list)
-        for org in all_orgs:
-            if org.parent_id is not None:
-                children_by_parent[org.parent_id].append(org)
-
-        result: set[int] = {ngdu.abai_id}
-        stack: list[int] = [ngdu.abai_id]
-        while stack:
-            parent_abai_id = stack.pop()
-            for child in children_by_parent.get(parent_abai_id, ()):
-                if child.abai_id in result:
-                    continue
-                result.add(child.abai_id)
-                stack.append(child.abai_id)
-        return result
-
-    @staticmethod
-    def _is_newer(candidate: WellOrg, current: WellOrg) -> bool:
-        c_dbeg = candidate.dbeg or date.min
-        cur_dbeg = current.dbeg or date.min
-        if c_dbeg != cur_dbeg:
-            return c_dbeg > cur_dbeg
-        return candidate.id > current.id
 
     @staticmethod
     def _extract_brigade_number(name: str) -> str | None:
