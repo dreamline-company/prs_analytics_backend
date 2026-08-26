@@ -1,8 +1,9 @@
 import inspect
 
-from apps.detectors.rod_breaks.models.detection import (
-    RodBreakDetection,
-    RodBreakRun,
+from apps.detectors.models.incident import (
+    Detector,
+    DetectorCursor,
+    DetectorIncident,
 )
 from apps.files.models.file import File
 from apps.kbrs.models.measure import KbrsMeasure
@@ -40,6 +41,9 @@ __all__ = (
     "SPO",
     "Brigade",
     "Coord",
+    "Detector",
+    "DetectorCursor",
+    "DetectorIncident",
     "Dynamogram",
     "File",
     "KbrsMeasure",
@@ -59,8 +63,6 @@ __all__ = (
     "RepairSummary",
     "RepairTransport",
     "RepairType",
-    "RodBreakDetection",
-    "RodBreakRun",
     "SPOEvent",
     "SdmoFcData",
     "SdmoFcReg",

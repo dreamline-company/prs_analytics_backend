@@ -38,6 +38,7 @@ class SdmoIncrementalLoad:
             logger.info("Incremental SDMO load: %s stations", len(stations))
             started = time.monotonic()
             total = 0
+            changed_stations: list[int] = []
             for i, station_id in enumerate(stations, 1):
                 loaded = await loader.load_station_delta(
                     app_session,
@@ -47,6 +48,8 @@ class SdmoIncrementalLoad:
                     label=f"[{i}/{len(stations)}] ",
                 )
                 total += loaded
+                if loaded:
+                    changed_stations.append(station_id)
             elapsed = time.monotonic() - started
             rate = total / elapsed if elapsed else 0
             logger.info(
@@ -54,6 +57,29 @@ class SdmoIncrementalLoad:
                 f"{total:,}",
                 elapsed,
                 rate,
+            )
+            self._dispatch_detectors(changed_stations)
+
+    @staticmethod
+    def _dispatch_detectors(changed_stations: list[int]) -> None:
+        """Разбудить детекторы по станциям, куда реально приехали строки.
+
+        Запуск через брокер: при standalone-прогоне без Redis загрузка не
+        должна падать — детекторы догонит подметальщик по курсорам.
+        """
+        if not changed_stations:
+            return
+        try:
+            # Ленивый импорт: обходит цикл load_sdmo <-> детекторы на старте.
+            from apps.detectors.tasks.dispatch.dispatch import (  # noqa: PLC0415
+                dispatch_detectors,
+            )
+
+            dispatch_detectors.delay("sdmo", changed_stations)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Detectors dispatch skipped (broker unavailable); "
+                "sweep will catch up",
             )
 
 

@@ -2,9 +2,13 @@ from celery.schedules import crontab
 
 from apps.celery_app import celery_app
 
-# Импорт регистрирует celery-задачи детекторов в приложении (worker/beat).
-from apps.detectors.rod_breaks.tasks.run_detection import (  # noqa: F401
-    run_rod_break_detection,
+# Импорт регистрирует celery-задачи детекторов (диспетчер, подметальщик, R2).
+from apps.detectors.rod_breaks.tasks.run_incidents.run_incidents import (  # noqa: F401
+    run_rod_break_incidents,
+)
+from apps.detectors.tasks.dispatch.dispatch import (  # noqa: F401
+    dispatch_detectors,
+    sweep_detectors,
 )
 
 # Импорт регистрирует таску инкрементальной загрузки телеметрии SDMO.
@@ -33,20 +37,21 @@ celery_app.conf.update(
 )
 
 celery_app.conf.beat_schedule = {
-    # Инкрементальная догрузка телеметрии SDMO — каждые 30 минут.
+    # Инкрементальная догрузка телеметрии SDMO — каждые 5 минут (источник
+    # пишет ~раз в 5 минут; детекторы запускаются по факту прихода данных).
     "telemetry-sdmo-incremental": {
         "task": "telemetry.sdmo.incremental_load",
-        "schedule": crontab(minute="*/30"),
+        "schedule": crontab(minute="*/5"),
+    },
+    # Страховка детекторов: догнать станции, чьи курсоры отстали от данных
+    # (потерянные задачи, первичный прогон истории, включённые правила).
+    "detectors-sweep": {
+        "task": "detectors.sweep",
+        "schedule": crontab(minute="*/15"),
     },
     # Ежедневная догрузка периодов эксплуатации из ABAI (новые id + правки dend).
     "wells-well-expl-incremental": {
         "task": "wells.well_expl.incremental_load",
         "schedule": crontab(hour=5, minute=30),
-    },
-    # Ежедневный прогон детектора обрыва штанги (R2) по флоту type_1900=6.
-    # В 06:00 — после ночной загрузки телеметрии (load_sdmo).
-    "detectors-rod-breaks-daily": {
-        "task": "detectors.rod_breaks.run",
-        "schedule": crontab(hour=6, minute=0),
     },
 }

@@ -10,11 +10,11 @@ from datetime import datetime, timedelta
 
 from apps.detectors.rod_breaks import config
 from apps.detectors.rod_breaks.dto.internal.bucket import Bucket2h
-from apps.detectors.rod_breaks.models.detection import (
-    EVENT_CLASS_ACTIONABLE,
-    EVENT_CLASS_ALREADY_STOPPED,
-    EVENT_CLASS_FAILED_LONG_BEFORE,
-)
+
+# Класс события отказа (восстанавливается из телеметрии, см. spec раздел 5).
+EVENT_CLASS_ACTIONABLE = "actionable"
+EVENT_CLASS_FAILED_LONG_BEFORE = "failed_long_before_repair"
+EVENT_CLASS_ALREADY_STOPPED = "already_stopped"
 
 
 def recover_failure_dt(
