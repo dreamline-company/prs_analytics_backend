@@ -37,7 +37,8 @@ down-api: ## Stop and remove API service containers.
 logs-api: ## Show API service logs. Use TAIL=100 and FOLLOW=1 to control output.
 	$(API_COMPOSE) logs $(LOG_OPTIONS) api
 
-up-celery: ## Build and start the Celery beat service in detached mode.
+up-celery: ## Build and start Celery worker, beat and Flower in detached mode.
+	@touch deploy/app/docker.env
 	$(CELERY_COMPOSE) up -d --build
 
 down-celery: ## Stop and remove Celery beat service containers.

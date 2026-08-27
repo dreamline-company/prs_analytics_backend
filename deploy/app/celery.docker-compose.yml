@@ -5,11 +5,16 @@ services:
       service: common
     container_name: prs_eff_celery_worker
     command: celery -A entrypoints.celery:celery_app worker --loglevel=info
-    # docker.env переопределяет адреса БД из src/.env на host.docker.internal:
-    # хостовые localhost/0.0.0.0 изнутри контейнера указывают на сам контейнер.
+    # docker.env переопределяет адреса БД из src/.env на host.docker.internal,
+    # когда БД/туннели живут на хост-машине: хостовые localhost/0.0.0.0 изнутри
+    # контейнера указывают на сам контейнер. Файл в .gitignore; make up-celery
+    # создаёт пустой, если его нет (пустой = адреса src/.env годятся как есть).
     env_file:
       - ../../src/.env
       - ./docker.env
+    # На Linux host.docker.internal сам не резолвится (в Docker Desktop — да).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   celery_beat:
