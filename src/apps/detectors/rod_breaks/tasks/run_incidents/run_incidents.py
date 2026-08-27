@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.celery_app import celery_app
+from apps.celery_app import celery_app, run_async
 from apps.detectors.dto.internal.repositories.incident import OpenIncidentDTO
 from apps.detectors.models.incident import (
     INCIDENT_LEVEL_ALARM,
@@ -333,7 +333,7 @@ async def main(entity_ids: list[int] | None = None) -> None:
 
 @celery_app.task(name="detectors.rod_breaks.run_incidents")
 def run_rod_break_incidents(entity_ids: list[int] | None = None) -> None:
-    asyncio.run(main(entity_ids))
+    run_async(main(entity_ids))
 
 
 if __name__ == "__main__":

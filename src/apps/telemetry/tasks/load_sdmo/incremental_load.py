@@ -8,7 +8,7 @@
 import asyncio
 import time
 
-from apps.celery_app import celery_app
+from apps.celery_app import celery_app, run_async
 from apps.models_registry import *  # noqa: F403
 from apps.telemetry.repositories import SdmoFcDataRepository
 from apps.telemetry.tasks.load_sdmo import loader
@@ -89,7 +89,7 @@ async def main() -> None:
 
 @celery_app.task(name="telemetry.sdmo.incremental_load")
 def load_sdmo_incremental() -> None:
-    asyncio.run(SdmoIncrementalLoad().run())
+    run_async(SdmoIncrementalLoad().run())
 
 
 if __name__ == "__main__":

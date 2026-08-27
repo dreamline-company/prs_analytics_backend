@@ -121,6 +121,32 @@ class AiobotoFileStorage:
                 ExpiresIn=expires_in,
             )
 
+    async def generate_presigned_urls(
+        self,
+        file_paths: Iterable[str],
+        *,
+        expires_in: int = 3600,
+    ) -> dict[str, str]:
+        """Presigned-ссылки на пачку объектов: клиент открывается один раз.
+
+        Подпись считается локально, сети здесь нет — дорого только создание
+        клиента, поэтому список ключей обслуживается одним ``async with``.
+        """
+        paths = list(dict.fromkeys(file_paths))
+        if not paths:
+            return {}
+
+        factory = self.presign_client_factory or self.client_factory
+        async with factory() as client:
+            return {
+                path: await client.generate_presigned_url(
+                    ClientMethod="get_object",
+                    Params={"Bucket": self.bucket_name, "Key": path},
+                    ExpiresIn=expires_in,
+                )
+                for path in paths
+            }
+
     async def list_dir(self, prefix: str) -> list[str] | None:
         try:
             async with self.client_factory() as client:

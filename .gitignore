@@ -133,3 +133,4 @@ src/audios/*
 
 # Backtest reports (see src/apps/detectors/rod_breaks/backtest)
 reports/
+deploy/app/docker.env

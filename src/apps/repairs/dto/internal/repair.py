@@ -15,3 +15,13 @@ class RepairDTO(BaseModel):
     work_plan: str | None
     start_time: datetime
     end_time: datetime | None
+
+
+class CurrentRepairDTO(RepairDTO):
+    """Идущий ремонт скважины — RepairDTO плюс название типа.
+
+    Один ``repair_type_id`` нечитаем, а тип ремонта — то, ради чего этот блок
+    и смотрят («Смена насоса», «Ревизия насоса»).
+    """
+
+    repair_type_name_ru: str | None = None

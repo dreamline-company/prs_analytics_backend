@@ -8,12 +8,14 @@
 прогон истории — у нового правила курсоров нет, значит отстают все станции).
 """
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 
-from apps.celery_app import celery_app
+from apps.celery_app import celery_app, run_async
+from apps.detectors.load_imbalance.tasks.run_incidents.run_incidents import (
+    DETECTOR_CODE as LOAD_IMBALANCE_CODE,
+)
 from apps.detectors.repositories import (
     DetectorCursorRepository,
     DetectorRepository,
@@ -34,6 +36,7 @@ logger = get_logger(__name__)
 # Правило -> celery-задача его раннера. Новый детектор = новая пара здесь.
 RUNNER_TASKS: dict[str, str] = {
     ROD_BREAK_CODE: "detectors.rod_breaks.run_incidents",
+    LOAD_IMBALANCE_CODE: "detectors.load_imbalance.run_incidents",
 }
 
 # Подметальщик считает станцию отставшей, если курсор позади фронта данных
@@ -74,7 +77,7 @@ async def _dispatch(source: str, entity_ids: list[int] | None) -> None:
 
 @celery_app.task(name="detectors.dispatch")
 def dispatch_detectors(source: str, entity_ids: list[int] | None = None) -> None:
-    asyncio.run(_dispatch(source, entity_ids))
+    run_async(_dispatch(source, entity_ids))
 
 
 async def _sweep() -> None:
@@ -122,4 +125,4 @@ async def _sweep() -> None:
 
 @celery_app.task(name="detectors.sweep")
 def sweep_detectors() -> None:
-    asyncio.run(_sweep())
+    run_async(_sweep())

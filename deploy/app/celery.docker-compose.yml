@@ -1,11 +1,16 @@
 services:
-#  No needed currently
-#  celery_worker:
-#    extends:
-#      file: compose.common.yml
-#      service: common
-#    container_name: prs_eff_celery_worker
-#    command: celery -A ../../src/entrypoints/celery/celery_app worker --loglevel=info
+  celery_worker:
+    extends:
+      file: compose.common.yml
+      service: common
+    container_name: prs_eff_celery_worker
+    command: celery -A entrypoints.celery:celery_app worker --loglevel=info
+    # docker.env переопределяет адреса БД из src/.env на host.docker.internal:
+    # хостовые localhost/0.0.0.0 изнутри контейнера указывают на сам контейнер.
+    env_file:
+      - ../../src/.env
+      - ./docker.env
+    restart: unless-stopped
 
   celery_beat:
     extends:

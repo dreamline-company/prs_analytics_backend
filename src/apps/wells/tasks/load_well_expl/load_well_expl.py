@@ -20,7 +20,7 @@ from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.celery_app import celery_app
+from apps.celery_app import celery_app, run_async
 from apps.models_registry import *  # noqa: F403
 from apps.wells.dto.internal.repositories.well_expl import (
     CreateWellExplDTO,
@@ -224,7 +224,7 @@ async def main() -> None:
 
 @celery_app.task(name="wells.well_expl.incremental_load")
 def load_well_expl_incremental() -> None:
-    asyncio.run(main())
+    run_async(main())
 
 
 if __name__ == "__main__":

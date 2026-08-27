@@ -3,6 +3,7 @@ from datetime import date, datetime, time
 
 from sqlalchemy import func, or_, select
 
+from apps.repairs.dto.internal.repair import CurrentRepairDTO
 from apps.repairs.dto.internal.repositories.repair import (
     CreateRepairDTO,
     CreateRepairTypeDTO,
@@ -72,6 +73,48 @@ class RepairRepository(
                 order_by=(Repair.start_time.desc(),),
             ),
         )
+
+    async def list_current_by_abai_well_ids(
+        self,
+        abai_well_ids: Sequence[int],
+        *,
+        now: datetime,
+    ) -> dict[int, CurrentRepairDTO]:
+        """Идущий ремонт каждой скважины: начался и не закрыт.
+
+        Связь идёт по ``abai_well_id``: ``Repair.well_id`` загрузчиком не
+        заполняется. Если незакрытых ремонтов у скважины несколько, берётся
+        начатый позже — старые почти всегда означают незакрытую запись, а не
+        второй параллельный ремонт; DISTINCT ON оставляет от каждой скважины
+        ровно одну строку. Название типа тянется тем же запросом, чтобы на
+        матрицу НГДУ не приходилось по запросу на скважину.
+        """
+        if not abai_well_ids:
+            return {}
+
+        stmt = (
+            select(Repair, RepairType.name_ru)
+            .join(RepairType, RepairType.abai_id == Repair.repair_type_id, isouter=True)
+            .where(
+                Repair.abai_well_id.in_(abai_well_ids),
+                Repair.end_time.is_(None),
+                Repair.start_time <= now,
+            )
+            .distinct(Repair.abai_well_id)
+            .order_by(
+                Repair.abai_well_id,
+                Repair.start_time.desc(),
+                Repair.abai_id.desc(),
+            )
+        )
+        result = await self.session.execute(stmt)
+
+        current: dict[int, CurrentRepairDTO] = {}
+        for repair, type_name in result.all():
+            dto = CurrentRepairDTO.model_validate(repair)
+            dto.repair_type_name_ru = type_name
+            current[repair.abai_well_id] = dto
+        return current
 
     async def list_by_ids(self, repair_ids: Sequence[int]) -> Sequence[Repair]:
         if not repair_ids:

@@ -159,6 +159,52 @@ class DetectorIncidentRepository(
             ),
         )
 
+    async def list_by_well_id(  # noqa: PLR0913
+        self,
+        *,
+        well_id: int,
+        detector_code: str | None = None,
+        reason_code: str | None = None,
+        status: str | None = None,
+        level: str | None = None,
+        opened_from: datetime | None = None,
+        opened_to: datetime | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> Sequence[DetectorIncident]:
+        """Эпизоды скважины для выгрузки: свежие сверху, фильтры опциональны.
+
+        Порядок обратный ``list_active_by_well_id``: там нужен таймлайн, здесь —
+        лента, где актуальное читают первым.
+        """
+        filters = [DetectorIncident.well_id == well_id]
+        if detector_code is not None:
+            filters.append(DetectorIncident.detector_code == detector_code)
+        if reason_code is not None:
+            filters.append(DetectorIncident.reason_code == reason_code)
+        if status is not None:
+            filters.append(DetectorIncident.status == status)
+        if level is not None:
+            filters.append(DetectorIncident.level == level)
+        if opened_from is not None:
+            filters.append(DetectorIncident.opened_at >= opened_from)
+        if opened_to is not None:
+            filters.append(DetectorIncident.opened_at <= opened_to)
+
+        return await self.get_list(
+            QuerySpec(
+                filters=tuple(filters),
+                # id вторым ключом: у эпизодов разных правил opened_at совпадает
+                # (обе границы суточные), без него порядок между страницами плывёт.
+                order_by=(
+                    DetectorIncident.opened_at.desc(),
+                    DetectorIncident.id.desc(),
+                ),
+                limit=limit,
+                offset=offset,
+            ),
+        )
+
     async def list_active_by_well_id(
         self,
         well_id: int,
@@ -170,6 +216,23 @@ class DetectorIncidentRepository(
                     DetectorIncident.status == INCIDENT_STATUS_ACTIVE,
                 ),
                 order_by=(DetectorIncident.opened_at,),
+            ),
+        )
+
+    async def list_active_by_well_ids(
+        self,
+        well_ids: Sequence[int],
+    ) -> Sequence[DetectorIncident]:
+        """Активные эпизоды сразу по списку скважин — один запрос на матрицу."""
+        if not well_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(
+                    DetectorIncident.well_id.in_(well_ids),
+                    DetectorIncident.status == INCIDENT_STATUS_ACTIVE,
+                ),
+                order_by=(DetectorIncident.well_id, DetectorIncident.opened_at),
             ),
         )
 

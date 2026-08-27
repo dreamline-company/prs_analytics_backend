@@ -2,6 +2,9 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from apps.detectors.dto.internal.well_status import WellIncidentStatusDTO
+from apps.repairs.dto.internal.repair import CurrentRepairDTO
+from apps.telemetry.dto.internal.well_rates import WellRatesDTO
 from apps.wells.dto.internal.coord_point import WellCoordPointDTO
 
 
@@ -15,15 +18,13 @@ class WellCardStatusDTO(BaseModel):
     created_at: datetime
 
 
-class WellCardPassportDTO(BaseModel):
-    """Паспорт скважины — по последним доступным отсчётам каждого источника."""
+class WellCardPassportDTO(WellRatesDTO):
+    """Паспорт скважины — по последним доступным отсчётам каждого источника.
 
-    # Telemetry (последняя запись по скважине).
-    oil_rate: float | None  # Дебит нефти, т/сут — Telemetry.qm_oil
-    liquid_rate: float | None  # Дебит жидкости, т/сут — Telemetry.qv_liquid
-    water_cut: float | None  # Обводнённость, % — считается из дебитов
-    # TechRegime (последний режим по скважине).
-    plan_oil_rate: float | None  # План Qн, т/сут — TechRegime.oil
+    Дебиты (факт и план) наследуются от общей части, которую карточка делит со
+    строкой матрицы; здесь к ним добавляется оборудование.
+    """
+
     # SdmoFcData (последний отсчёт по привязанным станциям СДМО).
     pump_moment: float | None  # Момент насоса — регистр 1991
     pump_speed: float | None  # Скорость насоса, об/мин — регистр 1998
@@ -35,6 +36,12 @@ class WellCardDTO(BaseModel):
     well_id: int
     well_name: str
     device: str | None
+    # Ручной статус из wells_well_status_history: работает / не работает.
     status: WellCardStatusDTO | None
+    # Что видят детекторы прямо сейчас; при отсутствии активных эпизодов —
+    # level="normal" и «Работает в штатном режиме».
+    incident_status: WellIncidentStatusDTO
+    # Идущий ремонт (начат, не закрыт) или None, если скважина не в ремонте.
+    current_repair: CurrentRepairDTO | None
     coord: WellCoordPointDTO | None
     passport: WellCardPassportDTO

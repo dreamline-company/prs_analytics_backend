@@ -1,6 +1,8 @@
 from collections.abc import Sequence
 from datetime import datetime
 
+from sqlalchemy import select
+
 from apps.telemetry.dto.internal.repositories.telemetry import (
     CreateTelemetryDTO,
     UpdateTelemetryDTO,
@@ -61,6 +63,31 @@ class TelemetryRepository(
 
     async def delete_by_id(self, telemetry_id: int) -> None:
         await self.delete(filters=(Telemetry.id == telemetry_id,))
+
+    async def get_last_by_well_ids(
+        self,
+        well_ids: Sequence[int],
+    ) -> dict[int, Telemetry]:
+        """Последний отсчёт каждой скважины — один запрос на матрицу НГДУ.
+
+        DISTINCT ON оставляет от скважины одну строку; ``id`` в сортировке —
+        tiebreak на случай двух записей с одинаковым ``date_time``.
+        """
+        if not well_ids:
+            return {}
+
+        stmt = (
+            select(Telemetry)
+            .where(Telemetry.well_id.in_(well_ids))
+            .distinct(Telemetry.well_id)
+            .order_by(
+                Telemetry.well_id,
+                Telemetry.date_time.desc(),
+                Telemetry.id.desc(),
+            )
+        )
+        result = await self.session.execute(stmt)
+        return {row.well_id: row for row in result.scalars()}
 
     async def get_last_by_well_id(self, well_id: int) -> Telemetry | None:
         tms = await self.get_list(

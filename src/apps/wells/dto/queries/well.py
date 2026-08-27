@@ -26,6 +26,14 @@ class GetWellMatrixIncidentsQuery(BaseModel):
     ngdu_id: int = Field(ge=1)
 
 
+class ListWellDynamogramsQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    well_id: int = Field(ge=1)
+    # Срок жизни presigned-ссылок, секунды (те же границы, что у /files/{id}).
+    expires_in: int = Field(default=3600, ge=60, le=7 * 24 * 3600)
+
+
 class GetWellCoordsQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

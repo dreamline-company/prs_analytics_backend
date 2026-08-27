@@ -1,3 +1,4 @@
+from apps.wells.dto.internal.dynamogram import WellDynamogramDTO
 from apps.wells.dto.internal.well import WellShortDTO
 from apps.wells.dto.internal.well_card import WellCardDTO
 from apps.wells.dto.internal.well_coords import WellCoordMapPointDTO
@@ -19,3 +20,6 @@ class WellMatrixIncidentsResponseDTO(AppResponse[list[WellMatrixIncidentDTO]]): 
 
 
 class WellCoordsResponseDTO(AppResponse[list[WellCoordMapPointDTO]]): ...
+
+
+class WellDynamogramsResponseDTO(AppResponse[list[WellDynamogramDTO]]): ...

@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import date
 
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 
 from apps.telemetry.dto.internal.repositories.tech_regime import (
     CreateTechRegimeDTO,
@@ -45,6 +45,31 @@ class TechRegimeRepository(
                 order_by=(TechRegime.abai_id.desc(),),
             ),
         )
+
+    async def get_last_by_abai_well_ids(
+        self,
+        abai_well_ids: Sequence[int],
+    ) -> dict[int, TechRegime]:
+        """Последний режим каждой скважины — один запрос на матрицу НГДУ.
+
+        Как и в одиночном методе, «последний» = максимальный ``start_date``
+        (действующий он или уже закончился, здесь не проверяется).
+        """
+        if not abai_well_ids:
+            return {}
+
+        stmt = (
+            select(TechRegime)
+            .where(TechRegime.abai_well_id.in_(abai_well_ids))
+            .distinct(TechRegime.abai_well_id)
+            .order_by(
+                TechRegime.abai_well_id,
+                TechRegime.start_date.desc(),
+                TechRegime.id.desc(),
+            )
+        )
+        result = await self.session.execute(stmt)
+        return {row.abai_well_id: row for row in result.scalars()}
 
     async def get_last_by_abai_well_id(self, abai_well_id: int) -> TechRegime | None:
         regimes = await self.get_list(

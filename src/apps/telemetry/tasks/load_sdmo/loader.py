@@ -79,6 +79,26 @@ def resolve_well_id(code: str | None, wells_ids: dict[str, int]) -> int | None:
     return wells_ids.get(map_well_name(code.strip()))
 
 
+def merge_packets(data: dict | list | None) -> dict:
+    """Свести JSON-пакет строки источника к плоскому словарю регистров.
+
+    Станция шлёт регистры либо одним объектом, либо несколькими пакетами — во
+    втором случае в ``data`` приезжает список объектов (тип поля источника это
+    допускает: ``Mapped[dict | list | None]``). Пакеты сливаются в один словарь,
+    поздний ключ перекрывает ранний. Без слияния ``.get`` по списку роняет
+    загрузку станции целиком.
+    """
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, list):
+        merged: dict = {}
+        for packet in data:
+            if isinstance(packet, dict):
+                merged.update(packet)
+        return merged
+    return {}
+
+
 def reg_value(data: dict, addr: int) -> float | None:
     value = data.get(str(addr))
     if value is None:
@@ -95,7 +115,7 @@ def to_record(row: FcDataDayParted) -> tuple:
     Регистры из JSON `data` раскладываются по колонкам r_<addr> в порядке
     SDMO_REGISTERS; отсутствующие регистры → None.
     """
-    data = row.data or {}
+    data = merge_packets(row.data)
     return (
         row.id,
         row.station_id,

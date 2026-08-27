@@ -2,7 +2,10 @@ from celery.schedules import crontab
 
 from apps.celery_app import celery_app
 
-# Импорт регистрирует celery-задачи детекторов (диспетчер, подметальщик, R2).
+# Импорт регистрирует celery-задачи детекторов (диспетчер, подметальщик, R2, R9).
+from apps.detectors.load_imbalance.tasks.run_incidents.run_incidents import (  # noqa: F401
+    run_load_imbalance_incidents,
+)
 from apps.detectors.rod_breaks.tasks.run_incidents.run_incidents import (  # noqa: F401
     run_rod_break_incidents,
 )
@@ -10,6 +13,12 @@ from apps.detectors.tasks.dispatch.dispatch import (  # noqa: F401
     dispatch_detectors,
     sweep_detectors,
 )
+
+# Импорт регистрирует таску последовательной синхронизации оргструктуры.
+from apps.org.tasks.sync_org.sync_org import sync_org  # noqa: F401
+
+# Импорт регистрирует таску последовательной синхронизации ремонтов.
+from apps.repairs.tasks.sync_repairs.sync_repairs import sync_repairs  # noqa: F401
 
 # Импорт регистрирует таску инкрементальной загрузки телеметрии SDMO.
 from apps.telemetry.tasks.load_sdmo.incremental_load import (  # noqa: F401
@@ -49,9 +58,29 @@ celery_app.conf.beat_schedule = {
         "task": "detectors.sweep",
         "schedule": crontab(minute="*/15"),
     },
+    # R9 — правило суточное: считает вчерашние закрытые сутки. Гарантированный
+    # прогон раз в день; диспетчер по приходу данных его продублирует не чаще
+    # min_interval_sec, а повторный прогон идемпотентен.
+    "detectors-load-imbalance-daily": {
+        "task": "detectors.load_imbalance.run_incidents",
+        "schedule": crontab(hour=4, minute=10),
+    },
     # Ежедневная догрузка периодов эксплуатации из ABAI (новые id + правки dend).
     "wells-well-expl-incremental": {
         "task": "wells.well_expl.incremental_load",
         "schedule": crontab(hour=5, minute=30),
+    },
+    # Ежедневная синхронизация оргструктуры из ABAI: типы организаций ->
+    # организации -> бригады -> дедупликация бригад (порядок внутри таска).
+    "org-sync-daily": {
+        "task": "org.sync",
+        "schedule": crontab(hour=4, minute=40),
+    },
+    # Ежедневная синхронизация ремонтов из ABAI: виды работ -> ремонты ->
+    # актуализация незавершённых (порядок внутри таска). После org.sync,
+    # чтобы ремонты ссылались на свежую оргструктуру.
+    "repairs-sync-daily": {
+        "task": "repairs.sync",
+        "schedule": crontab(hour=5, minute=0),
     },
 }
