@@ -29,6 +29,7 @@ class WellCardPassportDTO(WellRatesDTO):
     pump_moment: float | None  # Момент насоса — регистр 1991
     pump_speed: float | None  # Скорость насоса, об/мин — регистр 1998
     pump_fill: float | None  # Заполнение насоса, % — регистр 1997
+    sdmo_time: datetime | None  # Время отсчёта — SdmoFcData.savetime
     zero_rate_days: int  # Дней с дебитом 0 — пока заглушка
 
 

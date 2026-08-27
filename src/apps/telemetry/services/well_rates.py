@@ -68,7 +68,9 @@ class WellRatesService:
                 oil_rate=oil_rate,
                 liquid_rate=liquid_rate,
                 water_cut=water_cut(liquid_rate=liquid_rate, oil_rate=oil_rate),
+                telemetry_time=last.date_time if last else None,
                 plan_oil_rate=regime.oil if regime else None,
                 plan_liquid_rate=regime.liquid if regime else None,
+                tech_regime_date=regime.start_date if regime else None,
             )
         return rates

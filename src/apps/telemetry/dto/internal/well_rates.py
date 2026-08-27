@@ -1,3 +1,5 @@
+from datetime import date, datetime
+
 from pydantic import BaseModel
 
 
@@ -12,6 +14,8 @@ class WellRatesDTO(BaseModel):
     oil_rate: float | None  # Дебит нефти — Telemetry.qm_oil
     liquid_rate: float | None  # Дебит жидкости — Telemetry.qv_liquid
     water_cut: float | None  # Обводнённость, % — считается из дебитов
+    telemetry_time: datetime | None  # Время замера — Telemetry.date_time
     # TechRegime (последний режим по скважине).
     plan_oil_rate: float | None  # План Qн — TechRegime.oil
     plan_liquid_rate: float | None  # План Qж — TechRegime.liquid
+    tech_regime_date: date | None  # Начало режима — TechRegime.start_date

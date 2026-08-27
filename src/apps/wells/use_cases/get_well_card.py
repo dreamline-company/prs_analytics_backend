@@ -93,6 +93,7 @@ class GetWellCardUseCase:
                 pump_moment=pump["pump_moment"] if pump else None,
                 pump_speed=pump["pump_speed"] if pump else None,
                 pump_fill=pump["pump_fill"] if pump else None,
+                sdmo_time=pump["savetime"] if pump else None,
                 zero_rate_days=ZERO_RATE_DAYS_STUB,
             ),
         )
