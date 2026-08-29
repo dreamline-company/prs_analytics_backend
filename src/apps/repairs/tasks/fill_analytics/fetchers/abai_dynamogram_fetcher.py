@@ -65,8 +65,7 @@ class AbaiDynamogramFetcher:
             else None
         )
         logger.info(
-            "Dynamogram picks for repair id=%s: before=%s after=%s "
-            "(start=%s end=%s).",
+            "Dynamogram picks for repair id=%s: before=%s after=%s (start=%s end=%s).",
             repair.id,
             getattr(before_file, "file_name", None),
             getattr(after_file, "file_name", None),
@@ -83,16 +82,46 @@ class AbaiDynamogramFetcher:
             return None, None
 
         before = (
-            await self._persist(effective_well_id, before_file)
-            if before_file
-            else None
+            await self._persist(effective_well_id, before_file) if before_file else None
         )
         after = (
-            await self._persist(effective_well_id, after_file)
-            if after_file
-            else None
+            await self._persist(effective_well_id, after_file) if after_file else None
         )
         return before, after
+
+    async def fetch_all_for_well(
+        self,
+        *,
+        well_id: int,
+        abai_well_id: int,
+    ) -> tuple[int, int, int]:
+        """Скачать и сохранить все динамограммы скважины из ABAI GDIS.
+
+        Возвращает (created, skipped, failed). Идемпотентно: уже сохранённые
+        (well_id, snapshot_time) не перекачиваются. measure_date в ABAI — дата
+        без времени, поэтому из нескольких файлов за один день сохранится
+        только первый.
+        """
+        files = await self._list_dynamogram_files(abai_well_id)
+        created = skipped = failed = 0
+        for abai_file in files:
+            snapshot_time = self._parse_measure_date(abai_file)
+            if snapshot_time is None:
+                failed += 1
+                continue
+            existing = await self._dynamogram_repo.get_by_well_id_and_snapshot_time(
+                well_id=well_id,
+                snapshot_time=snapshot_time,
+            )
+            if existing is not None:
+                skipped += 1
+                continue
+            row = await self._persist(well_id, abai_file)
+            if row is None:
+                failed += 1
+            else:
+                created += 1
+        return created, skipped, failed
 
     async def _list_dynamogram_files(self, abai_well_id: int) -> list[AbaiFile]:
         try:
@@ -213,7 +242,5 @@ class AbaiDynamogramFetcher:
             headers=headers,
         ) as resp:
             resp.raise_for_status()
-            chunks: list[bytes] = [
-                chunk async for chunk in resp.aiter_bytes() if chunk
-            ]
+            chunks: list[bytes] = [chunk async for chunk in resp.aiter_bytes() if chunk]
             return b"".join(chunks)
