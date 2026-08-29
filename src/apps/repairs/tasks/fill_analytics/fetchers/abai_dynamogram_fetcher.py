@@ -11,6 +11,8 @@ exists, no re-download happens.
 from datetime import datetime
 from io import BytesIO
 
+import httpx
+
 from apps.files.dto.internal.repositories.file import CreateFileDTO
 from apps.files.models.file import File
 from apps.files.repositories.file import FileRepository
@@ -47,7 +49,7 @@ class AbaiDynamogramFetcher:
     ) -> tuple[Dynamogram | None, Dynamogram | None]:
         effective_well_id = well_id if well_id is not None else repair.well_id
 
-        files = await self._list_dynamogram_files(abai_well_id)
+        files = await self._list_dynamogram_files(abai_well_id) or []
         logger.info(
             "ABAI GDIS returned %s dynamogram files for abai_well_id=%s "
             "(repair id=%s).",
@@ -94,15 +96,17 @@ class AbaiDynamogramFetcher:
         *,
         well_id: int,
         abai_well_id: int,
-    ) -> tuple[int, int, int]:
+    ) -> tuple[int, int, int, bool]:
         """Скачать и сохранить все динамограммы скважины из ABAI GDIS.
 
-        Возвращает (created, skipped, failed). Идемпотентно: уже сохранённые
-        (well_id, snapshot_time) не перекачиваются. measure_date в ABAI — дата
-        без времени, поэтому из нескольких файлов за один день сохранится
-        только первый.
+        Возвращает (created, skipped, failed, listing_failed). Идемпотентно:
+        уже сохранённые (well_id, snapshot_time) не перекачиваются.
+        measure_date в ABAI — дата без времени, поэтому из нескольких файлов
+        за один день сохранится только первый.
         """
         files = await self._list_dynamogram_files(abai_well_id)
+        if files is None:
+            return 0, 0, 0, True
         created = skipped = failed = 0
         for abai_file in files:
             snapshot_time = self._parse_measure_date(abai_file)
@@ -121,17 +125,36 @@ class AbaiDynamogramFetcher:
                 failed += 1
             else:
                 created += 1
-        return created, skipped, failed
+        return created, skipped, failed, False
 
-    async def _list_dynamogram_files(self, abai_well_id: int) -> list[AbaiFile]:
+    async def _list_dynamogram_files(
+        self,
+        abai_well_id: int,
+    ) -> list[AbaiFile] | None:
+        """Файлы динамограмм из ГДИС; None — листинг не удался."""
         try:
             result = await self._abai.get_gdis_results(abai_well_id)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.is_client_error:
+                # ABAI отвечает 400 скважинам без ГДИС-формы (не-ШГН фонд и
+                # т.п.) — это «данных нет», трейсбек здесь только шумит.
+                logger.warning(
+                    "ABAI GDIS: нет данных для abai_well_id=%s (HTTP %s)",
+                    abai_well_id,
+                    exc.response.status_code,
+                )
+            else:
+                logger.exception(
+                    "ABAI GDIS request failed for well abai_id=%s.",
+                    abai_well_id,
+                )
+            return None
         except Exception:
             logger.exception(
                 "ABAI GDIS request failed for well abai_id=%s.",
                 abai_well_id,
             )
-            return []
+            return None
         return list(result.dynamogram_files)
 
     @staticmethod

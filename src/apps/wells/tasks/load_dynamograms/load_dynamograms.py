@@ -101,13 +101,15 @@ class LoadDynamograms:
             created = sum(r[0] for r in results)
             skipped = sum(r[1] for r in results)
             failed = sum(r[2] for r in results)
-            failed_wells = sum(r[3] for r in results)
+            no_gdis = sum(r[3] for r in results)
+            failed_wells = sum(r[4] for r in results)
             logger.info(
                 "Dynamogram load done: created=%s, skipped=%s, "
-                "failed_files=%s, failed_wells=%s",
+                "failed_files=%s, wells_without_gdis=%s, failed_wells=%s",
                 created,
                 skipped,
                 failed,
+                no_gdis,
                 failed_wells,
             )
         finally:
@@ -122,11 +124,12 @@ class LoadDynamograms:
         semaphore: asyncio.Semaphore,
         done_counter: list[int],
         total: int,
-    ) -> tuple[int, int, int, int]:
+    ) -> tuple[int, int, int, int, int]:
         """Одна скважина: своя сессия, свой коммит. Возвращает счётчики.
 
-        (created, skipped, failed_files, failed_wells) — упавшая скважина не
-        валит прогон, а попадает в failed_wells и лог.
+        (created, skipped, failed_files, no_gdis, failed_wells) — скважина без
+        ГДИС-формы (ABAI отвечает 400) идёт в no_gdis, упавшая — в failed_wells;
+        ни та ни другая прогон не валят.
         """
         async with semaphore:
             try:
@@ -137,16 +140,31 @@ class LoadDynamograms:
                         file_repo=FileRepository(session),
                         dynamogram_repo=DynamogramRepository(session),
                     )
-                    created, skipped, failed = await fetcher.fetch_all_for_well(
+                    (
+                        created,
+                        skipped,
+                        failed,
+                        listing_failed,
+                    ) = await fetcher.fetch_all_for_well(
                         well_id=well.id,
                         abai_well_id=well.abai_id,
                     )
                     await session.commit()
             except Exception:
                 logger.exception("Well id=%s (%s) failed", well.id, well.name)
-                return (0, 0, 0, 1)
+                return (0, 0, 0, 0, 1)
 
         done_counter[0] += 1
+        if listing_failed:
+            logger.info(
+                "[%s/%s] well id=%s (%s): ГДИС недоступен, пропущена",
+                done_counter[0],
+                total,
+                well.id,
+                well.name,
+            )
+            return (0, 0, 0, 1, 0)
+
         logger.info(
             "[%s/%s] well id=%s (%s): +%s, skipped=%s, failed=%s",
             done_counter[0],
@@ -157,7 +175,7 @@ class LoadDynamograms:
             skipped,
             failed,
         )
-        return (created, skipped, failed, 0)
+        return (created, skipped, failed, 0, 0)
 
     async def _target_wells(self, session) -> list[Well]:  # noqa: ANN001
         stmt = (

@@ -553,7 +553,6 @@ class AbaiAsyncClient:
             "type": type_,
             "page": page,
         }
-        print(params)
         data = await self._get_json(
             "/ru/api/bigdata/forms/current_g_d_i_s/results",
             params=params,
