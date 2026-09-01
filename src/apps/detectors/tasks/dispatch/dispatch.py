@@ -13,10 +13,13 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 
 from apps.celery_app import celery_app, run_async
+from apps.detectors.conclusion.catalog import CONCLUSION_DETECTOR_CODES
+from apps.detectors.conclusion.notify import CONCLUSION_TASK
 from apps.detectors.load_imbalance.tasks.run_incidents.run_incidents import (
     DETECTOR_CODE as LOAD_IMBALANCE_CODE,
 )
 from apps.detectors.repositories import (
+    DetectorConclusionRepository,
     DetectorCursorRepository,
     DetectorRepository,
 )
@@ -123,6 +126,31 @@ async def _sweep() -> None:
         )
 
 
+async def _sweep_conclusions() -> None:
+    """Достроить ИИ-заключения: активные эпизоды без completed под их уровень.
+
+    Ловит потерянные задачи генерации, упавшие LLM-попытки (failed) и эпизоды,
+    открытые до внедрения заключений.
+    """
+    async with session_makers["app"]() as session:
+        missing = await DetectorConclusionRepository(
+            session,
+        ).list_active_incidents_missing_conclusion(CONCLUSION_DETECTOR_CODES)
+
+    if not missing:
+        return
+    logger.info(
+        "Detectors sweep: %s incidents without conclusion",
+        len(missing),
+    )
+    for incident in missing:
+        celery_app.send_task(
+            CONCLUSION_TASK,
+            kwargs={"incident_id": incident.id},
+        )
+
+
 @celery_app.task(name="detectors.sweep")
 def sweep_detectors() -> None:
     run_async(_sweep())
+    run_async(_sweep_conclusions())

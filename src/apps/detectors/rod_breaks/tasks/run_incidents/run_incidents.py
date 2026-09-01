@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.celery_app import celery_app, run_async
+from apps.detectors.conclusion.notify import notify_conclusion
 from apps.detectors.dto.internal.repositories.incident import OpenIncidentDTO
 from apps.detectors.models.incident import (
     INCIDENT_LEVEL_ALARM,
@@ -113,6 +114,9 @@ class RodBreakIncidentRunner:
             opened += o
             escalated += e
             normalized += n
+            # Открытие/эскалация меняют уровень эпизода — будим ИИ-заключение.
+            if o or e:
+                await self._notify_conclusion(station.well_id)
 
         if opened or escalated or normalized:
             logger.info(
@@ -122,6 +126,15 @@ class RodBreakIncidentRunner:
                 normalized,
                 len(stations),
             )
+
+    async def _notify_conclusion(self, well_id: int) -> None:
+        active = await self.incident_repo.get_active(
+            detector_code=DETECTOR_CODE,
+            well_id=well_id,
+            reason_code=incident_config.REASON_ROD_BREAK,
+        )
+        if active is not None:
+            notify_conclusion(active.id)
 
     async def _run_station(
         self,

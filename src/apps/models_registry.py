@@ -1,5 +1,9 @@
 import inspect
 
+from apps.detectors.models.conclusion import (
+    DetectorConclusion,
+    DetectorConclusionFeedback,
+)
 from apps.detectors.models.incident import (
     Detector,
     DetectorCursor,
@@ -42,6 +46,8 @@ __all__ = (
     "Brigade",
     "Coord",
     "Detector",
+    "DetectorConclusion",
+    "DetectorConclusionFeedback",
     "DetectorCursor",
     "DetectorIncident",
     "Dynamogram",

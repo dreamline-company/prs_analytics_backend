@@ -14,6 +14,11 @@ from apps.detectors.tasks.dispatch.dispatch import (  # noqa: F401
     sweep_detectors,
 )
 
+# Импорт регистрирует таску генерации ИИ-заключений по эпизодам R2/R9.
+from apps.detectors.tasks.generate_conclusion.generate_conclusion import (  # noqa: F401
+    generate_conclusion,
+)
+
 # Импорт регистрирует таску последовательной синхронизации оргструктуры.
 from apps.org.tasks.sync_org.sync_org import sync_org  # noqa: F401
 

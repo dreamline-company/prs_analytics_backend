@@ -14,6 +14,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.celery_app import celery_app, run_async
+from apps.detectors.conclusion.notify import notify_conclusion
 from apps.detectors.dto.internal.repositories.incident import OpenIncidentDTO
 from apps.detectors.load_imbalance import config, incident_config, rule
 from apps.detectors.load_imbalance.dto.internal.day import (
@@ -121,6 +122,9 @@ class LoadImbalanceIncidentRunner:
             opened += counts[0]
             escalated += counts[1]
             normalized += counts[2]
+            # Открытие/эскалация меняют уровень эпизода — будим ИИ-заключение.
+            if counts[0] or counts[1]:
+                await self._notify_conclusion(station.well_id)
 
         if opened or escalated or normalized:
             logger.info(
@@ -130,6 +134,15 @@ class LoadImbalanceIncidentRunner:
                 normalized,
                 len(stations),
             )
+
+    async def _notify_conclusion(self, well_id: int) -> None:
+        active = await self.incident_repo.get_active(
+            detector_code=DETECTOR_CODE,
+            well_id=well_id,
+            reason_code=incident_config.REASON_LOAD_IMBALANCE,
+        )
+        if active is not None:
+            notify_conclusion(active.id)
 
     async def _run_station(
         self,
