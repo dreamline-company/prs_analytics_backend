@@ -1,4 +1,4 @@
-# ruff: noqa: RUF002, TC002, TC003
+# ruff: noqa: TC002, TC003
 """Tools exposed to the PRS chat assistant.
 
 The current ``repair_id`` is injected via ``RunnableConfig.configurable`` and

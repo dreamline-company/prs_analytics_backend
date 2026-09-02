@@ -1,4 +1,4 @@
-# ruff: noqa: RUF001, E501
+# ruff: noqa: E501
 from langchain.agents import create_agent
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
