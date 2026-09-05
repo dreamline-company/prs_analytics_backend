@@ -100,13 +100,13 @@ from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
 from apps.wells.repositories.spo_event import SPOEventRepository
 from apps.wells.repositories.well import WellRepository
+from apps.wells.repositories.well_org import WellOrgRepository
 from core import get_logger
 from core.settings import get_settings
 from shared.database.s3.storage import AiobotoFileStorage
 from shared.database.sql.setup import session_makers
 from shared.dependencies.db import get_aioboto_client_factory
 from shared.integrations.abai.api.client import AbaiAsyncClient
-from shared.integrations.abai.repositories.well_orgs import ABAIWellOrgRepository
 from shared.integrations.cm.repositories.brigade_error_screens import (
     CMBrigadeErrorScreenRepository,
 )
@@ -184,13 +184,12 @@ class FillRepairAnalytics:
         try:
             async with (
                 session_makers["app"]() as session,
-                session_makers["abai"]() as abai_session,
                 session_makers["cm"]() as cm_session,
             ):
                 deps = _Dependencies.build(session)
 
                 get_ngdu_for_well = GetNGDUForWellUseCase(
-                    abai_well_org_repository=ABAIWellOrgRepository(abai_session),
+                    well_org_repository=WellOrgRepository(session),
                     org_repository=OrgRepository(session),
                 )
 

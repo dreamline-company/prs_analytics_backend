@@ -10,6 +10,27 @@ class ABAIWellOrgRepository(
 ):
     model = WellOrg
 
+    async def list_after_id(self, last_id: int, *, limit: int) -> Sequence[WellOrg]:
+        """Батч привязок с id > last_id (keyset-пагинация)."""
+        return await self.get_list(
+            QuerySpec(
+                filters=(WellOrg.id > last_id,),
+                order_by=(WellOrg.id.asc(),),
+                limit=limit,
+            ),
+        )
+
+    async def list_by_ids(self, ids: Sequence[int]) -> Sequence[WellOrg]:
+        if not ids:
+            return ()
+
+        return await self.get_list(
+            QuerySpec(
+                filters=(WellOrg.id.in_(ids),),
+                order_by=(WellOrg.id.asc(),),
+            ),
+        )
+
     async def list_by_well(self, well_id: int) -> Sequence[WellOrg]:
         return await self.get_list(
             QuerySpec(

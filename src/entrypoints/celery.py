@@ -34,6 +34,11 @@ from apps.telemetry.tasks.load_sdmo.incremental_load import (  # noqa: F401
 from apps.wells.tasks.load_well_expl.load_well_expl import (  # noqa: F401
     load_well_expl_incremental,
 )
+
+# Импорт регистрирует таску инкрементальной загрузки привязок скважин к оргструктуре.
+from apps.wells.tasks.load_well_orgs.load_well_orgs import (  # noqa: F401
+    load_well_orgs_incremental,
+)
 from core.settings import get_settings
 
 settings = get_settings()
@@ -69,6 +74,14 @@ celery_app.conf.beat_schedule = {
     "detectors-load-imbalance-daily": {
         "task": "detectors.load_imbalance.run_incidents",
         "schedule": crontab(hour=4, minute=10),
+    },
+    # Ежедневная догрузка привязок скважин к оргструктуре из ABAI (новые id +
+    # правки dend/org). После org.sync, чтобы матрица по НГДУ опиралась на
+    # свежую оргструктуру; её читают /wells/matrix, /wells/coords и разрешение
+    # НГДУ по скважине в fill_repair_analytics.
+    "wells-well-org-incremental": {
+        "task": "wells.well_org.incremental_load",
+        "schedule": crontab(hour=5, minute=15),
     },
     # Ежедневная догрузка периодов эксплуатации из ABAI (новые id + правки dend).
     "wells-well-expl-incremental": {

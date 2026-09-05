@@ -13,6 +13,7 @@ from apps.files.models.file import File
 from apps.kbrs.models.measure import KbrsMeasure
 from apps.org.models.brigade import Brigade, UniqueBrigade
 from apps.org.models.ngdu import NGDU
+from apps.org.models.oil_field import OilField
 from apps.org.models.org import Org, OrgType
 from apps.repairs.models.analytics import (
     RepairAIAnalysis,
@@ -39,6 +40,7 @@ from apps.wells.models.spo_event import SPOEvent
 from apps.wells.models.status_history import WellStatusHistory
 from apps.wells.models.well import Well
 from apps.wells.models.well_expl import WellExpl, WellExplType
+from apps.wells.models.well_org import WellOrg
 
 __all__ = (
     "NGDU",
@@ -53,6 +55,7 @@ __all__ = (
     "Dynamogram",
     "File",
     "KbrsMeasure",
+    "OilField",
     "Org",
     "OrgType",
     "Repair",
@@ -80,6 +83,7 @@ __all__ = (
     "WellCoord",
     "WellExpl",
     "WellExplType",
+    "WellOrg",
     "WellStatusHistory",
 )
 

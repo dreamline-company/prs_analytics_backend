@@ -48,6 +48,7 @@ from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.status_history import WellStatusHistoryRepository
 from apps.wells.repositories.well import WellRepository
 from apps.wells.repositories.well_expl import WellExplRepository
+from apps.wells.repositories.well_org import WellOrgRepository
 from apps.wells.services import CoordPointService, NGDUWellsService
 from apps.wells.use_cases.get_well_card import GetWellCardUseCase
 from apps.wells.use_cases.get_well_coords import GetWellCoordsUseCase
@@ -62,14 +63,12 @@ from apps.wells.use_cases.search_wells_by_name import SearchWellsByNameUseCase
 from core.settings import get_settings
 from shared.database.s3.storage import AiobotoFileStorage
 from shared.dependencies.db import (
-    get_abai_session,
     get_aioboto_client_factory,
     get_aioboto_presign_client_factory,
     get_app_session,
     get_cm_session,
 )
 from shared.dto.api import AppResponse
-from shared.integrations.abai.repositories.well_orgs import ABAIWellOrgRepository
 from shared.integrations.cm.repositories.brigade_error_screens import (
     CMBrigadeErrorScreenRepository,
 )
@@ -100,7 +99,6 @@ async def search_wells_by_name(
 @router.get("/matrix", response_model=AppResponse[list[WellMatrixItemDTO]])
 async def get_wells_matrix(
     app_session: Annotated[AsyncSession, Depends(get_app_session)],
-    abai_session: Annotated[AsyncSession, Depends(get_abai_session)],
     cm_session: Annotated[AsyncSession, Depends(get_cm_session)],
     ngdu_id: Annotated[
         int,
@@ -111,7 +109,7 @@ async def get_wells_matrix(
         ngdu_wells_service=NGDUWellsService(
             org_repository=OrgRepository(session=app_session),
             well_repository=WellRepository(session=app_session),
-            abai_well_org_repository=ABAIWellOrgRepository(session=abai_session),
+            well_org_repository=WellOrgRepository(session=app_session),
         ),
         repair_repository=RepairRepository(session=app_session),
         repair_brigade_repository=RepairBrigadeRepository(session=app_session),
@@ -131,7 +129,6 @@ async def get_wells_matrix(
 )
 async def get_well_matrix_incidents(
     app_session: Annotated[AsyncSession, Depends(get_app_session)],
-    abai_session: Annotated[AsyncSession, Depends(get_abai_session)],
     ngdu_id: Annotated[
         int,
         Query(ge=1, description="Local Org.id of the NGDU to filter wells by"),
@@ -141,7 +138,7 @@ async def get_well_matrix_incidents(
         ngdu_wells_service=NGDUWellsService(
             org_repository=OrgRepository(session=app_session),
             well_repository=WellRepository(session=app_session),
-            abai_well_org_repository=ABAIWellOrgRepository(session=abai_session),
+            well_org_repository=WellOrgRepository(session=app_session),
         ),
         well_expl_repository=WellExplRepository(session=app_session),
         well_incident_status_service=WellIncidentStatusService(
@@ -163,7 +160,6 @@ async def get_well_matrix_incidents(
 @router.get("/coords", response_model=AppResponse[list[WellCoordMapPointDTO]])
 async def get_well_coords(
     app_session: Annotated[AsyncSession, Depends(get_app_session)],
-    abai_session: Annotated[AsyncSession, Depends(get_abai_session)],
     ngdu_id: Annotated[
         int | None,
         Query(ge=1, description="Optional local Org.id of the NGDU to filter by"),
@@ -174,7 +170,7 @@ async def get_well_coords(
         ngdu_wells_service=NGDUWellsService(
             org_repository=OrgRepository(session=app_session),
             well_repository=WellRepository(session=app_session),
-            abai_well_org_repository=ABAIWellOrgRepository(session=abai_session),
+            well_org_repository=WellOrgRepository(session=app_session),
         ),
     )
     points = await use_case.execute(GetWellCoordsQuery(ngdu_id=ngdu_id))

@@ -7,6 +7,7 @@ from apps.wells.repositories.well_expl import (
     WellExplRepository,
     WellExplTypeRepository,
 )
+from apps.wells.repositories.well_org import WellOrgRepository
 
 __all__ = (
     "CoordRepository",
@@ -15,6 +16,7 @@ __all__ = (
     "WellCoordRepository",
     "WellExplRepository",
     "WellExplTypeRepository",
+    "WellOrgRepository",
     "WellRepository",
     "WellStatusHistoryRepository",
 )

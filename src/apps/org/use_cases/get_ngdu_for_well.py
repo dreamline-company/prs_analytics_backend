@@ -1,8 +1,9 @@
 """Resolve the NGDU-typed ``Org`` responsible for a well.
 
 Chain:
-  1. Look up current ``well_org`` in ABAI for the given ``abai_well_id``
-     (latest ``dbeg`` wins).
+  1. Look up the current ``wells_well_org`` row (local mirror of ABAI
+     ``well_org``) for the given ``abai_well_id`` — latest ``dbeg`` wins,
+     tiebreak by ``abai_id``.
   2. Fetch the corresponding local ``Org`` by its ABAI id.
   3. Walk parent chain up the org hierarchy until an ``Org`` with
      ``org_type_id == NGDU_ORG_TYPE`` is found. Parent ids on local ``Org``
@@ -14,9 +15,9 @@ or the chain runs out before reaching an NGDU node.
 
 from apps.org.models.org import Org
 from apps.org.repositories.org import OrgRepository
+from apps.wells.repositories.well_org import WellOrgRepository
 from core import get_logger
 from shared.constants.ngdu import NGDU_ORG_TYPE
-from shared.integrations.abai.repositories.well_orgs import ABAIWellOrgRepository
 
 logger = get_logger(__name__)
 
@@ -26,35 +27,29 @@ class GetNGDUForWellUseCase:
 
     def __init__(
         self,
-        abai_well_org_repository: ABAIWellOrgRepository,
+        well_org_repository: WellOrgRepository,
         org_repository: OrgRepository,
     ) -> None:
-        self.abai_well_org_repository = abai_well_org_repository
+        self.well_org_repository = well_org_repository
         self.org_repository = org_repository
 
     async def execute(self, abai_well_id: int) -> Org | None:
-        well_orgs = await self.abai_well_org_repository.list_by_well(abai_well_id)
-        if not well_orgs:
+        current = await self.well_org_repository.get_current_by_abai_well_id(
+            abai_well_id,
+        )
+        if current is None:
             logger.warning(
-                "No well_org rows in ABAI for abai_well_id=%s.",
+                "No well_org rows for abai_well_id=%s. Sync well orgs first.",
                 abai_well_id,
             )
             return None
 
-        current = self._current_well_org(well_orgs)
-        if current is None or current.org is None:
-            logger.warning(
-                "No current well_org / org for abai_well_id=%s.",
-                abai_well_id,
-            )
-            return None
-
-        org = await self.org_repository.get_by_abai_id(abai_id=current.org)
+        org = await self.org_repository.get_by_abai_id(abai_id=current.abai_org_id)
         if org is None:
             logger.warning(
                 "Local Org mirror missing for ABAI org id=%s "
                 "(abai_well_id=%s). Sync orgs first.",
-                current.org,
+                current.abai_org_id,
                 abai_well_id,
             )
             return None
@@ -93,11 +88,3 @@ class GetNGDUForWellUseCase:
             org = parent
 
         return org
-
-    @staticmethod
-    def _current_well_org(well_orgs):  # noqa: ANN001, ANN205
-        with_dbeg = [w for w in well_orgs if w.dbeg is not None]
-        if with_dbeg:
-            with_dbeg.sort(key=lambda w: w.dbeg, reverse=True)
-            return with_dbeg[0]
-        return well_orgs[-1]
