@@ -1,7 +1,9 @@
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import BigInteger, cast, func, select, true
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm import aliased
 
 from apps.telemetry.dto.internal.repositories.telemetry import (
     CreateTelemetryDTO,
@@ -70,22 +72,28 @@ class TelemetryRepository(
     ) -> dict[int, Telemetry]:
         """Последний отсчёт каждой скважины — один запрос на матрицу НГДУ.
 
-        DISTINCT ON оставляет от скважины одну строку; ``id`` в сортировке —
-        tiebreak на случай двух записей с одинаковым ``date_time``.
+        LATERAL с ``LIMIT 1`` на скважину: по индексу (well_id, date_time)
+        каждая скважина стоит один обратный index scan, и время не зависит от
+        глубины истории. DISTINCT ON по тому же индексу вычитывал бы все
+        строки запрошенных скважин (сотни тысяч на НГДУ) и сортировал их.
+        ``id`` в сортировке — tiebreak на случай двух записей с одинаковым
+        ``date_time``.
         """
         if not well_ids:
             return {}
 
-        stmt = (
+        requested = select(
+            func.unnest(cast(list(well_ids), ARRAY(BigInteger))).label("well_id"),
+        ).subquery("requested")
+        last_row = (
             select(Telemetry)
-            .where(Telemetry.well_id.in_(well_ids))
-            .distinct(Telemetry.well_id)
-            .order_by(
-                Telemetry.well_id,
-                Telemetry.date_time.desc(),
-                Telemetry.id.desc(),
-            )
+            .where(Telemetry.well_id == requested.c.well_id)
+            .order_by(Telemetry.date_time.desc(), Telemetry.id.desc())
+            .limit(1)
+            .lateral("last_row")
         )
+        last = aliased(Telemetry, last_row)
+        stmt = select(last).select_from(requested).join(last, true())
         result = await self.session.execute(stmt)
         return {row.well_id: row for row in result.scalars()}
 

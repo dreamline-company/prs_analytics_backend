@@ -32,6 +32,12 @@ ENGINE_CURRENT_REGISTER = 1614
 PUMP_FILL_REGISTER = 1997
 VLT_STATUS_REGISTER = 1999
 
+# Сколько последних отсчётов станции просматривать в поисках заполненного
+# регистра 1999. Отсчёт идёт раз в ~2 минуты, регистр отсутствует примерно в
+# каждой десятой строке случайным образом — 50 строк (~100 минут) покрывают это
+# с запасом, а станция, не отдававшая статус дольше, актуального статуса не имеет.
+VLT_STATUS_LOOKBACK_ROWS = 50
+
 # Порядок колонок для COPY в telemetry_sdmo_fc_data (id/created_at заполняет БД).
 FC_DATA_COPY_COLUMNS: tuple[str, ...] = (
     "sdmo_id",
@@ -220,13 +226,19 @@ class SdmoFcDataRepository(
         """Актуальное значение регистра 1999 «Статус (VLT SALT)» на скважину.
 
         Регистр приходит не в каждом отсчёте (примерно каждая десятая строка
-        без него), поэтому берётся последняя строка станции, где он заполнен:
-        LATERAL-подзапрос с равенством по ``sdmo_station_id`` и ``LIMIT 1``
-        идёт обратным index scan'ом по
-        ``ix_telemetry_sdmo_fc_data_station_savetime`` и останавливается на
-        первой заполненной строке. У скважины с несколькими станциями
-        побеждает самое позднее значение. Скважины без станций или без единого
-        заполненного значения в ответ не попадают.
+        без него), поэтому берётся последняя заполненная строка среди
+        ``VLT_STATUS_LOOKBACK_ROWS`` последних отсчётов станции. Хвост станции
+        читается обратным index scan'ом по
+        ``ix_telemetry_sdmo_fc_data_station_savetime`` с ``LIMIT`` — ровно
+        столько строк на станцию, сколько задано, независимо от глубины
+        истории. Фильтр ``IS NOT NULL`` поверх неограниченного скана здесь
+        недопустим: у станции, которая регистр не отдаёт вовсе (тип 12) или
+        перестала отдавать, он перебирал бы всю её историю — сотни тысяч строк
+        на станцию, и матрица НГДУ уходила в таймаут.
+
+        У скважины с несколькими станциями побеждает самое позднее значение.
+        Скважины без станций или без заполненного значения в хвосте в ответ
+        не попадают.
 
         Значение отдаётся как есть (в источнике регистр Int32/Uint32):
         1 — станция онлайн, 0 — не онлайн.
@@ -235,13 +247,18 @@ class SdmoFcDataRepository(
             return {}
 
         vlt_status = getattr(SdmoFcData, f"r_{VLT_STATUS_REGISTER}")
-        last_status = (
+        recent = (
             select(SdmoFcData.savetime, vlt_status.label("vlt_status"))
-            .where(
-                SdmoFcData.sdmo_station_id == SdmoStation.sdmo_id,
-                vlt_status.is_not(None),
-            )
+            .where(SdmoFcData.sdmo_station_id == SdmoStation.sdmo_id)
             .order_by(SdmoFcData.savetime.desc())
+            .limit(VLT_STATUS_LOOKBACK_ROWS)
+            .correlate(SdmoStation)
+            .subquery("recent")
+        )
+        last_status = (
+            select(recent.c.savetime, recent.c.vlt_status)
+            .where(recent.c.vlt_status.is_not(None))
+            .order_by(recent.c.savetime.desc())
             .limit(1)
             .lateral("last_status")
         )

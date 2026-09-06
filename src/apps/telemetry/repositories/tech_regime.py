@@ -1,7 +1,9 @@
 from collections.abc import Sequence
 from datetime import date
 
-from sqlalchemy import insert, select
+from sqlalchemy import BigInteger, cast, func, insert, select, true
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm import aliased
 
 from apps.telemetry.dto.internal.repositories.tech_regime import (
     CreateTechRegimeDTO,
@@ -53,21 +55,28 @@ class TechRegimeRepository(
         """Последний режим каждой скважины — один запрос на матрицу НГДУ.
 
         Как и в одиночном методе, «последний» = максимальный ``start_date``
-        (действующий он или уже закончился, здесь не проверяется).
+        (действующий он или уже закончился, здесь не проверяется). LATERAL с
+        ``LIMIT 1`` на скважину по индексу (abai_well_id, start_date) — вместо
+        DISTINCT ON, который вычитывал и сортировал всю историю режимов
+        запрошенных скважин.
         """
         if not abai_well_ids:
             return {}
 
-        stmt = (
+        requested = select(
+            func.unnest(cast(list(abai_well_ids), ARRAY(BigInteger))).label(
+                "abai_well_id",
+            ),
+        ).subquery("requested")
+        last_row = (
             select(TechRegime)
-            .where(TechRegime.abai_well_id.in_(abai_well_ids))
-            .distinct(TechRegime.abai_well_id)
-            .order_by(
-                TechRegime.abai_well_id,
-                TechRegime.start_date.desc(),
-                TechRegime.id.desc(),
-            )
+            .where(TechRegime.abai_well_id == requested.c.abai_well_id)
+            .order_by(TechRegime.start_date.desc(), TechRegime.id.desc())
+            .limit(1)
+            .lateral("last_row")
         )
+        last = aliased(TechRegime, last_row)
+        stmt = select(last).select_from(requested).join(last, true())
         result = await self.session.execute(stmt)
         return {row.abai_well_id: row for row in result.scalars()}
 
