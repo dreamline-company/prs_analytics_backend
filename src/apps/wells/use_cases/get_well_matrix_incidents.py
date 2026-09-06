@@ -7,10 +7,12 @@
 
 from apps.detectors.services import WellIncidentStatusService
 from apps.repairs.services import CurrentRepairService
+from apps.telemetry.repositories.sdmo import SdmoFcDataRepository
 from apps.telemetry.services import WellRatesService
 from apps.wells.dto.internal.well_matrix_incidents import (
     WellMatrixIncidentDTO,
     WellMatrixIncidentExplDTO,
+    WellMatrixIncidentPassportDTO,
     WellMatrixIncidentWellDTO,
 )
 from apps.wells.dto.queries.well import GetWellMatrixIncidentsQuery
@@ -19,7 +21,7 @@ from apps.wells.services import NGDUWellsService
 
 
 class GetWellMatrixIncidentsUseCase:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         ngdu_wells_service: NGDUWellsService,
@@ -27,12 +29,14 @@ class GetWellMatrixIncidentsUseCase:
         well_incident_status_service: WellIncidentStatusService,
         current_repair_service: CurrentRepairService,
         well_rates_service: WellRatesService,
+        sdmo_fc_data_repository: SdmoFcDataRepository,
     ) -> None:
         self.ngdu_wells_service = ngdu_wells_service
         self.well_expl_repository = well_expl_repository
         self.well_incident_status_service = well_incident_status_service
         self.current_repair_service = current_repair_service
         self.well_rates_service = well_rates_service
+        self.sdmo_fc_data_repository = sdmo_fc_data_repository
 
     async def execute(
         self,
@@ -59,6 +63,13 @@ class GetWellMatrixIncidentsUseCase:
         rates = await self.well_rates_service.get_for_wells(
             {well.id: well.abai_id for well in wells},
         )
+        # Станции СДМО привязаны по локальному well_id, как и телеметрия.
+        well_ids = [well.id for well in wells]
+        fc_data_repository = self.sdmo_fc_data_repository
+        sdmo_times = await fc_data_repository.get_last_savetime_by_well_ids(well_ids)
+        vlt_statuses = await fc_data_repository.get_last_vlt_status_by_well_ids(
+            well_ids,
+        )
 
         return [
             WellMatrixIncidentDTO(
@@ -70,7 +81,11 @@ class GetWellMatrixIncidentsUseCase:
                 ),
                 incident_status=incident_statuses[well.id],
                 current_repair=current_repairs.get(well.abai_id),
-                passport=rates[well.id],
+                passport=WellMatrixIncidentPassportDTO(
+                    **rates[well.id].model_dump(),
+                    sdmo_time=sdmo_times.get(well.id),
+                    sdmo_vlt_status=vlt_statuses.get(well.id),
+                ),
             )
             for well in sorted(wells, key=lambda well: well.name)
         ]

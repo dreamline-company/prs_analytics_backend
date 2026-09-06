@@ -66,11 +66,18 @@ class GetWellCardUseCase:
         )
         stations = await self.sdmo_station_repository.list_by_well_id(well_id=well.id)
         pump = None
+        vlt_status = None
         if stations:
             fc_data_repository = self.sdmo_fc_data_repository
             pump = await fc_data_repository.get_last_pump_parameters_by_stations(
                 station_sdmo_ids=[station.sdmo_id for station in stations],
             )
+            # Тем же запросом, что и матрица: строка матрицы и карточка должны
+            # показывать один и тот же статус станции.
+            vlt_statuses = await fc_data_repository.get_last_vlt_status_by_well_ids(
+                [well.id],
+            )
+            vlt_status = vlt_statuses.get(well.id)
         last_status = await self.well_status_history_repository.get_last_by_well_id(
             well_id=well.id,
         )
@@ -94,6 +101,7 @@ class GetWellCardUseCase:
                 pump_speed=pump["pump_speed"] if pump else None,
                 pump_fill=pump["pump_fill"] if pump else None,
                 sdmo_time=pump["savetime"] if pump else None,
+                sdmo_vlt_status=vlt_status,
                 zero_rate_days=ZERO_RATE_DAYS_STUB,
             ),
         )

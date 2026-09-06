@@ -6,7 +6,7 @@ from shared.constants.ngdu import AbaiNGDUIDsEnum
 # остальные из AbaiNGDUIDsEnum намеренно скрыты.
 LISTED_NGDU_ABAI_IDS: tuple[AbaiNGDUIDsEnum, ...] = (
     AbaiNGDUIDsEnum.KMG,
-    AbaiNGDUIDsEnum.ZHlMG,
+    AbaiNGDUIDsEnum.ZHMG,
 )
 
 

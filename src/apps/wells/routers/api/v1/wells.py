@@ -152,6 +152,7 @@ async def get_well_matrix_incidents(
             telemetry_repository=TelemetryRepository(session=app_session),
             tech_regime_repository=TechRegimeRepository(session=app_session),
         ),
+        sdmo_fc_data_repository=SdmoFcDataRepository(session=app_session),
     )
     incidents = await use_case.execute(GetWellMatrixIncidentsQuery(ngdu_id=ngdu_id))
     return WellMatrixIncidentsResponseDTO(data=incidents)

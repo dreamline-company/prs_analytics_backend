@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import date, datetime
 
-from sqlalchemy import RowMapping, delete, select
+from sqlalchemy import RowMapping, delete, func, select, true
 
 from apps.telemetry.dto.internal.repositories.sdmo import (
     CreateSdmoFcRegDTO,
@@ -24,11 +24,13 @@ from shared.repository.sqlalchemy import (
 
 # Регистры параметров СДМО для API (type_1900 = 1/6/16; имена из
 # telemetry_sdmo_fc_reg): 1998 «Скорость ротора», 1991 «Момент штанги/на валу»,
-# 1614 «Ток двигателя», 1997 «Относительное заполнение насоса».
+# 1614 «Ток двигателя», 1997 «Относительное заполнение насоса»,
+# 1999 «Статус (VLT SALT)» — статус станции: онлайн / не онлайн.
 ROTOR_SPEED_REGISTER = 1998
 PUMP_MOMENT_REGISTER = 1991
 ENGINE_CURRENT_REGISTER = 1614
 PUMP_FILL_REGISTER = 1997
+VLT_STATUS_REGISTER = 1999
 
 # Порядок колонок для COPY в telemetry_sdmo_fc_data (id/created_at заполняет БД).
 FC_DATA_COPY_COLUMNS: tuple[str, ...] = (
@@ -181,6 +183,77 @@ class SdmoFcDataRepository(
                 order_by=(SdmoFcData.savetime,),
             ),
         )
+
+    async def get_last_savetime_by_well_ids(
+        self,
+        well_ids: Sequence[int],
+    ) -> dict[int, datetime]:
+        """Время последнего отсчёта СДМО на скважину — один запрос на матрицу.
+
+        Идёт от станций (``SdmoStation.well_id``) к данным коррелированным
+        ``max(savetime)`` по станции: равенство по ``sdmo_station_id`` + max
+        по второй колонке индекса ``ix_telemetry_sdmo_fc_data_station_savetime``
+        — это обратный index scan на одну строку, а не сортировка всех строк
+        станции. Скважины без станций или без отсчётов в ответ не попадают;
+        у скважины с несколькими станциями берётся самый поздний отсчёт.
+        """
+        if not well_ids:
+            return {}
+
+        last_savetime = (
+            select(func.max(SdmoFcData.savetime))
+            .where(SdmoFcData.sdmo_station_id == SdmoStation.sdmo_id)
+            .scalar_subquery()
+        )
+        stmt = (
+            select(SdmoStation.well_id, func.max(last_savetime))
+            .where(SdmoStation.well_id.in_(well_ids))
+            .group_by(SdmoStation.well_id)
+        )
+        result = await self.session.execute(stmt)
+        return {row[0]: row[1] for row in result.all() if row[1] is not None}
+
+    async def get_last_vlt_status_by_well_ids(
+        self,
+        well_ids: Sequence[int],
+    ) -> dict[int, int]:
+        """Актуальное значение регистра 1999 «Статус (VLT SALT)» на скважину.
+
+        Регистр приходит не в каждом отсчёте (примерно каждая десятая строка
+        без него), поэтому берётся последняя строка станции, где он заполнен:
+        LATERAL-подзапрос с равенством по ``sdmo_station_id`` и ``LIMIT 1``
+        идёт обратным index scan'ом по
+        ``ix_telemetry_sdmo_fc_data_station_savetime`` и останавливается на
+        первой заполненной строке. У скважины с несколькими станциями
+        побеждает самое позднее значение. Скважины без станций или без единого
+        заполненного значения в ответ не попадают.
+
+        Значение отдаётся как есть (в источнике регистр Int32/Uint32):
+        1 — станция онлайн, 0 — не онлайн.
+        """
+        if not well_ids:
+            return {}
+
+        vlt_status = getattr(SdmoFcData, f"r_{VLT_STATUS_REGISTER}")
+        last_status = (
+            select(SdmoFcData.savetime, vlt_status.label("vlt_status"))
+            .where(
+                SdmoFcData.sdmo_station_id == SdmoStation.sdmo_id,
+                vlt_status.is_not(None),
+            )
+            .order_by(SdmoFcData.savetime.desc())
+            .limit(1)
+            .lateral("last_status")
+        )
+        stmt = (
+            select(SdmoStation.well_id, last_status.c.vlt_status)
+            .join(last_status, true())
+            .where(SdmoStation.well_id.in_(well_ids))
+            .distinct(SdmoStation.well_id)
+            .order_by(SdmoStation.well_id, last_status.c.savetime.desc())
+        )
+        result = await self.session.execute(stmt)
+        return {row[0]: int(row[1]) for row in result.all()}
 
     async def get_last_pump_parameters_by_stations(
         self,

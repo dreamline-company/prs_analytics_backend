@@ -30,6 +30,9 @@ class WellCardPassportDTO(WellRatesDTO):
     pump_speed: float | None  # Скорость насоса, об/мин — регистр 1998
     pump_fill: float | None  # Заполнение насоса, % — регистр 1997
     sdmo_time: datetime | None  # Время отсчёта — SdmoFcData.savetime
+    # Статус станции (1 — онлайн, 0 — не онлайн) — регистр 1999 «Статус
+    # (VLT SALT)», последнее заполненное значение по станциям скважины.
+    sdmo_vlt_status: int | None
     zero_rate_days: int  # Дней с дебитом 0 — пока заглушка
 
 
