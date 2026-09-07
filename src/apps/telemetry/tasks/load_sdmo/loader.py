@@ -31,6 +31,7 @@ from typing import Final
 from sqlalchemy import and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.org.repositories.oil_field import OilFieldRepository
 from apps.org.repositories.org import OrgRepository
 from apps.telemetry.dto.internal.repositories import (
     CreateSdmoFcRegDTO,
@@ -299,6 +300,7 @@ async def _well_ids_by_name(
             org_repository=org_repository,
             well_repository=WellRepository(app_session),
             well_org_repository=WellOrgRepository(app_session),
+            oil_field_repository=OilFieldRepository(app_session),
         ).list_wells(org.id)
         if org is not None
         else []

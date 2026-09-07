@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import BigInteger, cast, func, insert, select, true
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -77,6 +77,44 @@ class TechRegimeRepository(
         )
         last = aliased(TechRegime, last_row)
         stmt = select(last).select_from(requested).join(last, true())
+        result = await self.session.execute(stmt)
+        return {row.abai_well_id: row for row in result.scalars()}
+
+    async def get_current_by_abai_well_ids(
+        self,
+        abai_well_ids: Sequence[int],
+        *,
+        on_date: date,
+        grace_days: int,
+    ) -> dict[int, TechRegime]:
+        """Режим, действующий на дату, — для план/факт сводок.
+
+        Режимы месячные и приезжают из ABAI с лагом, поэтому берётся последний
+        по ``start_date`` режим, который уже начался и закончился не раньше
+        чем ``grace_days`` назад: пока нового ещё нет, считаем по прошлому.
+        Скважины без такого режима в ответ не попадают.
+        """
+        if not abai_well_ids:
+            return {}
+
+        requested = select(
+            func.unnest(cast(list(abai_well_ids), ARRAY(BigInteger))).label(
+                "abai_well_id",
+            ),
+        ).subquery("requested")
+        current = (
+            select(TechRegime)
+            .where(
+                TechRegime.abai_well_id == requested.c.abai_well_id,
+                TechRegime.start_date <= on_date,
+                TechRegime.end_date >= on_date - timedelta(days=grace_days),
+            )
+            .order_by(TechRegime.start_date.desc(), TechRegime.id.desc())
+            .limit(1)
+            .lateral("current")
+        )
+        regime = aliased(TechRegime, current)
+        stmt = select(regime).select_from(requested).join(regime, true())
         result = await self.session.execute(stmt)
         return {row.abai_well_id: row for row in result.scalars()}
 

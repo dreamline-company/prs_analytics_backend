@@ -111,6 +111,7 @@ async def get_wells_matrix(
             org_repository=OrgRepository(session=app_session),
             well_repository=WellRepository(session=app_session),
             well_org_repository=WellOrgRepository(session=app_session),
+            oil_field_repository=OilFieldRepository(session=app_session),
         ),
         repair_repository=RepairRepository(session=app_session),
         repair_brigade_repository=RepairBrigadeRepository(session=app_session),
@@ -150,8 +151,8 @@ async def get_well_matrix_incidents(
             org_repository=OrgRepository(session=app_session),
             well_repository=WellRepository(session=app_session),
             well_org_repository=WellOrgRepository(session=app_session),
+            oil_field_repository=OilFieldRepository(session=app_session),
         ),
-        oil_field_repository=OilFieldRepository(session=app_session),
         well_expl_repository=WellExplRepository(session=app_session),
         well_incident_status_service=WellIncidentStatusService(
             incident_repository=DetectorIncidentRepository(session=app_session),
@@ -186,6 +187,7 @@ async def get_well_coords(
             org_repository=OrgRepository(session=app_session),
             well_repository=WellRepository(session=app_session),
             well_org_repository=WellOrgRepository(session=app_session),
+            oil_field_repository=OilFieldRepository(session=app_session),
         ),
     )
     points = await use_case.execute(GetWellCoordsQuery(ngdu_id=ngdu_id))
