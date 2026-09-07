@@ -41,7 +41,7 @@ class LoadRepairWorkTypes:
                 app_repair = app_repair_types[app_repair_idx]
                 abai_repair = abai_repair_types[i]
                 if (app_repair.name_ru != abai_repair.name_ru) or (
-                    app_repair.name_ru_short != abai_repair.name_ru_short
+                    app_repair.name_ru_short != abai_repair.name_short_ru
                 ):
                     update_repairs.append(abai_repair)
 
