@@ -24,6 +24,9 @@ class GetWellMatrixIncidentsQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ngdu_id: int = Field(ge=1)
+    # Месторождение из GET /org/v1/oil-fields?ngdu_id=...; должно относиться к
+    # этому же НГДУ. Без него — все скважины НГДУ.
+    oil_field_id: int | None = Field(default=None, ge=1)
 
 
 class ListWellDynamogramsQuery(BaseModel):

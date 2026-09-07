@@ -22,7 +22,6 @@
 """
 
 import asyncio
-import re
 from collections import Counter
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,16 +31,13 @@ from apps.org.dto.internal.repositories.oil_field import CreateOilFieldDTO
 from apps.org.models.org import Org
 from apps.org.repositories.oil_field import OilFieldRepository
 from apps.org.repositories.org import OrgRepository
+from apps.org.services import well_name_prefix
 from apps.wells.repositories.well_org import WellOrgRepository
 from core import get_logger
 from shared.constants.ngdu import NGDU_ORG_TYPE
 from shared.database.sql.setup import session_makers
 
 logger = get_logger(__name__)
-
-# Буквенный префикс до подчёркивания: BLG_0177 -> BLG. Имена вида 00001-CT
-# префикса не имеют и в месторождения не попадают.
-PREFIX_RE = re.compile(r"^([A-Za-z]+)_")
 
 
 class FillOilFields:
@@ -61,7 +57,7 @@ class FillOilFields:
         without_prefix = 0
         without_ngdu = 0
         for well_name, abai_org_id in org_by_well_name.items():
-            prefix = self._prefix_of(well_name)
+            prefix = well_name_prefix(well_name)
             if prefix is None:
                 without_prefix += 1
                 continue
@@ -111,11 +107,6 @@ class FillOilFields:
             without_ngdu,
             len(org_by_well_name),
         )
-
-    @staticmethod
-    def _prefix_of(well_name: str) -> str | None:
-        match = PREFIX_RE.match(well_name)
-        return match.group(1) if match else None
 
     def _resolve_ngdu(
         self,

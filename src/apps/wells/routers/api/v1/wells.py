@@ -10,6 +10,7 @@ from apps.detectors.repositories import (
 from apps.detectors.services import WellIncidentStatusService
 from apps.files.repositories.file import FileRepository
 from apps.org.repositories.brigade import UniqueBrigadeRepository
+from apps.org.repositories.oil_field import OilFieldRepository
 from apps.org.repositories.org import OrgRepository
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.repair import RepairRepository
@@ -133,6 +134,16 @@ async def get_well_matrix_incidents(
         int,
         Query(ge=1, description="Local Org.id of the NGDU to filter wells by"),
     ],
+    oil_field_id: Annotated[
+        int | None,
+        Query(
+            ge=1,
+            description=(
+                "Optional oil_fields.id (see GET /org/v1/oil-fields?ngdu_id=...) "
+                "to keep only wells of that oil field; must belong to ngdu_id"
+            ),
+        ),
+    ] = None,
 ) -> WellMatrixIncidentsResponseDTO:
     use_case = GetWellMatrixIncidentsUseCase(
         ngdu_wells_service=NGDUWellsService(
@@ -140,6 +151,7 @@ async def get_well_matrix_incidents(
             well_repository=WellRepository(session=app_session),
             well_org_repository=WellOrgRepository(session=app_session),
         ),
+        oil_field_repository=OilFieldRepository(session=app_session),
         well_expl_repository=WellExplRepository(session=app_session),
         well_incident_status_service=WellIncidentStatusService(
             incident_repository=DetectorIncidentRepository(session=app_session),
@@ -154,7 +166,9 @@ async def get_well_matrix_incidents(
         ),
         sdmo_fc_data_repository=SdmoFcDataRepository(session=app_session),
     )
-    incidents = await use_case.execute(GetWellMatrixIncidentsQuery(ngdu_id=ngdu_id))
+    incidents = await use_case.execute(
+        GetWellMatrixIncidentsQuery(ngdu_id=ngdu_id, oil_field_id=oil_field_id),
+    )
     return WellMatrixIncidentsResponseDTO(data=incidents)
 
 
