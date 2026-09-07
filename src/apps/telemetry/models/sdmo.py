@@ -184,13 +184,11 @@ class SdmoFcReg(AppBaseModel, IntPkMixin, TimedMixinModel):
         ),
     )
 
-    # Натуральный ключ — исходный fc_reg.id из БД SDMO.
-    sdmo_id: Mapped[int] = mapped_column(
-        BigInteger,
-        unique=True,
-        index=True,
-        nullable=False,
-    )
+    # fc_reg.id в базе SDMO, откуда регистр загружен впервые. Справочник
+    # общий для всех НГДУ, а их словари расходятся по id (один регистр под
+    # разными id, один id — разные регистры), поэтому ключ — (type_1900, addr),
+    # а sdmo_id только информационный.
+    sdmo_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     type_1900: Mapped[int | None] = mapped_column(Integer, nullable=True)
     addr: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -321,8 +321,9 @@ async def load_dimensions(
     """Обновить справочники fc_reg (общий) и stations (своего НГДУ) upsert'ом.
 
     Возвращает станции НГДУ из app-БД (с локальными id) — с ними работают
-    загрузка и детекторы. Регистры одинаковы во всех базах SDMO, поэтому
-    справочник один и каждый источник просто проходит по нему. Станции
+    загрузка и детекторы. Справочник регистров один на все НГДУ с ключом
+    (type_1900, addr): базы SDMO расходятся по натуральным id регистров, а
+    новые адреса из очередной базы просто добавляются. Станции
     получают ``well_id`` по коду (Station.code -> Well.name) среди скважин
     своего НГДУ; совпадения с чужими скважинами не привязываются и попадают
     в лог.
@@ -347,6 +348,16 @@ async def load_dimensions(
     )
     await app_session.commit()
     logger.info("[%s] SDMO fc_reg upserted: %s", ngdu.name, len(regs))
+    # Широкая таблица fc_data имеет колонку только под адреса из
+    # SDMO_REGISTERS; значения остальных регистров источника не сохраняются.
+    unknown_addrs = sorted({reg.addr for reg in regs} - set(SDMO_REGISTERS))
+    if unknown_addrs:
+        logger.warning(
+            "[%s] %s register addrs have no r_<addr> column and are not stored: %s",
+            ngdu.name,
+            len(unknown_addrs),
+            ", ".join(map(str, unknown_addrs)),
+        )
 
     ngdu_wells, all_wells = await _well_ids_by_name(app_session, ngdu)
     source_stations = await SDMOStationRepository(sdmo_session).get_list()

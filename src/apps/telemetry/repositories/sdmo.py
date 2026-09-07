@@ -62,9 +62,8 @@ _STATION_MUTABLE_COLUMNS: tuple[str, ...] = (
     "status",
     "well_id",
 )
+# Описательные поля регистра; ключ (type_1900, addr) и sdmo_id не трогаются.
 _FC_REG_MUTABLE_COLUMNS: tuple[str, ...] = (
-    "type_1900",
-    "addr",
     "name",
     "units",
     "koef",
@@ -177,16 +176,22 @@ class SdmoFcRegRepository(
         )
 
     async def upsert_many(self, data: Sequence[CreateSdmoFcRegDTO]) -> None:
-        """Справочник регистров общий для всех НГДУ (базы SDMO идентичны).
+        """Справочник регистров общий для всех НГДУ, ключ — ``(type_1900, addr)``.
 
-        Ключ — натуральный ``sdmo_id`` (он же одинаков во всех базах); строки
-        обновляются на месте, каждый источник при загрузке проходит по нему.
+        Словари баз SDMO расходятся по натуральному id, поэтому конфликт
+        ловится по паре: описательные поля обновляются, ``sdmo_id`` остаётся
+        от первого источника. Дубли пары внутри одного батча схлопываются
+        (побеждает последний), иначе ``ON CONFLICT`` отказывается менять
+        одну строку дважды.
         """
         if not data:
             return
-        stmt = pg_insert(SdmoFcReg).values([item.model_dump() for item in data])
+        by_key = {(item.type_1900, item.addr): item for item in data}
+        stmt = pg_insert(SdmoFcReg).values(
+            [item.model_dump() for item in by_key.values()],
+        )
         stmt = stmt.on_conflict_do_update(
-            index_elements=["sdmo_id"],
+            constraint="uq_telemetry_sdmo_fc_reg_type_1900_addr",
             set_={
                 **{
                     column: getattr(stmt.excluded, column)
