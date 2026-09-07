@@ -157,7 +157,7 @@ async def get_pump_telemetry(config: RunnableConfig) -> dict[str, Any]:
         if not stations:
             return {"error": "no_sdmo_stations", "well_id": well_id}
         pump = await SdmoFcDataRepository(session).get_last_pump_parameters_by_stations(
-            station_sdmo_ids=[station.sdmo_id for station in stations],
+            station_ids=[station.id for station in stations],
         )
         if pump is None:
             return {"error": "no_sdmo_data", "well_id": well_id}

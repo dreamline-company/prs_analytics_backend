@@ -81,7 +81,7 @@ class WellTarget:
 
     well_id: int
     well_name: str | None
-    station_sdmo_id: int | None
+    station_id: int | None
     station_code: str | None
     station_type_1900: int | None
 
@@ -138,14 +138,14 @@ async def collect_targets(session: AsyncSession) -> list[WellTarget]:
     """Все скважины, у которых есть fc_data. Целевая станция — VLT (type=6),
     иначе первая попавшаяся (тогда прогон детектора пропускаем).
     """
-    ids_stmt = select(SdmoFcData.sdmo_station_id).distinct()
+    ids_stmt = select(SdmoFcData.station_id).distinct()
     ids_with_data = {row[0] for row in (await session.execute(ids_stmt)).all()}
     if not ids_with_data:
         return []
 
     stations_stmt = (
         select(SdmoStation)
-        .where(SdmoStation.sdmo_id.in_(ids_with_data))
+        .where(SdmoStation.id.in_(ids_with_data))
         .where(SdmoStation.well_id.is_not(None))
     )
     stations = list((await session.execute(stations_stmt)).scalars().all())
@@ -171,7 +171,7 @@ async def collect_targets(session: AsyncSession) -> list[WellTarget]:
         WellTarget(
             well_id=well_id,
             well_name=well_names.get(well_id),
-            station_sdmo_id=station.sdmo_id,
+            station_id=station.id,
             station_code=station.code,
             station_type_1900=station.type_1900,
         )
@@ -340,7 +340,7 @@ async def analyze_well(
     other_repairs: Sequence[RepairSpan],
 ) -> WellResult:
     """Загрузить историю, найти эпизоды, посчитать метрики. Один вызов на well."""
-    if target.station_sdmo_id is None or target.station_type_1900 != TARGET_TYPE_1900:
+    if target.station_id is None or target.station_type_1900 != TARGET_TYPE_1900:
         return WellResult(
             target=target,
             series=[],
@@ -354,7 +354,7 @@ async def analyze_well(
         )
 
     raw = await source.load_raw_buckets(
-        target.station_sdmo_id,
+        target.station_id,
         BACKTEST_START,
         BACKTEST_END,
     )
@@ -373,7 +373,7 @@ async def analyze_well(
 
     series = bucketizer.build_series(raw)
     base_moment = await source.get_base_moment(
-        target.station_sdmo_id,
+        target.station_id,
         BACKTEST_START,
         BACKTEST_END,
     )

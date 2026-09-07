@@ -93,15 +93,15 @@ async def _sweep() -> None:
         stations = await target_stations(session)
         if not stations:
             return
-        station_ids = [s.sdmo_id for s in stations]
+        station_ids = [s.id for s in stations]
 
         front_rows = await session.execute(
             select(
-                SdmoFcData.sdmo_station_id,
+                SdmoFcData.station_id,
                 func.max(SdmoFcData.savetime),
             )
-            .where(SdmoFcData.sdmo_station_id.in_(station_ids))
-            .group_by(SdmoFcData.sdmo_station_id),
+            .where(SdmoFcData.station_id.in_(station_ids))
+            .group_by(SdmoFcData.station_id),
         )
         front = dict(front_rows.all())
         cursors = await DetectorCursorRepository(session).get_map(

@@ -71,22 +71,23 @@ async def target_stations(
     """Целевые станции: ШГН с привязкой к скважине, одна станция на скважину.
 
     У скважины бывает несколько станций — берётся станция с минимальным
-    ``sdmo_id``, чтобы эпизоды скважины всегда считались по одной ленте.
+    локальным ``id``, чтобы эпизоды скважины всегда считались по одной ленте.
+    Локальный ``id`` — ключ станции и в fc_data, и в курсорах (``entity_id``).
     """
     filters = [
         SdmoStation.type_1900 == config.TARGET_TYPE_1900,
         SdmoStation.well_id.is_not(None),
     ]
     if entity_ids:
-        filters.append(SdmoStation.sdmo_id.in_(entity_ids))
+        filters.append(SdmoStation.id.in_(entity_ids))
 
     stations = await SdmoStationRepository(session).get_list(
-        QuerySpec(filters=tuple(filters), order_by=(SdmoStation.sdmo_id,)),
+        QuerySpec(filters=tuple(filters), order_by=(SdmoStation.id,)),
     )
     by_well: dict[int, SdmoStation] = {}
     for station in stations:
         by_well.setdefault(station.well_id, station)
-    return sorted(by_well.values(), key=lambda station: station.sdmo_id)
+    return sorted(by_well.values(), key=lambda station: station.id)
 
 
 class LoadImbalanceIncidentRunner:
@@ -100,12 +101,12 @@ class LoadImbalanceIncidentRunner:
         stations = await target_stations(self.session, entity_ids)
         cursors = await self.cursor_repo.get_map(
             DETECTOR_CODE,
-            [station.sdmo_id for station in stations] or None,
+            [station.id for station in stations] or None,
         )
 
         opened = escalated = normalized = 0
         for station in stations:
-            cursor = cursors.get(station.sdmo_id)
+            cursor = cursors.get(station.id)
             try:
                 counts = await self._run_station(
                     station,
@@ -116,7 +117,7 @@ class LoadImbalanceIncidentRunner:
                 await self.session.rollback()
                 logger.exception(
                     "R9 station %s failed; cursor kept",
-                    station.sdmo_id,
+                    station.id,
                 )
                 continue
             opened += counts[0]
@@ -156,7 +157,7 @@ class LoadImbalanceIncidentRunner:
         # поэтому последние оценённые сутки — на день раньше.
         cursor_day = cursor_ts.date() - timedelta(days=1) if cursor_ts else None
 
-        data_front = await self.source.get_data_front(station.sdmo_id)
+        data_front = await self.source.get_data_front(station.id)
         if data_front is None:
             return (0, 0, 0)
 
@@ -174,7 +175,7 @@ class LoadImbalanceIncidentRunner:
 
         window_start = eval_from - timedelta(days=config.BASE_WINDOW_DAYS)
         days = await self.source.load_daily(
-            station.sdmo_id,
+            station.id,
             window_start,
             eval_until,
         )
@@ -208,7 +209,7 @@ class LoadImbalanceIncidentRunner:
 
         await self.cursor_repo.upsert(
             detector_code=DETECTOR_CODE,
-            entity_id=station.sdmo_id,
+            entity_id=station.id,
             last_event_at=_day_end(eval_until),
             last_run_at=now,
         )
@@ -328,7 +329,7 @@ class LoadImbalanceIncidentRunner:
         return OpenIncidentDTO(
             detector_code=DETECTOR_CODE,
             well_id=station.well_id,
-            entity_id=station.sdmo_id,
+            entity_id=station.id,
             reason_code=incident_config.REASON_LOAD_IMBALANCE,
             level=level,
             opened_at=opened_at,

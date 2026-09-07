@@ -29,6 +29,7 @@ from apps.repairs.tasks.sync_repairs.sync_repairs import sync_repairs  # noqa: F
 from apps.telemetry.tasks.load_sdmo.incremental_load import (  # noqa: F401
     load_sdmo_incremental,
 )
+from apps.telemetry.tasks.load_sdmo.sources import configured_ngdus
 
 # Импорт регистрирует таску инкрементальной загрузки способов эксплуатации.
 from apps.wells.tasks.load_well_expl.load_well_expl import (  # noqa: F401
@@ -58,9 +59,16 @@ celery_app.conf.update(
 celery_app.conf.beat_schedule = {
     # Инкрементальная догрузка телеметрии SDMO — каждые 5 минут (источник
     # пишет ~раз в 5 минут; детекторы запускаются по факту прихода данных).
-    "telemetry-sdmo-incremental": {
-        "task": "telemetry.sdmo.incremental_load",
-        "schedule": crontab(minute="*/5"),
+    # Запись на каждый НГДУ с настроенной базой: недоступный или медленный
+    # источник не задерживает остальные, наложение прогонов одного НГДУ
+    # снимает блокировка внутри таска.
+    **{
+        f"telemetry-sdmo-incremental-{ngdu.name.lower()}": {
+            "task": "telemetry.sdmo.incremental_load",
+            "schedule": crontab(minute="*/5"),
+            "kwargs": {"abai_ngdu_id": int(ngdu)},
+        }
+        for ngdu in configured_ngdus()
     },
     # Страховка детекторов: догнать станции, чьи курсоры отстали от данных
     # (потерянные задачи, первичный прогон истории, включённые правила).

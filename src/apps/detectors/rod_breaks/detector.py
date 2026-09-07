@@ -30,7 +30,7 @@ class DetectionResult:
     """Итог детекции по одной скважине за один прогон."""
 
     well_id: int
-    station_sdmo_id: int | None
+    station_id: int | None
     fired: bool
     fired_at: datetime | None
     failure_dt: datetime | None
@@ -94,11 +94,11 @@ class RodBreakDetector:
         window_end = _as_naive_utc(as_of)
         window_start = window_end - timedelta(days=config.WINDOW_DAYS)
 
-        station_sdmo_id = await self._resolve_station(well_id)
-        if station_sdmo_id is None:
+        station_id = await self._resolve_station(well_id)
+        if station_id is None:
             return DetectionResult(
                 well_id=well_id,
-                station_sdmo_id=None,
+                station_id=None,
                 fired=False,
                 fired_at=None,
                 failure_dt=None,
@@ -110,7 +110,7 @@ class RodBreakDetector:
             )
 
         raw = await self.source.load_raw_buckets(
-            station_sdmo_id,
+            station_id,
             window_start,
             window_end,
         )
@@ -118,7 +118,7 @@ class RodBreakDetector:
         rule_result = evaluate(series)
 
         base_moment = await self.source.get_base_moment(
-            station_sdmo_id,
+            station_id,
             window_start,
             window_end,
         )
@@ -136,7 +136,7 @@ class RodBreakDetector:
 
         return DetectionResult(
             well_id=well_id,
-            station_sdmo_id=station_sdmo_id,
+            station_id=station_id,
             fired=rule_result.fired,
             fired_at=rule_result.fired_at,
             failure_dt=recovered_failure_dt,
@@ -148,9 +148,9 @@ class RodBreakDetector:
         )
 
     async def _resolve_station(self, well_id: int) -> int | None:
-        """Выбрать sdmo_id станции type_1900=6 для скважины (первую по порядку)."""
+        """Выбрать локальный id станции type_1900=6 для скважины (первую по id)."""
         stations = await self.station_repo.list_by_well_id(well_id)
         for station in stations:
             if station.type_1900 == TARGET_TYPE_1900:
-                return station.sdmo_id
+                return station.id
         return None

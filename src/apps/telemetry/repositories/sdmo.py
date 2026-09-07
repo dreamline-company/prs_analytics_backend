@@ -1,7 +1,9 @@
 from collections.abc import Sequence
 from datetime import date, datetime
 
-from sqlalchemy import RowMapping, delete, func, select, true
+from sqlalchemy import BigInteger, RowMapping, cast, func, select, true
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from apps.telemetry.dto.internal.repositories.sdmo import (
     CreateSdmoFcRegDTO,
@@ -39,12 +41,37 @@ VLT_STATUS_REGISTER = 1999
 VLT_STATUS_LOOKBACK_ROWS = 50
 
 # Порядок колонок для COPY в telemetry_sdmo_fc_data (id/created_at заполняет БД).
+# station_id — локальный telemetry_sdmo_station.id, abai_ngdu_id — НГДУ источника.
 FC_DATA_COPY_COLUMNS: tuple[str, ...] = (
     "sdmo_id",
-    "sdmo_station_id",
+    "station_id",
+    "abai_ngdu_id",
     "day",
     "savetime",
     *(f"r_{addr}" for addr in SDMO_REGISTERS),
+)
+
+# Атрибуты станции, которые источник может менять между выгрузками.
+_STATION_MUTABLE_COLUMNS: tuple[str, ...] = (
+    "place_id",
+    "name",
+    "code",
+    "type_1900",
+    "serial_number",
+    "active",
+    "status",
+    "well_id",
+)
+_FC_REG_MUTABLE_COLUMNS: tuple[str, ...] = (
+    "type_1900",
+    "addr",
+    "name",
+    "units",
+    "koef",
+    "type",
+    "dynamic",
+    "info",
+    "lora_bytes_size",
 )
 
 
@@ -53,12 +80,20 @@ class SdmoStationRepository(
 ):
     model = SdmoStation
 
-    async def delete_all(self) -> None:
-        await self.session.execute(delete(SdmoStation))
-
-    async def get_by_sdmo_id(self, sdmo_id: int) -> SdmoStation | None:
+    async def get_by_ngdu_sdmo_id(
+        self,
+        abai_ngdu_id: int,
+        sdmo_id: int,
+    ) -> SdmoStation | None:
+        """Станция по натуральному id — только вместе с НГДУ: у каждого НГДУ
+        своя нумерация."""
         return await self.get_one(
-            QuerySpec(filters=(SdmoStation.sdmo_id == sdmo_id,)),
+            QuerySpec(
+                filters=(
+                    SdmoStation.abai_ngdu_id == abai_ngdu_id,
+                    SdmoStation.sdmo_id == sdmo_id,
+                ),
+            ),
         )
 
     async def get_by_code(self, code: str) -> SdmoStation | None:
@@ -70,18 +105,60 @@ class SdmoStationRepository(
         return await self.get_list(
             QuerySpec(
                 filters=(SdmoStation.well_id == well_id,),
-                order_by=(SdmoStation.sdmo_id,),
+                order_by=(SdmoStation.id,),
             ),
         )
+
+    async def list_by_ngdu(
+        self,
+        abai_ngdu_id: int,
+        sdmo_ids: Sequence[int] | None = None,
+    ) -> Sequence[SdmoStation]:
+        """Станции НГДУ; ``sdmo_ids`` — натуральные id источника для сужения."""
+        filters = [SdmoStation.abai_ngdu_id == abai_ngdu_id]
+        if sdmo_ids is not None:
+            filters.append(SdmoStation.sdmo_id.in_(sdmo_ids))
+        return await self.get_list(
+            QuerySpec(filters=tuple(filters), order_by=(SdmoStation.sdmo_id,)),
+        )
+
+    async def list_by_ids(self, ids: Sequence[int]) -> Sequence[SdmoStation]:
+        if not ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(filters=(SdmoStation.id.in_(ids),), order_by=(SdmoStation.id,)),
+        )
+
+    async def upsert_many(self, data: Sequence[CreateSdmoStationDTO]) -> None:
+        """Обновить справочник станций, не удаляя строк.
+
+        Ключ — ``(abai_ngdu_id, sdmo_id)``. Удалять/пересоздавать станции нельзя:
+        на локальный ``id`` ссылаются fc_data и курсоры/инциденты детекторов.
+        Станция, пропавшая из источника, остаётся с последними атрибутами.
+        Все изменяемые атрибуты перезаписываются значениями из ``data`` — DTO
+        должны быть собраны из полной строки источника. Дыры в ``id`` новых
+        станций нормальны: ``ON CONFLICT`` расходует sequence и на конфликтах.
+        """
+        if not data:
+            return
+        stmt = pg_insert(SdmoStation).values([item.model_dump() for item in data])
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_telemetry_sdmo_station_ngdu_sdmo_id",
+            set_={
+                **{
+                    column: getattr(stmt.excluded, column)
+                    for column in _STATION_MUTABLE_COLUMNS
+                },
+                "updated_at": func.now(),
+            },
+        )
+        await self.session.execute(stmt)
 
 
 class SdmoFcRegRepository(
     AsyncAlchemyRepository[CreateSdmoFcRegDTO, UpdateSdmoFcRegDTO, SdmoFcReg],
 ):
     model = SdmoFcReg
-
-    async def delete_all(self) -> None:
-        await self.session.execute(delete(SdmoFcReg))
 
     async def get_by_addr(
         self,
@@ -99,48 +176,67 @@ class SdmoFcRegRepository(
             QuerySpec(order_by=(SdmoFcReg.type_1900, SdmoFcReg.addr)),
         )
 
+    async def upsert_many(self, data: Sequence[CreateSdmoFcRegDTO]) -> None:
+        """Справочник регистров общий для всех НГДУ (базы SDMO идентичны).
+
+        Ключ — натуральный ``sdmo_id`` (он же одинаков во всех базах); строки
+        обновляются на месте, каждый источник при загрузке проходит по нему.
+        """
+        if not data:
+            return
+        stmt = pg_insert(SdmoFcReg).values([item.model_dump() for item in data])
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["sdmo_id"],
+            set_={
+                **{
+                    column: getattr(stmt.excluded, column)
+                    for column in _FC_REG_MUTABLE_COLUMNS
+                },
+                "updated_at": func.now(),
+            },
+        )
+        await self.session.execute(stmt)
+
 
 class SdmoFcDataRepository(
     AsyncAlchemyRepository[RepositoryDTO, RepositoryDTO, SdmoFcData],
 ):
     model = SdmoFcData
 
-    async def get_last_sdmo_id(self) -> int:
-        rows = await self.get_list(
-            QuerySpec(
-                order_by=(SdmoFcData.sdmo_id.desc(),),
-                limit=1,
-            ),
-        )
-        return rows[0].sdmo_id if rows else 0
-
     async def get_last_cursor_by_station(
         self,
-        station_ids: Sequence[int] | None = None,
+        station_ids: Sequence[int],
     ) -> dict[int, tuple[datetime, int]]:
         """Курсор ``(max savetime, sdmo_id при этом savetime)`` на станцию.
 
-        Пара нужна для keyset-пагинации источника по индексу
-        ``trend(station_id, savetime, day)``: ``id`` в индекс не входит и
-        служит только tiebreak'ом внутри одинакового savetime. Станции без
-        строк в результат не попадают (вызывающий берёт ``(None, 0)`` по
-        умолчанию — «грузим с начала»).
+        Ключ — локальный ``station_id``. Пара нужна для keyset-пагинации
+        источника по индексу ``trend(station_id, savetime, day)``: ``id`` в
+        индекс не входит и служит только tiebreak'ом внутри одинакового
+        savetime. LATERAL с ``LIMIT 1`` на станцию — один обратный index scan
+        по ``(station_id, savetime)``, независимо от глубины истории (DISTINCT
+        ON прошёл бы все строки станций). Станции без строк в результат не
+        попадают (вызывающий берёт ``(None, 0)`` — «грузим с начала»).
         """
-        stmt = (
-            select(
-                SdmoFcData.sdmo_station_id,
-                SdmoFcData.savetime,
-                SdmoFcData.sdmo_id,
-            )
-            .distinct(SdmoFcData.sdmo_station_id)
-            .order_by(
-                SdmoFcData.sdmo_station_id,
-                SdmoFcData.savetime.desc(),
-                SdmoFcData.sdmo_id.desc(),
-            )
+        if not station_ids:
+            return {}
+
+        requested = select(
+            func.unnest(cast(list(station_ids), ARRAY(BigInteger))).label(
+                "station_id",
+            ),
+        ).subquery("requested")
+        last_row = (
+            select(SdmoFcData.savetime, SdmoFcData.sdmo_id)
+            .where(SdmoFcData.station_id == requested.c.station_id)
+            .order_by(SdmoFcData.savetime.desc(), SdmoFcData.sdmo_id.desc())
+            .limit(1)
+            .lateral("last_row")
         )
-        if station_ids:
-            stmt = stmt.where(SdmoFcData.sdmo_station_id.in_(station_ids))
+        stmt = (
+            select(requested.c.station_id, last_row.c.savetime, last_row.c.sdmo_id)
+            .select_from(requested)
+            .join(last_row, true())
+        )
         result = await self.session.execute(stmt)
         return {row[0]: (row[1], row[2]) for row in result.all()}
 
@@ -162,27 +258,24 @@ class SdmoFcDataRepository(
             schema_name="public",
         )
 
-    async def list_by_station(
-        self,
-        sdmo_station_id: int,
-    ) -> Sequence[SdmoFcData]:
+    async def list_by_station(self, station_id: int) -> Sequence[SdmoFcData]:
         return await self.get_list(
             QuerySpec(
-                filters=(SdmoFcData.sdmo_station_id == sdmo_station_id,),
+                filters=(SdmoFcData.station_id == station_id,),
                 order_by=(SdmoFcData.savetime,),
             ),
         )
 
     async def list_by_station_period(
         self,
-        sdmo_station_id: int,
+        station_id: int,
         start: date,
         end: date,
     ) -> Sequence[SdmoFcData]:
         return await self.get_list(
             QuerySpec(
                 filters=(
-                    SdmoFcData.sdmo_station_id == sdmo_station_id,
+                    SdmoFcData.station_id == station_id,
                     SdmoFcData.savetime >= start,
                     SdmoFcData.savetime <= end,
                 ),
@@ -197,8 +290,8 @@ class SdmoFcDataRepository(
         """Время последнего отсчёта СДМО на скважину — один запрос на матрицу.
 
         Идёт от станций (``SdmoStation.well_id``) к данным коррелированным
-        ``max(savetime)`` по станции: равенство по ``sdmo_station_id`` + max
-        по второй колонке индекса ``ix_telemetry_sdmo_fc_data_station_savetime``
+        ``max(savetime)`` по станции: равенство по ``station_id`` + max по
+        второй колонке индекса ``ix_telemetry_sdmo_fc_data_station_savetime``
         — это обратный index scan на одну строку, а не сортировка всех строк
         станции. Скважины без станций или без отсчётов в ответ не попадают;
         у скважины с несколькими станциями берётся самый поздний отсчёт.
@@ -208,7 +301,7 @@ class SdmoFcDataRepository(
 
         last_savetime = (
             select(func.max(SdmoFcData.savetime))
-            .where(SdmoFcData.sdmo_station_id == SdmoStation.sdmo_id)
+            .where(SdmoFcData.station_id == SdmoStation.id)
             .scalar_subquery()
         )
         stmt = (
@@ -249,7 +342,7 @@ class SdmoFcDataRepository(
         vlt_status = getattr(SdmoFcData, f"r_{VLT_STATUS_REGISTER}")
         recent = (
             select(SdmoFcData.savetime, vlt_status.label("vlt_status"))
-            .where(SdmoFcData.sdmo_station_id == SdmoStation.sdmo_id)
+            .where(SdmoFcData.station_id == SdmoStation.id)
             .order_by(SdmoFcData.savetime.desc())
             .limit(VLT_STATUS_LOOKBACK_ROWS)
             .correlate(SdmoStation)
@@ -274,18 +367,19 @@ class SdmoFcDataRepository(
 
     async def get_last_pump_parameters_by_stations(
         self,
-        station_sdmo_ids: Sequence[int],
+        station_ids: Sequence[int],
     ) -> RowMapping | None:
         """Последний отсчёт (savetime, момент, скорость, заполнение) по станциям.
 
-        Запрос делается по одной станции за раз: равенство по
-        sdmo_station_id + LIMIT 1 — это обратный index scan по
-        ``ix_telemetry_sdmo_fc_data_station_savetime``, тогда как фильтр
-        ``IN (...)`` с ``ORDER BY savetime DESC`` заставил бы сортировать все
-        строки станций (сотни тысяч на станцию). У скважины обычно одна станция.
+        ``station_ids`` — локальные id станций. Запрос делается по одной
+        станции за раз: равенство по station_id + LIMIT 1 — это обратный
+        index scan по ``ix_telemetry_sdmo_fc_data_station_savetime``, тогда как
+        фильтр ``IN (...)`` с ``ORDER BY savetime DESC`` заставил бы сортировать
+        все строки станций (сотни тысяч на станцию). У скважины обычно одна
+        станция.
         """
         rows: list[RowMapping] = []
-        for station_sdmo_id in station_sdmo_ids:
+        for station_id in station_ids:
             found = await self.get_projection_list(
                 ProjectionQuerySpec(
                     joins=(),
@@ -301,7 +395,7 @@ class SdmoFcDataRepository(
                             "pump_fill",
                         ),
                     ),
-                    filters=(SdmoFcData.sdmo_station_id == station_sdmo_id,),
+                    filters=(SdmoFcData.station_id == station_id,),
                     order_by=(SdmoFcData.savetime.desc(),),
                     limit=1,
                 ),
@@ -315,12 +409,13 @@ class SdmoFcDataRepository(
 
     async def list_parameters_by_stations_period(
         self,
-        station_sdmo_ids: Sequence[int],
+        station_ids: Sequence[int],
         start_time: datetime | None = None,
         end_time: datetime | None = None,
     ) -> Sequence[RowMapping]:
-        """Ряд (savetime, rotor_speed, pump_moment, engine_current) по станциям."""
-        filters: list = [SdmoFcData.sdmo_station_id.in_(station_sdmo_ids)]
+        """Ряд (savetime, rotor_speed, pump_moment, engine_current) по станциям
+        (локальные id)."""
+        filters: list = [SdmoFcData.station_id.in_(station_ids)]
         if start_time is not None:
             filters.append(SdmoFcData.savetime >= start_time)
         if end_time is not None:

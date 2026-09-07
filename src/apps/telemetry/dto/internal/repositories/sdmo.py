@@ -2,6 +2,7 @@ from shared.dto.repositories import RepositoryDTO
 
 
 class CreateSdmoStationDTO(RepositoryDTO):
+    abai_ngdu_id: int
     sdmo_id: int
     place_id: int | None = None
     name: str | None = None
@@ -14,6 +15,7 @@ class CreateSdmoStationDTO(RepositoryDTO):
 
 
 class UpdateSdmoStationDTO(RepositoryDTO):
+    abai_ngdu_id: int | None = None
     sdmo_id: int | None = None
     place_id: int | None = None
     name: str | None = None
@@ -51,5 +53,5 @@ class UpdateSdmoFcRegDTO(RepositoryDTO):
     lora_bytes_size: int | None = None
 
 
-# fc_data грузится широкой строкой (108 колонок r_<addr>) напрямую dict'ами через
+# fc_data грузится широкой строкой (108 колонок r_<addr>) кортежами через
 # SdmoFcDataRepository.copy_rows — отдельный Create/Update DTO не нужен.

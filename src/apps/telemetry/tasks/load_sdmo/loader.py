@@ -5,6 +5,13 @@
 telemetry_sdmo_fc_data. Используется и bulk-, и инкрементальным скриптами;
 отличается только оркестрация.
 
+Несколько НГДУ: у каждого своя база SDMO с одинаковой схемой и независимой
+нумерацией (stations.id, fc_data.id начинаются с единицы в каждой). Ключ
+станции во всей app-БД — локальный ``SdmoStation.id``; натуральный ``sdmo_id``
+нужен только для обращения к источнику и уникален лишь внутри своего
+``abai_ngdu_id``. Справочники обновляются upsert'ом и никогда не удаляются: на
+``station.id`` ссылаются fc_data и курсоры/инциденты детекторов.
+
 Источник append-only (строки только дописываются) → savetime растёт монотонно,
 курсор ``(savetime, id)`` корректен, upsert не нужен, чистый COPY-append.
 
@@ -24,18 +31,22 @@ from typing import Final
 from sqlalchemy import and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.org.repositories.org import OrgRepository
 from apps.telemetry.dto.internal.repositories import (
     CreateSdmoFcRegDTO,
     CreateSdmoStationDTO,
 )
-from apps.telemetry.models.sdmo import SDMO_REGISTERS
+from apps.telemetry.models.sdmo import SDMO_REGISTERS, SdmoStation
 from apps.telemetry.repositories import (
     SdmoFcDataRepository,
     SdmoFcRegRepository,
     SdmoStationRepository,
 )
 from apps.wells.repositories import WellRepository
+from apps.wells.repositories.well_org import WellOrgRepository
+from apps.wells.services import NGDUWellsService
 from core import get_logger
+from shared.constants.ngdu import AbaiNGDUIDsEnum
 from shared.integrations.sdmo.models import FcDataDayParted
 from shared.integrations.sdmo.repositories import (
     SDMOFcDataDayPartedRepository,
@@ -49,6 +60,8 @@ logger = get_logger(__name__)
 ITER_BATCH_SIZE: Final = 100_000
 # Как часто (в строках) логировать прогресс ВНУТРИ станции на уровне INFO.
 PROGRESS_LOG_EVERY_ROWS: Final = 200_000
+# Сколько кодов «чужих» станций показывать в предупреждении.
+FOREIGN_CODES_IN_LOG: Final = 10
 
 # Маппинг буквенного префикса имени скважины (до цифр): имя в SDMO -> wells_well.
 # Напр. SDMO code "MLD_0177" соответствует Well.name "VMB_0177".
@@ -109,20 +122,34 @@ def reg_value(data: dict, addr: int) -> float | None:
         return None
 
 
-def to_record(row: FcDataDayParted) -> tuple:
+def to_record(row: FcDataDayParted, station: SdmoStation) -> tuple:
     """Развернуть строку-источник в широкий кортеж под FC_DATA_COPY_COLUMNS.
 
+    В строку идут локальный ``station.id`` и ``station.abai_ngdu_id`` — не
+    ``row.station_id`` источника: тот уникален только внутри базы своего НГДУ.
     Регистры из JSON `data` раскладываются по колонкам r_<addr> в порядке
     SDMO_REGISTERS; отсутствующие регистры → None.
     """
     data = merge_packets(row.data)
     return (
         row.id,
-        row.station_id,
+        station.id,
+        station.abai_ngdu_id,
         row.day,
         row.savetime,
         *(reg_value(data, addr) for addr in SDMO_REGISTERS),
     )
+
+
+def select_stations(
+    stations: Sequence[SdmoStation],
+    sdmo_ids: Sequence[int] | None,
+) -> list[SdmoStation]:
+    """Сузить станции НГДУ до явного списка натуральных ``sdmo_id`` (если задан)."""
+    if sdmo_ids is None:
+        return list(stations)
+    wanted = set(sdmo_ids)
+    return [station for station in stations if station.sdmo_id in wanted]
 
 
 async def _iter_source_station(
@@ -133,10 +160,10 @@ async def _iter_source_station(
 ) -> AsyncGenerator[Sequence[FcDataDayParted]]:
     """Keyset-пагинация станции по ``(savetime, id)`` через индекс ``trend``.
 
-    ``id`` в индекс не входит и служит только tiebreak'ом для одинакового
-    savetime: ``(savetime, id) > (last_savetime, last_id)`` разворачивается в
-    ``savetime > X OR (savetime = X AND id > Y)``. ``last_savetime = None``
-    = грузим с самого начала (нет курсора).
+    ``station_id`` здесь — натуральный id источника. ``id`` в индекс не входит
+    и служит только tiebreak'ом для одинакового savetime: ``(savetime, id) >
+    (last_savetime, last_id)`` разворачивается в ``savetime > X OR (savetime = X
+    AND id > Y)``. ``last_savetime = None`` = грузим с самого начала (нет курсора).
     """
     cursor_savetime = last_savetime
     cursor_id = last_id
@@ -174,27 +201,31 @@ async def _iter_source_station(
 async def load_station_delta(
     app_session: AsyncSession,
     sdmo_session: AsyncSession,
-    station_id: int,
+    station: SdmoStation,
     cursor: tuple[datetime | None, int],
     *,
     label: str = "",
 ) -> int:
     """Догрузить строки станции с ``(savetime, id) > cursor``.
 
-    ``cursor = (None, 0)`` = станция ещё не грузилась. Коммитит по батчу
-    (COPY + commit), так что прогресс сохраняется и загрузка резюмируема по
-    курсору при падении. Логи: старт станции, первый батч (чтобы не выглядело
-    зависшим на 5+ минут), далее каждые ``PROGRESS_LOG_EVERY_ROWS`` строк.
-    ``label`` — префикс для контекста (напр. "[3/120] " или "[pid 1234] ").
+    Источник опрашивается по натуральному ``station.sdmo_id``, в app-БД строки
+    ложатся под локальным ``station.id``. ``cursor = (None, 0)`` = станция ещё
+    не грузилась. Коммитит по батчу (COPY + commit), так что прогресс
+    сохраняется и загрузка резюмируема по курсору при падении. Логи: старт
+    станции, первый батч (чтобы не выглядело зависшим на 5+ минут), далее
+    каждые ``PROGRESS_LOG_EVERY_ROWS`` строк. ``label`` — префикс для
+    контекста (напр. "[KMG 3/120] " или "[pid 1234] ").
     """
     app_repo = SdmoFcDataRepository(app_session)
     sdmo_fc_repo = SDMOFcDataDayPartedRepository(sdmo_session)
     last_savetime, last_id = cursor
+    # В логах — натуральный id: его видно в самой SDMO.
+    station_ref = f"station {station.sdmo_id} (id={station.id})"
 
     logger.info(
-        "%sstation %s: start (cursor savetime=%s id=%s)",
+        "%s%s: start (cursor savetime=%s id=%s)",
         label,
-        station_id,
+        station_ref,
         last_savetime,
         last_id,
     )
@@ -205,28 +236,28 @@ async def load_station_delta(
     first_batch = True
     async for rows in _iter_source_station(
         sdmo_fc_repo,
-        station_id,
+        station.sdmo_id,
         last_savetime,
         last_id,
     ):
         if first_batch:
             logger.info(
-                "%sstation %s: first batch %s rows in %.1fs",
+                "%s%s: first batch %s rows in %.1fs",
                 label,
-                station_id,
+                station_ref,
                 len(rows),
                 time.monotonic() - started,
             )
             first_batch = False
-        await app_repo.copy_rows([to_record(row) for row in rows])
+        await app_repo.copy_rows([to_record(row, station) for row in rows])
         await app_session.commit()
         total += len(rows)
         if total >= next_log:
             rate = total / max(time.monotonic() - started, 1e-9)
             logger.info(
-                "%sstation %s: %s rows loaded (%.0f rows/s)",
+                "%s%s: %s rows loaded (%.0f rows/s)",
                 label,
-                station_id,
+                station_ref,
                 f"{total:,}",
                 rate,
             )
@@ -235,34 +266,69 @@ async def load_station_delta(
     if total:
         rate = total / max(time.monotonic() - started, 1e-9)
         logger.info(
-            "%sstation %s done: %s rows (%.0f rows/s)",
+            "%s%s done: %s rows (%.0f rows/s)",
             label,
-            station_id,
+            station_ref,
             f"{total:,}",
             rate,
         )
     else:
-        logger.info("%sstation %s done: 0 rows (up to date)", label, station_id)
+        logger.info("%s%s done: 0 rows (up to date)", label, station_ref)
     return total
+
+
+async def _well_ids_by_name(
+    app_session: AsyncSession,
+    ngdu: AbaiNGDUIDsEnum,
+) -> tuple[dict[str, int], dict[str, int]]:
+    """``(скважины НГДУ, все скважины)`` как ``имя -> well_id``.
+
+    Станция привязывается только к скважине своего НГДУ: код станции одного
+    НГДУ не должен случайно совпасть со скважиной другого. Если зеркало
+    оргструктуры для НГДУ пусто (привязки ещё не загружены), ограничение
+    снимается с предупреждением — лучше привязать по имени, чем оставить весь
+    НГДУ без скважин.
+    """
+    all_wells = await WellRepository(app_session).get_list()
+    all_ids = {well.name: well.id for well in all_wells}
+
+    org_repository = OrgRepository(app_session)
+    org = await org_repository.get_by_abai_id(int(ngdu))
+    ngdu_wells = (
+        await NGDUWellsService(
+            org_repository=org_repository,
+            well_repository=WellRepository(app_session),
+            well_org_repository=WellOrgRepository(app_session),
+        ).list_wells(org.id)
+        if org is not None
+        else []
+    )
+    if not ngdu_wells:
+        logger.warning(
+            "NGDU %s has no wells in org mirror; stations are linked by name "
+            "across all wells",
+            ngdu.name,
+        )
+        return all_ids, all_ids
+    return {well.name: well.id for well in ngdu_wells}, all_ids
 
 
 async def load_dimensions(
     app_session: AsyncSession,
     sdmo_session: AsyncSession,
-) -> None:
-    """Full-refresh справочников fc_reg и stations (мелкие, мутабельные).
+    ngdu: AbaiNGDUIDsEnum,
+) -> list[SdmoStation]:
+    """Обновить справочники fc_reg (общий) и stations (своего НГДУ) upsert'ом.
 
-    На станциях резолвит well_id из code (Station.code -> Well.name). fc_data
-    ссылается на станции по sdmo_station_id (натуральный id), поэтому полная
-    перезагрузка stations безопасна.
+    Возвращает станции НГДУ из app-БД (с локальными id) — с ними работают
+    загрузка и детекторы. Регистры одинаковы во всех базах SDMO, поэтому
+    справочник один и каждый источник просто проходит по нему. Станции
+    получают ``well_id`` по коду (Station.code -> Well.name) среди скважин
+    своего НГДУ; совпадения с чужими скважинами не привязываются и попадают
+    в лог.
     """
-    wells = await WellRepository(app_session).get_list()
-    wells_ids = {well.name: well.id for well in wells}
-
     regs = await SDMOFcRegRepository(sdmo_session).get_list()
-    reg_repo = SdmoFcRegRepository(app_session)
-    await reg_repo.delete_all()
-    await reg_repo.bulk_create(
+    await SdmoFcRegRepository(app_session).upsert_many(
         [
             CreateSdmoFcRegDTO(
                 sdmo_id=reg.id,
@@ -280,14 +346,19 @@ async def load_dimensions(
         ],
     )
     await app_session.commit()
-    logger.info("Loaded SDMO fc_reg: %s", len(regs))
+    logger.info("[%s] SDMO fc_reg upserted: %s", ngdu.name, len(regs))
 
-    stations = await SDMOStationRepository(sdmo_session).get_list()
-    station_repo = SdmoStationRepository(app_session)
-    await station_repo.delete_all()
-    await station_repo.bulk_create(
-        [
+    ngdu_wells, all_wells = await _well_ids_by_name(app_session, ngdu)
+    source_stations = await SDMOStationRepository(sdmo_session).get_list()
+    foreign_codes: list[str] = []
+    dtos: list[CreateSdmoStationDTO] = []
+    for station in source_stations:
+        well_id = resolve_well_id(station.code, ngdu_wells)
+        if well_id is None and resolve_well_id(station.code, all_wells) is not None:
+            foreign_codes.append(station.code or "")
+        dtos.append(
             CreateSdmoStationDTO(
+                abai_ngdu_id=int(ngdu),
                 sdmo_id=station.id,
                 place_id=station.place_id,
                 name=station.name,
@@ -296,23 +367,27 @@ async def load_dimensions(
                 serial_number=station.serial_number,
                 active=station.active,
                 status=station.status,
-                well_id=resolve_well_id(station.code, wells_ids),
-            )
-            for station in stations
-        ],
-    )
+                well_id=well_id,
+            ),
+        )
+    station_repo = SdmoStationRepository(app_session)
+    await station_repo.upsert_many(dtos)
     await app_session.commit()
-    logger.info("Loaded SDMO stations: %s", len(stations))
+    if foreign_codes:
+        logger.warning(
+            "[%s] %s stations match wells of other NGDUs and stay unlinked: %s",
+            ngdu.name,
+            len(foreign_codes),
+            ", ".join(foreign_codes[:FOREIGN_CODES_IN_LOG]),
+        )
 
-
-async def list_source_station_ids(
-    sdmo_session: AsyncSession,
-    station_ids: Sequence[int] | None = None,
-) -> list[int]:
-    """Список station_id для загрузки: явный список или все станции источника."""
-    stations = await SDMOStationRepository(sdmo_session).get_list()
-    all_ids = [station.id for station in stations]
-    if station_ids is None:
-        return all_ids
-    wanted = set(station_ids)
-    return [sid for sid in all_ids if sid in wanted]
+    stations = list(await station_repo.list_by_ngdu(int(ngdu)))
+    linked = sum(1 for station in stations if station.well_id is not None)
+    logger.info(
+        "[%s] SDMO stations upserted: %s from source, %s in mirror, %s linked to wells",
+        ngdu.name,
+        len(source_stations),
+        len(stations),
+        linked,
+    )
+    return stations

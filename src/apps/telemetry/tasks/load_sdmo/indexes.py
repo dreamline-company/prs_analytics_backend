@@ -1,11 +1,13 @@
 """Управление вторичными индексами telemetry_sdmo_fc_data для bulk-загрузки.
 
-При разовой заливке истории вторичные индексы сносятся, данные грузятся COPY,
-а индексы строятся один раз в конце — это в разы быстрее, чем поддерживать их на
-каждой вставке. PK (id) не трогаем: он на монотонном serial, дописывается в правый
-край B-дерева и почти не мешает.
+При заливке истории в ПУСТУЮ таблицу вторичные индексы сносятся, данные
+грузятся COPY, а индексы строятся один раз в конце — это в разы быстрее, чем
+поддерживать их на каждой вставке. PK (id) не трогаем: он на монотонном
+serial, дописывается в правый край B-дерева и почти не мешает.
 
-Инкрементальная загрузка эти функции НЕ использует — там индексы остаются на месте.
+Индексы общие для всех НГДУ: пока их нет, матрица, карточка и детекторы уже
+загруженных НГДУ работают seq scan'ом. Поэтому bulk_load сносит их только по
+явному ``--rebuild-indexes``; инкремент их не трогает вовсе.
 """
 
 from sqlalchemy import text
@@ -18,21 +20,21 @@ logger = get_logger(__name__)
 _TABLE = "telemetry_sdmo_fc_data"
 
 # Имя индекса -> DDL создания (идемпотентно). Соответствуют модели SdmoFcData:
-# sdmo_id UNIQUE + композит (sdmo_station_id, savetime).
+# уникальность натурального id внутри станции + композит (station_id, savetime).
 SECONDARY_INDEXES: dict[str, str] = {
-    "ix_telemetry_sdmo_fc_data_sdmo_id": (
-        "CREATE UNIQUE INDEX IF NOT EXISTS ix_telemetry_sdmo_fc_data_sdmo_id "
-        f"ON {_TABLE} (sdmo_id)"
+    "uq_telemetry_sdmo_fc_data_station_sdmo_id": (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_telemetry_sdmo_fc_data_station_sdmo_id "
+        f"ON {_TABLE} (station_id, sdmo_id)"
     ),
     "ix_telemetry_sdmo_fc_data_station_savetime": (
         "CREATE INDEX IF NOT EXISTS ix_telemetry_sdmo_fc_data_station_savetime "
-        f"ON {_TABLE} (sdmo_station_id, savetime)"
+        f"ON {_TABLE} (station_id, savetime)"
     ),
 }
 
 
 async def drop_secondary_indexes() -> None:
-    """Снести вторичные индексы (перед bulk-загрузкой)."""
+    """Снести вторичные индексы (перед bulk-загрузкой в пустую таблицу)."""
     async with engines["app"].connect() as conn:
         ac = await conn.execution_options(isolation_level="AUTOCOMMIT")
         for name in SECONDARY_INDEXES:

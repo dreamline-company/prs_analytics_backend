@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -134,15 +135,28 @@ SDMO_REGISTERS: tuple[int, ...] = (
 
 
 class SdmoStation(AppBaseModel, IntPkMixin, TimedMixinModel):
-    __tablename__ = "telemetry_sdmo_station"
+    """Станция СДМО (станция управления) из базы одного НГДУ.
 
-    # Натуральный ключ — исходный stations.id из БД SDMO.
-    sdmo_id: Mapped[int] = mapped_column(
-        BigInteger,
-        unique=True,
-        index=True,
-        nullable=False,
+    Ключ станции для всей системы — локальный ``id``: на него ссылаются
+    ``SdmoFcData.station_id`` и курсоры/инциденты детекторов (``entity_id``).
+    Натуральный ``sdmo_id`` уникален только внутри базы своего НГДУ (у каждого
+    НГДУ своя MySQL с автоинкрементом от единицы), поэтому строки никогда не
+    удаляются и не пересоздаются — только upsert по ``(abai_ngdu_id, sdmo_id)``.
+    """
+
+    __tablename__ = "telemetry_sdmo_station"
+    __table_args__ = (
+        UniqueConstraint(
+            "abai_ngdu_id",
+            "sdmo_id",
+            name="uq_telemetry_sdmo_station_ngdu_sdmo_id",
+        ),
     )
+
+    # НГДУ-источник (AbaiNGDUIDsEnum): из какой базы SDMO пришла станция.
+    abai_ngdu_id: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    # Натуральный ключ — исходный stations.id из БД SDMO своего НГДУ.
+    sdmo_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     place_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Имя скважины (Station.code -> Well.name).
@@ -191,25 +205,33 @@ class SdmoFcReg(AppBaseModel, IntPkMixin, TimedMixinModel):
 class SdmoFcData(AppBaseModel, IntPkMixin):
     __tablename__ = "telemetry_sdmo_fc_data"
     # fc_data_day_parted — внутрисуточный ряд (~1 отсчёт / 2 мин на станцию).
-    # Уникальность по натуральному ключу источника (sdmo_id); композитный индекс
-    # (sdmo_station_id, savetime) обслуживает оконные выборки детекторов.
+    # Натуральный id источника уникален только внутри станции: базы разных НГДУ
+    # нумеруют строки независимо. Композитный индекс (station_id, savetime)
+    # обслуживает оконные выборки детекторов и «последний отсчёт» матрицы.
+    # FK на станцию намеренно нет: проверка FK на COPY в сотни миллионов строк
+    # дорога, а целостность держит загрузчик — станции не удаляются.
     __table_args__ = (
         Index(
             "ix_telemetry_sdmo_fc_data_station_savetime",
-            "sdmo_station_id",
+            "station_id",
             "savetime",
+        ),
+        Index(
+            "uq_telemetry_sdmo_fc_data_station_sdmo_id",
+            "station_id",
+            "sdmo_id",
+            unique=True,
         ),
     )
 
-    # Исходный fc_data_day_parted.id из БД SDMO — курсор инкрементальной загрузки.
-    sdmo_id: Mapped[int] = mapped_column(
-        BigInteger,
-        unique=True,
-        index=True,
-        nullable=False,
-    )
-    # Ссылка на станцию (== SdmoStation.sdmo_id).
-    sdmo_station_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Исходный fc_data_day_parted.id из БД SDMO — tiebreak курсора загрузки
+    # внутри станции.
+    sdmo_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Локальный ключ станции (== SdmoStation.id).
+    station_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # НГДУ-источник (== SdmoStation.abai_ngdu_id); денормализация для фильтров
+    # и статистики по НГДУ без join'а станций.
+    abai_ngdu_id: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     day: Mapped[date] = mapped_column(Date, nullable=False)
     savetime: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 

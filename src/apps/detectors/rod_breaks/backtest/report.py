@@ -516,7 +516,7 @@ def render_well_page(result: WellResult, path: Path) -> None:
     header = [
         f"<h1>{escape(title)}</h1>",
         '<div class="meta">'
-        f"station sdmo_id={tgt.station_sdmo_id} code={escape(tgt.station_code or '—')} "
+        f"station id={tgt.station_id} code={escape(tgt.station_code or '—')} "
         f"type_1900={tgt.station_type_1900 or '—'} · "
         f"покрытие: {_fmt_date(result.coverage_start)} .. {_fmt_date(result.coverage_end)} · "
         f"base_moment: {_fmt_num(result.base_moment)}"

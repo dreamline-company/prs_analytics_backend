@@ -5,6 +5,8 @@ from zoneinfo import ZoneInfo
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from shared.constants.ngdu import AbaiNGDUIDsEnum
+
 ENV_TYPE = Literal["dev", "prod", "local"]
 LOG_LEVEL_TYPE = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
@@ -41,8 +43,23 @@ class Settings(CoreSettings):
     ABAI_ASYNC_DATABASE_URL: str
     # CM DB
     CM_ASYNC_DATABASE_URL: str
-    # SDMO DB (MySQL)
-    SDMO_ASYNC_DATABASE_URL: str
+    # SDMO DB (MySQL) — у каждого НГДУ своя база с одинаковой схемой, ключ —
+    # AbaiNGDUIDsEnum. Незаданный URL = НГДУ ещё не подключён, загрузчик и
+    # beat его пропускают.
+    SDMO_KMG_ASYNC_DATABASE_URL: str | None = None
+    SDMO_DMG_ASYNC_DATABASE_URL: str | None = None
+    SDMO_ZHMG_ASYNC_DATABASE_URL: str | None = None
+    SDMO_ZHLMG_ASYNC_DATABASE_URL: str | None = None
+
+    def sdmo_database_urls(self) -> dict[AbaiNGDUIDsEnum, str]:
+        """URL SDMO-баз по НГДУ — только настроенные."""
+        urls = {
+            AbaiNGDUIDsEnum.KMG: self.SDMO_KMG_ASYNC_DATABASE_URL,
+            AbaiNGDUIDsEnum.DMG: self.SDMO_DMG_ASYNC_DATABASE_URL,
+            AbaiNGDUIDsEnum.ZHMG: self.SDMO_ZHMG_ASYNC_DATABASE_URL,
+            AbaiNGDUIDsEnum.ZHlMG: self.SDMO_ZHLMG_ASYNC_DATABASE_URL,
+        }
+        return {ngdu: url for ngdu, url in urls.items() if url}
 
     # CM media
     CM_MEDIA_URL_HEADER: str = "http://188.127.32.80:8000/media"

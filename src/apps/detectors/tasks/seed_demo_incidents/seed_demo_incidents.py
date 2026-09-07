@@ -166,7 +166,7 @@ def _r9_incident(  # noqa: PLR0913
     return DetectorIncident(
         detector_code="R9",
         well_id=station.well_id,
-        entity_id=station.sdmo_id,
+        entity_id=station.id,
         reason_code=r9_incident_config.REASON_LOAD_IMBALANCE,
         level=INCIDENT_LEVEL_ALARM if is_alarm else INCIDENT_LEVEL_WARNING,
         status=status,
@@ -257,7 +257,7 @@ def _r2_incident(  # noqa: PLR0913
     return DetectorIncident(
         detector_code="R2",
         well_id=station.well_id,
-        entity_id=station.sdmo_id,
+        entity_id=station.id,
         reason_code=r2_incident_config.REASON_ROD_BREAK,
         level=level,
         status=status,
@@ -295,12 +295,12 @@ async def _pick_stations(
             SdmoStation.type_1900 == type_1900,
             SdmoStation.well_id.is_not(None),
         )
-        .order_by(SdmoStation.sdmo_id),
+        .order_by(SdmoStation.id),
     )
     by_well: dict[int, SdmoStation] = {}
     for station in rows.scalars():
         by_well.setdefault(station.well_id, station)
-    return sorted(by_well.values(), key=lambda s: s.sdmo_id)[:limit]
+    return sorted(by_well.values(), key=lambda s: s.id)[:limit]
 
 
 # Профили эпизодов R9: (возраст в сутках, alert-суток, статус, причина закрытия).

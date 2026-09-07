@@ -7,6 +7,7 @@ class SdmoStationDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    abai_ngdu_id: int
     sdmo_id: int
     place_id: int | None
     name: str | None

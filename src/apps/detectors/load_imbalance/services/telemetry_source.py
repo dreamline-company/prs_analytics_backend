@@ -47,7 +47,7 @@ class LoadImbalanceTelemetrySource:
 
     async def load_daily(
         self,
-        station_sdmo_id: int,
+        station_id: int,
         day_from: date,
         day_to: date,
     ) -> list[DayAggregate]:
@@ -69,7 +69,7 @@ class LoadImbalanceTelemetrySource:
             select(SdmoFcData.day.label("day"), self._moment().label("moment"))
             .distinct(SdmoFcData.savetime)
             .where(
-                SdmoFcData.sdmo_station_id == station_sdmo_id,
+                SdmoFcData.station_id == station_id,
                 SdmoFcData.savetime >= datetime.combine(day_from, time.min),
                 SdmoFcData.savetime
                 < datetime.combine(day_to + timedelta(days=1), time.min),
@@ -112,7 +112,7 @@ class LoadImbalanceTelemetrySource:
             for row in rows
         ]
 
-    async def get_data_front(self, station_sdmo_id: int) -> date | None:
+    async def get_data_front(self, station_id: int) -> date | None:
         """Последние сутки, по которым у станции вообще есть строки.
 
         Нужны, чтобы не оценивать неполные сутки: если загрузчик отстал,
@@ -122,7 +122,7 @@ class LoadImbalanceTelemetrySource:
         """
         result = await self.session.execute(
             select(func.max(SdmoFcData.savetime)).where(
-                SdmoFcData.sdmo_station_id == station_sdmo_id,
+                SdmoFcData.station_id == station_id,
             ),
         )
         last = result.scalar_one_or_none()

@@ -70,7 +70,7 @@ class GetWellCardUseCase:
         if stations:
             fc_data_repository = self.sdmo_fc_data_repository
             pump = await fc_data_repository.get_last_pump_parameters_by_stations(
-                station_sdmo_ids=[station.sdmo_id for station in stations],
+                station_ids=[station.id for station in stations],
             )
             # Тем же запросом, что и матрица: строка матрицы и карточка должны
             # показывать один и тот же статус станции.

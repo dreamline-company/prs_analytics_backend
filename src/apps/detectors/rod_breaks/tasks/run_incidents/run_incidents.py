@@ -63,22 +63,23 @@ async def target_stations(
     """Целевые станции: type_1900=6 с привязкой к скважине, одна на скважину.
 
     У скважины бывает несколько станций — берётся станция с минимальным
-    sdmo_id, чтобы эпизоды скважины всегда считались по одной ленте.
+    локальным ``id``, чтобы эпизоды скважины всегда считались по одной ленте.
+    Локальный ``id`` — ключ станции и в fc_data, и в курсорах (``entity_id``).
     """
     filters = [
         SdmoStation.type_1900 == TARGET_TYPE_1900,
         SdmoStation.well_id.is_not(None),
     ]
     if entity_ids:
-        filters.append(SdmoStation.sdmo_id.in_(entity_ids))
+        filters.append(SdmoStation.id.in_(entity_ids))
 
     stations = await SdmoStationRepository(session).get_list(
-        QuerySpec(filters=tuple(filters), order_by=(SdmoStation.sdmo_id,)),
+        QuerySpec(filters=tuple(filters), order_by=(SdmoStation.id,)),
     )
     by_well: dict[int, SdmoStation] = {}
     for station in stations:
         by_well.setdefault(station.well_id, station)
-    return sorted(by_well.values(), key=lambda s: s.sdmo_id)
+    return sorted(by_well.values(), key=lambda s: s.id)
 
 
 class RodBreakIncidentRunner:
@@ -92,12 +93,12 @@ class RodBreakIncidentRunner:
         stations = await target_stations(self.session, entity_ids)
         cursors = await self.cursor_repo.get_map(
             DETECTOR_CODE,
-            [s.sdmo_id for s in stations] or None,
+            [s.id for s in stations] or None,
         )
 
         opened = escalated = normalized = 0
         for station in stations:
-            cursor = cursors.get(station.sdmo_id)
+            cursor = cursors.get(station.id)
             try:
                 o, e, n = await self._run_station(
                     station,
@@ -108,7 +109,7 @@ class RodBreakIncidentRunner:
                 await self.session.rollback()
                 logger.exception(
                     "R2 station %s failed; cursor kept",
-                    station.sdmo_id,
+                    station.id,
                 )
                 continue
             opened += o
@@ -148,7 +149,7 @@ class RodBreakIncidentRunner:
         window_start = eval_from - _CONTEXT
 
         raw = await self.source.load_raw_buckets(
-            station.sdmo_id,
+            station.id,
             window_start,
             now,
         )
@@ -157,7 +158,7 @@ class RodBreakIncidentRunner:
         series = bucketizer.build_series(raw)
 
         base_moment = await self.source.get_base_moment(
-            station.sdmo_id,
+            station.id,
             window_start,
             now,
         )
@@ -231,7 +232,7 @@ class RodBreakIncidentRunner:
         last_complete = series[-1].start_ts + _BUCKET_SPAN if series else None
         await self.cursor_repo.upsert(
             detector_code=DETECTOR_CODE,
-            entity_id=station.sdmo_id,
+            entity_id=station.id,
             last_event_at=last_complete or cursor_ts or now,
             last_run_at=now,
         )
@@ -279,7 +280,7 @@ class RodBreakIncidentRunner:
         return OpenIncidentDTO(
             detector_code=DETECTOR_CODE,
             well_id=station.well_id,
-            entity_id=station.sdmo_id,
+            entity_id=station.id,
             reason_code=incident_config.REASON_ROD_BREAK,
             level=level,
             opened_at=opened_at,

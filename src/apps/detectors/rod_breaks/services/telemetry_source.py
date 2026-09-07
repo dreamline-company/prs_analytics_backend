@@ -45,7 +45,7 @@ class RodBreakTelemetrySource:
 
     async def load_raw_buckets(
         self,
-        station_sdmo_id: int,
+        station_id: int,
         window_start: datetime,
         window_end: datetime,
     ) -> list[RawBucket]:
@@ -67,7 +67,7 @@ class RodBreakTelemetrySource:
                 func.count().label("sample_count"),
             )
             .where(
-                SdmoFcData.sdmo_station_id == station_sdmo_id,
+                SdmoFcData.station_id == station_id,
                 SdmoFcData.savetime >= window_start,
                 SdmoFcData.savetime <= window_end,
                 moment >= config.MOMENT_CLIP_MIN,
@@ -90,7 +90,7 @@ class RodBreakTelemetrySource:
 
     async def get_base_moment(
         self,
-        station_sdmo_id: int,
+        station_id: int,
         window_start: datetime,
         window_end: datetime,
     ) -> float | None:
@@ -106,7 +106,7 @@ class RodBreakTelemetrySource:
         query = select(
             func.percentile_cont(_MEDIAN).within_group(moment),
         ).where(
-            SdmoFcData.sdmo_station_id == station_sdmo_id,
+            SdmoFcData.station_id == station_id,
             SdmoFcData.savetime >= window_start,
             SdmoFcData.savetime <= window_end,
             moment >= config.MOMENT_CLIP_MIN,

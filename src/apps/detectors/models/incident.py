@@ -82,8 +82,9 @@ class DetectorIncident(AppBaseModel, IntPkMixin, TimedMixinModel):
         nullable=False,
     )
     well_id: Mapped[int] = mapped_column(ForeignKey("wells_well.id"), nullable=False)
-    # Сущность источника, по чьей ленте посчитан эпизод (для SDMO — sdmo_id
-    # станции). Имя нейтральное: у WinCC/КБРС здесь будет их идентификатор.
+    # Сущность источника, по чьей ленте посчитан эпизод (для SDMO — локальный
+    # telemetry_sdmo_station.id). Имя нейтральное: у WinCC/КБРС здесь будет их
+    # идентификатор.
     entity_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # Код сигнала внутри правила: что именно пошло не так (rod_break,
     # speed_drop, ...). Расшифровки — константы правила.
