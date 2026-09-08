@@ -12,6 +12,25 @@ WATER_CUT_MIN = 0.0
 WATER_CUT_MAX = 100.0
 
 
+def oil_rate_deviation(
+    *,
+    oil_rate: float | None,
+    plan_oil_rate: float | None,
+) -> tuple[float | None, float | None]:
+    """(факт − план, т/сут; то же в % к плану) — знак минус означает потерю.
+
+    Без замера или плана отклонение не определено; при нулевом плане процент
+    не определён, а разница есть (вся добыча сверх режима).
+    """
+    if oil_rate is None or plan_oil_rate is None:
+        return None, None
+    delta = oil_rate - plan_oil_rate
+    if plan_oil_rate <= 0:
+        return round(delta, 1), None
+    # Процент — от неокруглённой разницы, иначе 0 против плана 1.99 даёт −100.5 %.
+    return round(delta, 1), round(delta / plan_oil_rate * 100, 1)
+
+
 def water_cut(*, liquid_rate: float | None, oil_rate: float | None) -> float | None:
     """Обводнённость, % = доля воды в жидкости: (жидкость - нефть) / жидкость."""
     if liquid_rate is None or oil_rate is None or liquid_rate <= 0:
@@ -64,13 +83,20 @@ class WellRatesService:
             regime = regimes.get(abai_well_id)
             oil_rate = last.qm_oil if last else None
             liquid_rate = last.qv_liquid if last else None
+            plan_oil_rate = regime.oil if regime else None
+            deviation, deviation_percent = oil_rate_deviation(
+                oil_rate=oil_rate,
+                plan_oil_rate=plan_oil_rate,
+            )
             rates[well_id] = WellRatesDTO(
                 oil_rate=oil_rate,
                 liquid_rate=liquid_rate,
                 water_cut=water_cut(liquid_rate=liquid_rate, oil_rate=oil_rate),
                 telemetry_time=last.date_time if last else None,
-                plan_oil_rate=regime.oil if regime else None,
+                plan_oil_rate=plan_oil_rate,
                 plan_liquid_rate=regime.liquid if regime else None,
                 tech_regime_date=regime.start_date if regime else None,
+                oil_rate_deviation=deviation,
+                oil_rate_deviation_percent=deviation_percent,
             )
         return rates

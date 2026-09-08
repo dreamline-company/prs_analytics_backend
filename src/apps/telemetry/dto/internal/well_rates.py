@@ -19,3 +19,8 @@ class WellRatesDTO(BaseModel):
     plan_oil_rate: float | None  # План Qн — TechRegime.oil
     plan_liquid_rate: float | None  # План Qж — TechRegime.liquid
     tech_regime_date: date | None  # Начало режима — TechRegime.start_date
+    # Отклонение факта от плана по нефти: oil_rate − plan_oil_rate, т/сут.
+    # Отрицательное — потеря, положительное — работает выше режима. None, если
+    # нет замера или плана; процент — ещё и при нулевом плане.
+    oil_rate_deviation: float | None
+    oil_rate_deviation_percent: float | None
