@@ -72,7 +72,7 @@ def _names(coro: Coroutine[Any, Any, list]) -> list[str]:
 
 
 def test_no_filters_returns_wells_of_all_ngdus_only() -> None:
-    # XXX_0004 привязана к организации вне НГДУ — в «все НГДУ» не входит.
+    # Скважина с префиксом XXX привязана к организации вне НГДУ и в «все НГДУ» не входит.
     assert _names(_service().list_wells()) == ["BLG_0001", "BLG_0003", "UZK_0002"]
 
 
