@@ -3,6 +3,7 @@
 from datetime import date
 from types import SimpleNamespace
 
+from apps.wells.repositories.gdis import MAX_QUERY_PARAMS, rows_per_statement
 from apps.wells.tasks.load_gdis.load_gdis import conclusion_ids, current_dto
 
 
@@ -35,3 +36,11 @@ def test_current_dto_survives_null_only_conclusion_array() -> None:
     assert dto.abai_id == 1
     assert dto.abai_well_id == 100
     assert dto.conclusion_arr is None
+
+
+def test_rows_per_statement_respects_asyncpg_parameter_limit() -> None:
+    for columns in (1, 5, 12, 40):
+        assert rows_per_statement(columns) * columns <= MAX_QUERY_PARAMS
+        assert rows_per_statement(columns) >= 1
+    # 5000 исследований по 12 колонок раньше давали 60 000 параметров
+    assert rows_per_statement(12) < 5000

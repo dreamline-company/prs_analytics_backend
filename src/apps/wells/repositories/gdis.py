@@ -20,6 +20,14 @@ from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 # Ключ каждого зеркала — ABAI id; при повторе строки обновляются все поля,
 # кроме самого ключа: источник правит записи на месте, без отметки времени.
 
+# asyncpg не принимает больше 32 767 параметров в одном запросе; многострочный
+# INSERT ... VALUES режется так, чтобы строк × колонок не выходило за лимит.
+MAX_QUERY_PARAMS = 30_000
+
+
+def rows_per_statement(columns: int) -> int:
+    return max(1, MAX_QUERY_PARAMS // max(columns, 1))
+
 
 async def _upsert_by_abai_id(
     repository: AsyncAlchemyRepository,
@@ -28,15 +36,16 @@ async def _upsert_by_abai_id(
     if not data:
         return
     by_key = {item.abai_id: item for item in data}  # type: ignore[attr-defined]
-    stmt = pg_insert(repository.model).values(
-        [item.model_dump() for item in by_key.values()],
-    )
-    mutable = [c.name for c in stmt.excluded if c.name not in ("id", "abai_id")]
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["abai_id"],
-        set_={column: getattr(stmt.excluded, column) for column in mutable},
-    )
-    await repository.session.execute(stmt)
+    rows = [item.model_dump() for item in by_key.values()]
+    step = rows_per_statement(len(rows[0]))
+    for start in range(0, len(rows), step):
+        stmt = pg_insert(repository.model).values(rows[start : start + step])
+        mutable = [c.name for c in stmt.excluded if c.name not in ("id", "abai_id")]
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["abai_id"],
+            set_={column: getattr(stmt.excluded, column) for column in mutable},
+        )
+        await repository.session.execute(stmt)
 
 
 class GdisMetricRepository(
