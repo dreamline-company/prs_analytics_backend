@@ -1,7 +1,8 @@
 import asyncio
 from collections.abc import AsyncGenerator, Sequence
 
-from apps.models_registry import *  # noqa
+from apps.celery_app import celery_app, run_async
+from apps.models_registry import *  # noqa: F403
 from apps.telemetry.dto.internal.repositories import CreateTechRegimeDTO
 from apps.telemetry.repositories import TechRegimeRepository
 from apps.wells.repositories import WellRepository
@@ -97,6 +98,12 @@ class ABAILoadTechRegime:
 
 async def main() -> None:
     await ABAILoadTechRegime().run()
+
+
+@celery_app.task(name="telemetry.tech_regime.incremental_load")
+def load_tech_regime_incremental() -> None:
+    """Инкремент техрежимов из ABAI (новые id после последнего загруженного)."""
+    run_async(main())
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Sequence
 from datetime import datetime
 
+from apps.celery_app import celery_app, run_async
 from apps.models_registry import *  # noqa
 from apps.telemetry.dto.internal.repositories import CreateTelemetryDTO
 from apps.telemetry.repositories import TelemetryRepository
@@ -37,10 +38,18 @@ class WinccLoadTelemetry:
             app_wells_ids = {well.name: well.id for well in app_wells}
             del app_wells
 
-        await self._load_kainar(app_wells_ids)
-        await self._load_dmg(app_wells_ids)
-        await self._load_zhmg(app_wells_ids)
-        await self._load_zhylmg(app_wells_ids)
+        # Источники независимы: недоступный WinCC одного НГДУ не должен
+        # оставлять остальные без свежих замеров до следующего запуска.
+        for name, load in (
+            ("KMG", self._load_kainar),
+            ("DMG", self._load_dmg),
+            ("ZHMG", self._load_zhmg),
+            ("ZHLMG", self._load_zhylmg),
+        ):
+            try:
+                await load(app_wells_ids)
+            except Exception:
+                logger.exception("WinCC telemetry load [%s] failed; continuing", name)
 
     async def _load_dmg(
         self,
@@ -225,6 +234,12 @@ class WinccLoadTelemetry:
 
 async def main() -> None:
     await WinccLoadTelemetry().run()
+
+
+@celery_app.task(name="telemetry.wincc.incremental_load")
+def load_wincc_incremental() -> None:
+    """Инкремент замеров дебитов из WinCC всех НГДУ (от последнего замера скважины)."""
+    run_async(main())
 
 
 if __name__ == "__main__":

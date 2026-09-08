@@ -31,6 +31,15 @@ from apps.telemetry.tasks.load_sdmo.incremental_load import (  # noqa: F401
 )
 from apps.telemetry.tasks.load_sdmo.sources import configured_ngdus
 
+# Импорт регистрирует таски инкрементальной загрузки замеров WinCC и
+# техрежимов ABAI — источники добычи и плана для сводки НГДУ и матрицы.
+from apps.telemetry.tasks.load_tech_regime.load_regime import (  # noqa: F401
+    load_tech_regime_incremental,
+)
+from apps.telemetry.tasks.load_telemetry.load_wincc import (  # noqa: F401
+    load_wincc_incremental,
+)
+
 # Импорт регистрирует таску инкрементальной загрузки способов эксплуатации.
 from apps.wells.tasks.load_well_expl.load_well_expl import (  # noqa: F401
     load_well_expl_incremental,
@@ -69,6 +78,19 @@ celery_app.conf.beat_schedule = {
             "kwargs": {"abai_ngdu_id": int(ngdu)},
         }
         for ngdu in configured_ngdus()
+    },
+    # Замеры дебитов из WinCC четырёх НГДУ — раз в час (замер на скважину
+    # приходит раз в 2–3 суток, чаще опрашивать смысла нет). Сводка НГДУ
+    # считает добычу по замерам не старше 7 суток.
+    "telemetry-wincc-incremental": {
+        "task": "telemetry.wincc.incremental_load",
+        "schedule": crontab(minute=20),
+    },
+    # Техрежимы (план Qн/Qж) из ABAI — раз в сутки после синхронизации
+    # оргструктуры и ремонтов. Режимы месячные; сводка допускает лаг до 31 дня.
+    "telemetry-tech-regime-incremental": {
+        "task": "telemetry.tech_regime.incremental_load",
+        "schedule": crontab(hour=5, minute=45),
     },
     # Страховка детекторов: догнать станции, чьи курсоры отстали от данных
     # (потерянные задачи, первичный прогон истории, включённые правила).
