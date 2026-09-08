@@ -63,6 +63,18 @@ def metric_dto(row: ABAIMetric) -> CreateGdisMetricDTO:
     )
 
 
+def conclusion_ids(values: list[int | None] | None) -> list[int] | None:
+    """Массив заключений источника без пустых элементов.
+
+    В ABAI встречаются массивы вида ``{NULL}`` и ``{12,NULL}``: пустой элемент
+    смысла не несёт, а массив из одних NULL равносилен отсутствию заключений.
+    """
+    if not values:
+        return None
+    cleaned = [value for value in values if value is not None]
+    return cleaned or None
+
+
 def current_dto(row: ABAIGdisCurrent) -> CreateGdisCurrentDTO:
     return CreateGdisCurrentDTO(
         abai_id=row.id,
@@ -75,7 +87,7 @@ def current_dto(row: ABAIGdisCurrent) -> CreateGdisCurrentDTO:
         note=row.note,
         transcript_dynamogram=row.transcript_dynamogram,
         conclusion=row.conclusion,
-        conclusion_arr=list(row.conclusion_arr) if row.conclusion_arr else None,
+        conclusion_arr=conclusion_ids(row.conclusion_arr),
         conclusion_text=row.conclusion_text,
     )
 
