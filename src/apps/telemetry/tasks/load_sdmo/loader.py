@@ -22,6 +22,7 @@ telemetry_sdmo_fc_data. Используется и bulk-, и инкремент
 ``trend`` (``type: ref``, ~1.2M против 308M rows/EXPLAIN, ×250).
 """
 
+import asyncio
 import re
 import time
 from collections.abc import AsyncGenerator, Sequence
@@ -29,6 +30,7 @@ from datetime import datetime
 from typing import Final
 
 from sqlalchemy import and_, or_
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.org.repositories.oil_field import OilFieldRepository
@@ -61,6 +63,11 @@ logger = get_logger(__name__)
 ITER_BATCH_SIZE: Final = 100_000
 # Как часто (в строках) логировать прогресс ВНУТРИ станции на уровне INFO.
 PROGRESS_LOG_EVERY_ROWS: Final = 200_000
+# Обрыв соединения с MySQL источника (2013 «Lost connection», 2006 «gone
+# away») под нагрузкой — штатная ситуация, а не ошибка данных: батч
+# повторяется от последнего закоммиченного курсора с растущей паузой.
+SOURCE_RETRIES: Final = 5
+SOURCE_RETRY_BACKOFF_SEC: Final = 15
 # Сколько кодов «чужих» станций показывать в предупреждении.
 FOREIGN_CODES_IN_LOG: Final = 10
 
@@ -235,34 +242,62 @@ async def load_station_delta(
     total = 0
     next_log = PROGRESS_LOG_EVERY_ROWS
     first_batch = True
-    async for rows in _iter_source_station(
-        sdmo_fc_repo,
-        station.sdmo_id,
-        last_savetime,
-        last_id,
-    ):
-        if first_batch:
-            logger.info(
-                "%s%s: first batch %s rows in %.1fs",
+    attempt = 0
+    while True:
+        try:
+            async for rows in _iter_source_station(
+                sdmo_fc_repo,
+                station.sdmo_id,
+                last_savetime,
+                last_id,
+            ):
+                if first_batch:
+                    logger.info(
+                        "%s%s: first batch %s rows in %.1fs",
+                        label,
+                        station_ref,
+                        len(rows),
+                        time.monotonic() - started,
+                    )
+                    first_batch = False
+                await app_repo.copy_rows([to_record(row, station) for row in rows])
+                await app_session.commit()
+                total += len(rows)
+                last_savetime, last_id = rows[-1].savetime, rows[-1].id
+                if total >= next_log:
+                    rate = total / max(time.monotonic() - started, 1e-9)
+                    logger.info(
+                        "%s%s: %s rows loaded (%.0f rows/s)",
+                        label,
+                        station_ref,
+                        f"{total:,}",
+                        rate,
+                    )
+                    next_log += PROGRESS_LOG_EVERY_ROWS
+            break
+        except OperationalError as exc:
+            attempt += 1
+            if attempt > SOURCE_RETRIES:
+                raise
+            # Сбросить обе сессии: у источника соединение мёртвое, пул выдаст
+            # новое; у app-БД незакоммиченного нет, но транзакция могла остаться
+            # открытой. Курсор — последний закоммиченный батч.
+            await sdmo_session.rollback()
+            await app_session.rollback()
+            pause = SOURCE_RETRY_BACKOFF_SEC * attempt
+            logger.warning(
+                "%s%s: source connection lost (%s); retry %s/%s in %ss from "
+                "cursor savetime=%s id=%s",
                 label,
                 station_ref,
-                len(rows),
-                time.monotonic() - started,
+                type(exc.orig).__name__ if exc.orig else type(exc).__name__,
+                attempt,
+                SOURCE_RETRIES,
+                pause,
+                last_savetime,
+                last_id,
             )
-            first_batch = False
-        await app_repo.copy_rows([to_record(row, station) for row in rows])
-        await app_session.commit()
-        total += len(rows)
-        if total >= next_log:
-            rate = total / max(time.monotonic() - started, 1e-9)
-            logger.info(
-                "%s%s: %s rows loaded (%.0f rows/s)",
-                label,
-                station_ref,
-                f"{total:,}",
-                rate,
-            )
-            next_log += PROGRESS_LOG_EVERY_ROWS
+            await asyncio.sleep(pause)
 
     if total:
         rate = total / max(time.monotonic() - started, 1e-9)

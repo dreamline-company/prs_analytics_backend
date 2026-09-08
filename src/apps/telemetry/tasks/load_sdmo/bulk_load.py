@@ -138,7 +138,13 @@ async def _worker_async(
     abai_ngdu_id: int,
     station_ids: list[int],
     shard_total: int,
-) -> int:
+) -> tuple[int, list[int]]:
+    """Прогнать станции шарда; вернуть (строк загружено, sdmo_id упавших станций).
+
+    Упавшая станция (исчерпаны повторы к источнику, битые данные) логируется
+    и пропускается: остальные станции шарда и других воркеров продолжают
+    работу, а повторный запуск той же команды дозагрузит её от курсора.
+    """
     ngdu = as_ngdu(abai_ngdu_id)
     pid = os.getpid()
     logger.info(
@@ -158,14 +164,27 @@ async def _worker_async(
             app_session,
         ).get_last_cursor_by_station(station_ids)
         total = 0
+        failed: list[int] = []
         for station in stations:
-            total += await loader.load_station_delta(
-                app_session,
-                sdmo_session,
-                station,
-                cursor.get(station.id, (None, 0)),
-                label=f"[pid {pid}] ",
-            )
+            try:
+                total += await loader.load_station_delta(
+                    app_session,
+                    sdmo_session,
+                    station,
+                    cursor.get(station.id, (None, 0)),
+                    label=f"[pid {pid}] ",
+                )
+            except Exception:
+                logger.exception(
+                    "worker pid=%s: station %s (id=%s) failed; skipping",
+                    pid,
+                    station.sdmo_id,
+                    station.id,
+                )
+                failed.append(station.sdmo_id)
+                await app_session.rollback()
+                await sdmo_session.rollback()
+                continue
             elapsed = time.monotonic() - started
             rate = total / elapsed if elapsed else 0
             pct = 100 * total / shard_total if shard_total else 0
@@ -180,10 +199,14 @@ async def _worker_async(
                 eta_min,
             )
     await _dispose_engines(ngdu)
-    return total
+    return total, failed
 
 
-def _worker(abai_ngdu_id: int, station_ids: list[int], shard_total: int) -> int:
+def _worker(
+    abai_ngdu_id: int,
+    station_ids: list[int],
+    shard_total: int,
+) -> tuple[int, list[int]]:
     """Точка входа дочернего процесса (spawn): свой event loop и свои движки."""
     try:
         return asyncio.run(_worker_async(abai_ngdu_id, station_ids, shard_total))
@@ -196,8 +219,11 @@ def _run_workers(
     ngdu: AbaiNGDUIDsEnum,
     plan: list[tuple[list[int], int]],
     token: str,
-) -> int:
-    """Прогнать шарды в пуле процессов, продлевая замок НГДУ, пока они работают."""
+) -> tuple[int, list[int]]:
+    """Прогнать шарды в пуле процессов, продлевая замок НГДУ, пока они работают.
+
+    Возвращает (строк загружено, sdmo_id станций, которые не догрузились).
+    """
     ctx = multiprocessing.get_context("spawn")
     with ctx.Pool(len(plan)) as pool:
         result = pool.starmap_async(
@@ -214,7 +240,10 @@ def _run_workers(
                     "incremental load may now collide with workers",
                     ngdu.name,
                 )
-        return sum(result.get())
+        outcomes = result.get()
+    total = sum(loaded for loaded, _ in outcomes)
+    failed = sorted(sdmo_id for _, ids in outcomes for sdmo_id in ids)
+    return total, failed
 
 
 def run_bulk(
@@ -238,6 +267,7 @@ def run_bulk(
         return
 
     total = 0
+    failed: list[int] = []
     try:
         plan = asyncio.run(
             _prepare(ngdu, station_sdmo_ids, workers, rebuild_indexes=rebuild_indexes),
@@ -249,7 +279,7 @@ def run_bulk(
             workers,
         )
         if plan:
-            total = _run_workers(ngdu, plan, token)
+            total, failed = _run_workers(ngdu, plan, token)
         asyncio.run(_finalize(rebuild_indexes=rebuild_indexes))
     finally:
         asyncio.run(release_ngdu_load_lock(int(ngdu), token))
@@ -263,6 +293,15 @@ def run_bulk(
         elapsed,
         rate,
     )
+    if failed:
+        logger.error(
+            "Bulk load [%s]: %s stations not fully loaded (sdmo_id): %s — rerun "
+            "the same command to resume them from their cursors",
+            ngdu.name,
+            len(failed),
+            ", ".join(map(str, failed)),
+        )
+        raise SystemExit(1)
 
 
 def _parse_args() -> argparse.Namespace:
