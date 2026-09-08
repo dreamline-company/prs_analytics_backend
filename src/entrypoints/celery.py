@@ -40,6 +40,9 @@ from apps.telemetry.tasks.load_telemetry.load_wincc import (  # noqa: F401
     load_wincc_incremental,
 )
 
+# Импорт регистрирует таску инкрементальной загрузки ГДИС из ABAI.
+from apps.wells.tasks.load_gdis.load_gdis import load_gdis_incremental  # noqa: F401
+
 # Импорт регистрирует таску инкрементальной загрузки способов эксплуатации.
 from apps.wells.tasks.load_well_expl.load_well_expl import (  # noqa: F401
     load_well_expl_incremental,
@@ -117,6 +120,12 @@ celery_app.conf.beat_schedule = {
     "wells-well-expl-incremental": {
         "task": "wells.well_expl.incremental_load",
         "schedule": crontab(hour=5, minute=30),
+    },
+    # Ежедневная догрузка ГДИС из ABAI: метрики -> исследования -> значения,
+    # плюс перечитывание исследований за 90 дней (заключения дописывают позже).
+    "wells-gdis-incremental": {
+        "task": "wells.gdis.incremental_load",
+        "schedule": crontab(hour=5, minute=40),
     },
     # Ежедневная синхронизация оргструктуры из ABAI: типы организаций ->
     # организации -> бригады -> дедупликация бригад (порядок внутри таска).

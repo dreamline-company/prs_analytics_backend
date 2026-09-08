@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     Text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import UserDefinedType
 
@@ -508,3 +509,59 @@ class WellExpl(ABAIBaseModel):
         nullable=True,
         comment="Дата окончания действия",
     )
+
+
+class Metric(ABAIBaseModel):
+    """Справочник метрик ГДИС (emg_integration.metric через FDW)."""
+
+    __tablename__ = "metric"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name_ru: Mapped[str] = mapped_column(Text, nullable=False)
+    data_type: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    parent: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    name_short_ru: Mapped[str | None] = mapped_column(Text, nullable=True)
+    code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dict_table: Mapped[str | None] = mapped_column(Text, nullable=True)
+    value_double_min: Mapped[float | None] = mapped_column(
+        DOUBLE_PRECISION,
+        nullable=True,
+    )
+    value_double_max: Mapped[float | None] = mapped_column(
+        DOUBLE_PRECISION,
+        nullable=True,
+    )
+
+
+class GdisCurrent(ABAIBaseModel):
+    """Исследование скважины (emg_integration.gdis_current через FDW)."""
+
+    __tablename__ = "gdis_current"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    well: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    meas_date: Mapped[date] = mapped_column(Date, nullable=False)
+    reason: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    device: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    transcript_dynamogram: Mapped[str | None] = mapped_column(Text, nullable=True)
+    target: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conclusion_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason_txt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conclusion_arr: Mapped[list[int] | None] = mapped_column(
+        ARRAY(BigInteger),
+        nullable=True,
+    )
+    conclusion: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class GdisCurrentValue(ABAIBaseModel):
+    """Значение метрики исследования (emg_integration.gdis_current_value)."""
+
+    __tablename__ = "gdis_current_value"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    gdis_curr: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    metric: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    value_double: Mapped[float | None] = mapped_column(DOUBLE_PRECISION, nullable=True)
+    value_string: Mapped[str | None] = mapped_column(Text, nullable=True)

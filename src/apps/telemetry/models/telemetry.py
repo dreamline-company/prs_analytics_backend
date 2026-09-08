@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, String
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.database.sql.models import AppBaseModel, IntPkMixin
@@ -8,6 +8,10 @@ from shared.database.sql.models import AppBaseModel, IntPkMixin
 
 class Telemetry(AppBaseModel, IntPkMixin):
     __tablename__ = "telemetry_well"
+    # Последний замер скважины (LATERAL по скважине) и ряды за период.
+    __table_args__ = (
+        Index("ix_telemetry_well_well_id_date_time", "well_id", "date_time"),
+    )
 
     well_id: Mapped[int] = mapped_column(
         BigInteger,

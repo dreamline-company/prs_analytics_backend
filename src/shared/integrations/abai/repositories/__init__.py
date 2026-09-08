@@ -4,6 +4,11 @@ from shared.integrations.abai.repositories.brigades import (
 from shared.integrations.abai.repositories.coord_systems import (
     ABAICoordSystemRepository,
 )
+from shared.integrations.abai.repositories.gdis import (
+    ABAIGdisCurrentRepository,
+    ABAIGdisCurrentValueRepository,
+    ABAIMetricRepository,
+)
 from shared.integrations.abai.repositories.orgs import (
     ABAIOrgRepository,
 )
@@ -33,6 +38,9 @@ from shared.integrations.abai.repositories.wells import ABAIWellRepository
 __all__ = (
     "ABAIBrigadeRepository",
     "ABAICoordSystemRepository",
+    "ABAIGdisCurrentRepository",
+    "ABAIGdisCurrentValueRepository",
+    "ABAIMetricRepository",
     "ABAIOrgRepository",
     "ABAIRepairWorkTypeRepository",
     "ABAISpatialObjectRepository",

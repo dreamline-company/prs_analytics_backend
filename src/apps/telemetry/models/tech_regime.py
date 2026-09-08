@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import BigInteger, Date, Float, ForeignKey
+from sqlalchemy import BigInteger, Date, Float, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.database.sql.models import AbaiIdMixin, AppBaseModel, IntPkMixin
@@ -8,6 +8,14 @@ from shared.database.sql.models import AbaiIdMixin, AppBaseModel, IntPkMixin
 
 class TechRegime(AppBaseModel, IntPkMixin, AbaiIdMixin):
     __tablename__ = "telemetry_tech_regime"
+    # Последний / действующий режим скважины (LATERAL по скважине).
+    __table_args__ = (
+        Index(
+            "ix_telemetry_tech_regime_abai_well_id_start_date",
+            "abai_well_id",
+            "start_date",
+        ),
+    )
 
     abai_well_id: Mapped[int] = mapped_column(
         BigInteger,
