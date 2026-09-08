@@ -46,11 +46,15 @@ from apps.wells.dto.responses.well import (
 )
 from apps.wells.repositories.coords import WellCoordRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
+from apps.wells.repositories.gdis import (
+    GdisCurrentValueRepository,
+    GdisMetricRepository,
+)
 from apps.wells.repositories.status_history import WellStatusHistoryRepository
 from apps.wells.repositories.well import WellRepository
 from apps.wells.repositories.well_expl import WellExplRepository
 from apps.wells.repositories.well_org import WellOrgRepository
-from apps.wells.services import CoordPointService, NGDUWellsService
+from apps.wells.services import CoordPointService, NGDUWellsService, WellGdisService
 from apps.wells.use_cases.get_well_card import GetWellCardUseCase
 from apps.wells.use_cases.get_well_coords import GetWellCoordsUseCase
 from apps.wells.use_cases.get_well_matrix_incidents import (
@@ -217,6 +221,10 @@ async def get_well_card(
         ),
         current_repair_service=CurrentRepairService(
             repair_repository=RepairRepository(session=session),
+        ),
+        well_gdis_service=WellGdisService(
+            gdis_metric_repository=GdisMetricRepository(session=session),
+            gdis_current_value_repository=GdisCurrentValueRepository(session=session),
         ),
     )
     card = await use_case.execute(GetWellCardQuery(well_id=well_id))

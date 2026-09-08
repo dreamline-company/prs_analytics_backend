@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict
 
@@ -33,6 +33,10 @@ class WellCardPassportDTO(WellRatesDTO):
     # Статус станции (1 — онлайн, 0 — не онлайн) — регистр 1999 «Статус
     # (VLT SALT)», последнее заполненное значение по станциям скважины.
     sdmo_vlt_status: int | None
+    # ГДИС: динамический уровень, м, по последнему исследованию с этой
+    # метрикой («H дин, м» / «Динамический уровень, м») и дата исследования.
+    h_din_m: float | None
+    h_din_date: date | None
     zero_rate_days: int  # Дней с дебитом 0 — пока заглушка
 
 

@@ -1,7 +1,8 @@
 from collections.abc import Sequence
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import BigInteger, cast, func, select, true
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from apps.wells.dto.internal.repositories.gdis import (
@@ -49,6 +50,16 @@ class GdisMetricRepository(
 
     async def list_all(self) -> Sequence[GdisMetric]:
         return await self.get_list(QuerySpec(order_by=(GdisMetric.abai_id,)))
+
+    async def list_abai_ids_by_names(self, names: Sequence[str]) -> set[int]:
+        """ABAI id метрик по точному ``name_ru`` (одна величина может быть
+        заведена под несколькими именами)."""
+        if not names:
+            return set()
+        result = await self.session.execute(
+            select(GdisMetric.abai_id).where(GdisMetric.name_ru.in_(names)),
+        )
+        return set(result.scalars().all())
 
     async def upsert_many(self, data: Sequence[CreateGdisMetricDTO]) -> None:
         await _upsert_by_abai_id(self, data)
@@ -129,3 +140,56 @@ class GdisCurrentValueRepository(
 
     async def upsert_many(self, data: Sequence[CreateGdisCurrentValueDTO]) -> None:
         await _upsert_by_abai_id(self, data)
+
+    async def get_last_by_abai_well_ids(
+        self,
+        abai_well_ids: Sequence[int],
+        *,
+        metric_abai_ids: Sequence[int],
+    ) -> list[tuple[int, float, date]]:
+        """Последнее непустое значение метрик по скважине: (abai_well_id,
+        value_double, meas_date).
+
+        LATERAL на скважину: исследования читаются по индексу
+        ``(abai_well_id, meas_date)`` от свежих к старым, значения — по
+        ``(gdis_current_abai_id, metric_abai_id)``; первое найденное и есть
+        ответ. Скважины без такого значения в результат не попадают.
+        """
+        if not abai_well_ids or not metric_abai_ids:
+            return []
+
+        requested = select(
+            func.unnest(cast(list(abai_well_ids), ARRAY(BigInteger))).label(
+                "abai_well_id",
+            ),
+        ).subquery("requested")
+        last_value = (
+            select(GdisCurrentValue.value_double, GdisCurrent.meas_date)
+            .join(
+                GdisCurrent,
+                GdisCurrent.abai_id == GdisCurrentValue.gdis_current_abai_id,
+            )
+            .where(
+                GdisCurrent.abai_well_id == requested.c.abai_well_id,
+                GdisCurrentValue.metric_abai_id.in_(metric_abai_ids),
+                GdisCurrentValue.value_double.is_not(None),
+            )
+            .order_by(
+                GdisCurrent.meas_date.desc(),
+                GdisCurrent.abai_id.desc(),
+                GdisCurrentValue.abai_id.desc(),
+            )
+            .limit(1)
+            .lateral("last_value")
+        )
+        stmt = (
+            select(
+                requested.c.abai_well_id,
+                last_value.c.value_double,
+                last_value.c.meas_date,
+            )
+            .select_from(requested)
+            .join(last_value, true())
+        )
+        result = await self.session.execute(stmt)
+        return [(row[0], float(row[1]), row[2]) for row in result.all()]
