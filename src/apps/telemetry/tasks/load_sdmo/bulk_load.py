@@ -27,8 +27,9 @@ import asyncio
 import multiprocessing
 import os
 import time
+from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 
 from apps.models_registry import *  # noqa: F403
 from apps.telemetry.repositories import SdmoFcDataRepository, SdmoStationRepository
@@ -70,21 +71,47 @@ async def _dispose_engines(ngdu: AbaiNGDUIDsEnum) -> None:
     await engines[sdmo_engine_key(ngdu)].dispose()
 
 
-async def _station_row_counts(
+async def _remaining_row_counts(
     ngdu: AbaiNGDUIDsEnum,
-    sdmo_ids: list[int],
+    cursors_by_sdmo_id: dict[int, tuple[datetime | None, int]],
 ) -> dict[int, int]:
-    """Число строк fc_data на станцию (натуральный id) из источника."""
-    if not sdmo_ids:
+    """Сколько строк источника ещё не загружено, на станцию (натуральный id).
+
+    Станции без курсора считаются одним GROUP BY; у начатых считается только
+    хвост за курсором ``(savetime, id)`` — это и есть работа, которую предстоит
+    сделать, по ней балансируются шарды и считаются проценты в логе. Иначе
+    после прерванного запуска воркер показывал бы 20 % и ETA в часы, догружая
+    последние строки.
+    """
+    if not cursors_by_sdmo_id:
         return {}
+    fresh = [
+        sid for sid, (savetime, _) in cursors_by_sdmo_id.items() if savetime is None
+    ]
+    counts: dict[int, int] = {}
     async with sdmo_session_maker(ngdu)() as sdmo_session:
-        stmt = (
-            select(FcDataDayParted.station_id, func.count())
-            .where(FcDataDayParted.station_id.in_(sdmo_ids))
-            .group_by(FcDataDayParted.station_id)
-        )
-        rows = (await sdmo_session.execute(stmt)).all()
-    return dict(rows)
+        if fresh:
+            stmt = (
+                select(FcDataDayParted.station_id, func.count())
+                .where(FcDataDayParted.station_id.in_(fresh))
+                .group_by(FcDataDayParted.station_id)
+            )
+            counts.update(dict((await sdmo_session.execute(stmt)).all()))
+        for sdmo_id, (savetime, last_id) in cursors_by_sdmo_id.items():
+            if savetime is None:
+                continue
+            stmt = select(func.count()).where(
+                FcDataDayParted.station_id == sdmo_id,
+                or_(
+                    FcDataDayParted.savetime > savetime,
+                    and_(
+                        FcDataDayParted.savetime == savetime,
+                        FcDataDayParted.id > last_id,
+                    ),
+                ),
+            )
+            counts[sdmo_id] = int((await sdmo_session.execute(stmt)).scalar() or 0)
+    return counts
 
 
 async def _prepare(
@@ -104,16 +131,25 @@ async def _prepare(
         sdmo_session_maker(ngdu)() as sdmo_session,
     ):
         stations = await loader.load_dimensions(app_session, sdmo_session, ngdu)
-    stations = loader.select_stations(stations, station_sdmo_ids)
+        stations = loader.select_stations(stations, station_sdmo_ids)
+        cursors = await SdmoFcDataRepository(app_session).get_last_cursor_by_station(
+            [station.id for station in stations],
+        )
     local_by_sdmo = {station.sdmo_id: station.id for station in stations}
 
-    source_counts = await _station_row_counts(ngdu, list(local_by_sdmo))
-    counts = {local_by_sdmo[sdmo_id]: n for sdmo_id, n in source_counts.items()}
+    remaining = await _remaining_row_counts(
+        ngdu,
+        {station.sdmo_id: cursors.get(station.id, (None, 0)) for station in stations},
+    )
+    # Станции без остатка в шарды не попадают: им нечего грузить.
+    counts = {local_by_sdmo[sdmo_id]: n for sdmo_id, n in remaining.items() if n > 0}
     logger.info(
-        "Bulk plan [%s]: %s stations, %s rows total",
+        "Bulk plan [%s]: %s stations to load, %s rows remaining; %s stations "
+        "already up to date",
         ngdu.name,
         len(counts),
         f"{sum(counts.values()):,}",
+        len(stations) - len(counts),
     )
     if rebuild_indexes:
         logger.warning(
