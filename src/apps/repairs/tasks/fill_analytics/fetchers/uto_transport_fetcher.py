@@ -1,7 +1,9 @@
 """Fetches special-transport waybills for a repair from UTO.
 
 Flow per repair:
-  1. Read all ``RepairSummary`` rows for the repair (``repairs_repair_reports``).
+  1. Read the ``RepairSummary`` rows of the repair (``repairs_repair_reports``):
+     linked by ``repair_id`` plus, when the repair's well is known, the well's
+     summaries dated inside the repair — uploads do not set ``repair_id``.
      Each row has a ``car`` (free-form vehicle number string) and a ``date``.
   2. Deduplicate the ``(car, date)`` pairs across summaries — same car on the
      same day means the same UTO query.
@@ -52,8 +54,13 @@ class UtoTransportFetcher:
         self._summary_repo = summary_repo
         self._transport_repo = transport_repo
 
-    async def fetch_for_repair(self, repair: Repair) -> list[RepairTransport]:
-        summaries = await self._summary_repo.list_by_repair_id(repair.id)
+    async def fetch_for_repair(
+        self,
+        repair: Repair,
+        *,
+        well_id: int | None = None,
+    ) -> list[RepairTransport]:
+        summaries = await self._summaries_for_repair(repair, well_id=well_id)
         if not summaries:
             logger.info(
                 "Transport skipped for repair id=%s — no RepairSummary rows.",
@@ -102,6 +109,24 @@ class UtoTransportFetcher:
                     results.append(row)
 
         return results
+
+    async def _summaries_for_repair(
+        self,
+        repair: Repair,
+        *,
+        well_id: int | None,
+    ) -> list:
+        linked = list(await self._summary_repo.list_by_repair_id(repair.id))
+        if well_id is None:
+            return linked
+        end = repair.end_time or datetime.now()  # noqa: DTZ005
+        by_well = await self._summary_repo.list_by_well_ids_in_dates(
+            [well_id],
+            date_from=repair.start_time.date(),
+            date_to=end.date(),
+        )
+        seen = {summary.id for summary in linked}
+        return linked + [summary for summary in by_well if summary.id not in seen]
 
     @staticmethod
     def _unique_car_date_pairs(

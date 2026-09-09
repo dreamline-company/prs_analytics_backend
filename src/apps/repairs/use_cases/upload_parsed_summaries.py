@@ -30,6 +30,7 @@ from apps.repairs.models.repair import Repair
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.repair import RepairRepository
 from apps.repairs.repositories.reports import RepairSummaryRepository, SummaryKey
+from apps.repairs.tasks.fetch_sources.triggers import schedule_transport_fetch
 from apps.wells.models.well import Well
 from apps.wells.repositories import WellRepository
 from core import get_logger
@@ -85,6 +86,8 @@ class UploadParsedSummariesUseCase:
         linked_brigades = await self._link_brigades(accepted, wells_by_name)
 
         await self.session.commit()
+
+        await self._schedule_transport_fetch(accepted, wells_by_name)
 
         result = UploadParsedSummariesResultDTO(
             received=len(summaries),
@@ -259,6 +262,57 @@ class UploadParsedSummariesUseCase:
                 sorted(missing),
             )
         return brigades_by_name
+
+    async def _schedule_transport_fetch(
+        self,
+        summaries: list[UploadParsedSummaryDTO],
+        wells_by_name: dict[str, Well],
+    ) -> None:
+        """Поставить добытчик путёвок УТО на ремонты, покрытые новыми сводками.
+
+        Сводка — единственный источник пар «машина × дата» для УТО, поэтому
+        первый запрос в УТО правильно делать сразу после загрузки, а не ждать
+        крона. Сбой здесь не должен ронять ответ API: данные уже закоммичены.
+        """
+        try:
+            repair_ids = await self._covering_repair_ids(summaries, wells_by_name)
+            if repair_ids:
+                schedule_transport_fetch(repair_ids)
+        except Exception:
+            logger.exception("Transport fetch trigger failed; cron will catch up.")
+
+    async def _covering_repair_ids(
+        self,
+        summaries: list[UploadParsedSummaryDTO],
+        wells_by_name: dict[str, Well],
+    ) -> list[int]:
+        pairs = {(wells_by_name[s.well_name].id, s.start_date) for s in summaries}
+        if not pairs:
+            return []
+        well_ids = {well_id for well_id, _ in pairs}
+        dates = [summary_date for _, summary_date in pairs]
+        well_id_by_abai = {
+            well.abai_id: well.id
+            for well in wells_by_name.values()
+            if well.id in well_ids
+        }
+        repairs = await self.repair_repository.list_covering_range(
+            sorted(well_ids),
+            sorted(well_id_by_abai),
+            date_from=min(dates),
+            date_to=max(dates),
+        )
+        repairs_by_well: dict[int, list[Repair]] = defaultdict(list)
+        for repair in repairs:
+            well_id = repair.well_id or well_id_by_abai.get(repair.abai_well_id)
+            if well_id is not None:
+                repairs_by_well[well_id].append(repair)
+        matched: set[int] = set()
+        for well_id, summary_date in pairs:
+            repair = self._pick_repair(repairs_by_well.get(well_id, ()), summary_date)
+            if repair is not None:
+                matched.add(repair.id)
+        return sorted(matched)
 
     @staticmethod
     def _pick_repair(repairs: list[Repair], target_date: date) -> Repair | None:

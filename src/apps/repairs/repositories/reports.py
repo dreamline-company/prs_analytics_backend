@@ -1,7 +1,7 @@
 from collections.abc import Iterable, Sequence
 from datetime import date
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from apps.repairs.dto.internal.repositories.reports import (
@@ -41,6 +41,34 @@ class RepairSummaryRepository(
         return await self.get_list(
             QuerySpec(
                 filters=(RepairSummary.repair_id == repair_id,),
+                order_by=(RepairSummary.date,),
+            ),
+        )
+
+    async def list_by_well_ids_in_dates(
+        self,
+        well_ids: Sequence[int],
+        *,
+        date_from: date,
+        date_to: date,
+    ) -> Sequence[RepairSummary]:
+        """Сводки скважин за интервал дат — по основной и второй скважине.
+
+        Загрузка сводок ``repair_id`` не проставляет, поэтому сводки ремонта
+        ищутся по его скважине и датам, а не по ссылке.
+        """
+        if not well_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(
+                    or_(
+                        RepairSummary.well_id.in_(well_ids),
+                        RepairSummary.second_well_id.in_(well_ids),
+                    ),
+                    RepairSummary.date >= date_from,
+                    RepairSummary.date <= date_to,
+                ),
                 order_by=(RepairSummary.date,),
             ),
         )

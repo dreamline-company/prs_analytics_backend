@@ -16,6 +16,7 @@
 
 import argparse
 import asyncio
+from collections.abc import Sequence
 
 from sqlalchemy import select
 
@@ -48,9 +49,13 @@ class LoadDynamograms:
         self,
         *,
         well_id: int | None = None,
+        well_ids: Sequence[int] | None = None,
         concurrency: int = DEFAULT_CONCURRENCY,
     ) -> None:
         self._well_id = well_id
+        # Явный список скважин — для добытчика по ремонтам-кандидатам: он
+        # перечитывает только скважины с открытыми ремонтами, а не весь фонд.
+        self._well_ids = list(well_ids) if well_ids is not None else None
         if concurrency > MAX_CONCURRENCY:
             logger.warning(
                 "Concurrency %s exceeds DB pool capacity, capped to %s",
@@ -60,7 +65,8 @@ class LoadDynamograms:
             concurrency = MAX_CONCURRENCY
         self._concurrency = max(concurrency, 1)
 
-    async def run(self) -> None:
+    async def run(self) -> dict[int, int]:
+        """Загрузить динамограммы; вернуть число новых файлов по скважинам."""
         abai_client = AbaiAsyncClient(
             username=settings.ABAI_LOGIN,
             password=settings.ABAI_PASS,
@@ -112,6 +118,9 @@ class LoadDynamograms:
                 no_gdis,
                 failed_wells,
             )
+            return {
+                well.id: result[0] for well, result in zip(wells, results, strict=True)
+            }
         finally:
             await abai_client.aclose()
 
@@ -185,6 +194,10 @@ class LoadDynamograms:
         )
         if self._well_id is not None:
             stmt = stmt.where(Well.id == self._well_id)
+        if self._well_ids is not None:
+            if not self._well_ids:
+                return []
+            stmt = stmt.where(Well.id.in_(self._well_ids))
         wells = list((await session.execute(stmt)).scalars())
         if self._well_id is not None and not wells:
             msg = f"Well id={self._well_id} not found (or deleted / without abai_id)"
