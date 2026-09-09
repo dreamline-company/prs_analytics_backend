@@ -87,7 +87,7 @@ async def get_repair_analytics_view(
         transport_repository=RepairTransportRepository(session=app_session),
         file_repository=FileRepository(session=app_session),
         storage=AiobotoFileStorage(
-            bucket_name=settings.PRS_REPAIRS_BUCKET_NAME,
+            bucket_name=settings.S3_BUCKET_NAME,
             client_factory=get_aioboto_client_factory(),
         ),
         cm_brigade_error_screen_repository=CMBrigadeErrorScreenRepository(

@@ -249,7 +249,7 @@ async def get_well_dynamograms(
 ) -> WellDynamogramsResponseDTO:
     # Бакет тот же, что у /files/{file_id}: все загрузки сейчас ложатся туда.
     storage = AiobotoFileStorage(
-        bucket_name=settings.PRS_REPAIRS_BUCKET_NAME,
+        bucket_name=settings.S3_BUCKET_NAME,
         client_factory=get_aioboto_client_factory(),
         presign_client_factory=get_aioboto_presign_client_factory(),
     )

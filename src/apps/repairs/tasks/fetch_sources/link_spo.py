@@ -6,10 +6,10 @@
 
 Celery: ``repairs.link_spo`` — по событию опросчика (``measure_id`` замера,
 который появился или вырос) и кроном каждые 30 минут по кандидатам как
-страховка. Ни одного RPC в Toucan: замер уже лежит в бакете опросчика,
-отсюда он разбирается на события, дорисовывается ``chart.csv`` и уезжает в
-бакет ремонтов строкой ``repairs_spo``. Сопоставление — по НГДУ (owner_id
-Toucan), номеру скважины из паспорта и пересечению с окном ремонта.
+страховка. Ни одного RPC в Toucan: сырой payload замера уже лежит в S3,
+отсюда он разбирается на события, дорисовывается ``chart.csv`` и сохраняется
+строкой ``repairs_spo`` под ключами ремонта. Сопоставление — по НГДУ
+(owner_id Toucan), номеру скважины из паспорта и пересечению с окном ремонта.
 """
 
 import argparse
@@ -37,10 +37,7 @@ from apps.repairs.tasks.fetch_sources.candidates import (
     resolve_repair_well,
     scope_label,
 )
-from apps.repairs.tasks.fetch_sources.clients import (
-    build_kbrs_storage,
-    build_repairs_storage,
-)
+from apps.repairs.tasks.fetch_sources.clients import build_storage
 from apps.repairs.tasks.fetch_sources.triggers import (
     SPO_LINK_TASK,
     schedule_repair_analytics,
@@ -92,13 +89,7 @@ def ngdu_abai_id_by_owner(owner_id: int) -> int | None:
 class _Context:
     """Репозитории и сервисы одной сессии, чтобы не таскать их по аргументам."""
 
-    def __init__(
-        self,
-        session: AsyncSession,
-        *,
-        repairs_storage: AiobotoFileStorage,
-        kbrs_storage: AiobotoFileStorage,
-    ) -> None:
+    def __init__(self, session: AsyncSession, *, storage: AiobotoFileStorage) -> None:
         self.session = session
         self.well_repo = WellRepository(session)
         self.spo_repo = SPORepository(session)
@@ -108,9 +99,9 @@ class _Context:
             well_org_repository=WellOrgRepository(session),
             org_repository=OrgRepository(session),
         )
-        self.kbrs_storage = kbrs_storage
+        self.storage = storage
         self.persister = SpoMeasurementPersister(
-            storage=repairs_storage,
+            storage=storage,
             file_repo=self.file_repo,
             spo_repo=self.spo_repo,
             spo_event_repo=SPOEventRepository(session),
@@ -139,11 +130,7 @@ class LinkRepairSpo:
         )
         logger.info("SPO link started (scope=%s).", scope)
         async with session_makers["app"]() as session:
-            ctx = _Context(
-                session,
-                repairs_storage=build_repairs_storage(),
-                kbrs_storage=build_kbrs_storage(),
-            )
+            ctx = _Context(session, storage=build_storage())
             repairs = await self._target_repairs(ctx, now=now)
             for repair in repairs:
                 try:
@@ -316,7 +303,7 @@ async def _download_raw(ctx: _Context, measure: KbrsMeasure) -> bytes | None:
     if file_row is None:
         return None
     try:
-        buf = await ctx.kbrs_storage.download_file(file_row.file)
+        buf = await ctx.storage.download_file(file_row.file)
     except FileNotExistError:
         logger.warning("Raw payload missing in S3 for measure %s.", measure.measure_id)
         return None

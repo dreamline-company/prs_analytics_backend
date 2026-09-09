@@ -76,7 +76,7 @@ class LoadDynamograms:
             max_concurrent_downloads=100,
         )
         storage = AiobotoFileStorage(
-            bucket_name=settings.PRS_REPAIRS_BUCKET_NAME,
+            bucket_name=settings.S3_BUCKET_NAME,
             client_factory=get_aioboto_client_factory(),
         )
         try:

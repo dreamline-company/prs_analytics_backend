@@ -2,7 +2,7 @@ from typing import Literal
 from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
 
-from pydantic import SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shared.constants.ngdu import AbaiNGDUIDsEnum
@@ -192,9 +192,13 @@ class Settings(CoreSettings):
     # exposed to the browser). Leave empty to hand out the internal URL.
     S3_PUBLIC_URL: str | None = None
 
-    DYNAMOGRAM_BUCKET_NAME: str = "PRS-DYNAMOGRAM-BUCKET"
-    SPO_BUCKET_NAME: str = "PRS-DYNAMOGRAM-BUCKET"  # спуско подъемные операции
-    PRS_REPAIRS_BUCKET_NAME: str = "prs-analytics-bucket"
+    # Единый бакет приложения: документы ремонтов, динамограммы, СПО, замеры
+    # КБРС. Строки ``files_file`` хранят только ключ, поэтому бакет один на
+    # всех читателей и писателей. Прежнее имя переменной принимается как алиас.
+    S3_BUCKET_NAME: str = Field(
+        default="prs-analytics-bucket",
+        validation_alias=AliasChoices("S3_BUCKET_NAME", "PRS_REPAIRS_BUCKET_NAME"),
+    )
 
     # Redis
     REDIS_USER: str

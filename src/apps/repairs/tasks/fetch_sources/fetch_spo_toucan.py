@@ -27,10 +27,7 @@ from apps.repairs.tasks.fetch_sources.candidates import (
     resolve_repair_well,
     scope_label,
 )
-from apps.repairs.tasks.fetch_sources.clients import (
-    build_repairs_storage,
-    create_toucan_pool,
-)
+from apps.repairs.tasks.fetch_sources.clients import build_storage, create_toucan_pool
 from apps.repairs.tasks.fetch_sources.triggers import (
     SPO_TOUCAN_FETCH_TASK,
     schedule_repair_analytics,
@@ -76,7 +73,7 @@ class FetchRepairSpoToucan:
                 spo_repo = SPORepository(session)
                 fetcher = KbrsSPOFetcher(
                     pool=pool,
-                    storage=build_repairs_storage(),
+                    storage=build_storage(),
                     file_repo=FileRepository(session),
                     spo_repo=spo_repo,
                     spo_event_repo=SPOEventRepository(session),

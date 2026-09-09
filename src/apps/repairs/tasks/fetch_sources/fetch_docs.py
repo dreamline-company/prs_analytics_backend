@@ -25,10 +25,7 @@ from apps.repairs.tasks.fetch_sources.candidates import (
     resolve_repair_well,
     scope_label,
 )
-from apps.repairs.tasks.fetch_sources.clients import (
-    build_abai_client,
-    build_repairs_storage,
-)
+from apps.repairs.tasks.fetch_sources.clients import build_abai_client, build_storage
 from apps.repairs.tasks.fetch_sources.triggers import (
     DOCS_FETCH_TASK,
     schedule_repair_analytics,
@@ -64,7 +61,7 @@ class FetchRepairDocs:
             scope_label(repair_id=self._repair_id, well_id=self._well_id),
         )
         abai_client = self._abai_client or build_abai_client()
-        storage = build_repairs_storage()
+        storage = build_storage()
         try:
             async with session_makers["app"]() as session:
                 well_repo = WellRepository(session)

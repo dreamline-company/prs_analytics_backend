@@ -76,7 +76,7 @@ from apps.repairs.tasks.fetch_sources.candidates import (
     resolve_repair_well,
     scope_label,
 )
-from apps.repairs.tasks.fetch_sources.clients import build_repairs_storage
+from apps.repairs.tasks.fetch_sources.clients import build_storage
 from apps.repairs.tasks.fetch_sources.redis_utils import (
     acquire_lock,
     redis_lock,
@@ -440,7 +440,7 @@ class FillRepairAnalytics:
         session: AsyncSession,
         cm_session: AsyncSession,
     ) -> tuple[AICoordinator, RepairKPICalculator]:
-        storage = build_repairs_storage()
+        storage = build_storage()
         repair_brigade_repo = RepairBrigadeRepository(session)
         unique_brigade_repo = UniqueBrigadeRepository(session)
         cm_brigade_repo = CMBrigadeRepository(cm_session)

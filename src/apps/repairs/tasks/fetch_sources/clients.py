@@ -31,18 +31,10 @@ def build_abai_client() -> AbaiAsyncClient:
     )
 
 
-def build_repairs_storage() -> AiobotoFileStorage:
-    """Бакет ремонтов: документы, динамограммы, СПО — всё, что читают API и AI."""
+def build_storage() -> AiobotoFileStorage:
+    """Единый бакет приложения: документы, динамограммы, СПО, замеры КБРС."""
     return AiobotoFileStorage(
-        bucket_name=settings.PRS_REPAIRS_BUCKET_NAME,
-        client_factory=get_aioboto_client_factory(),
-    )
-
-
-def build_kbrs_storage() -> AiobotoFileStorage:
-    """Бакет опросчика КБРС: сырые замеры лежат отдельно от бакета ремонтов."""
-    return AiobotoFileStorage(
-        bucket_name=settings.SPO_BUCKET_NAME,
+        bucket_name=settings.S3_BUCKET_NAME,
         client_factory=get_aioboto_client_factory(),
     )
 
