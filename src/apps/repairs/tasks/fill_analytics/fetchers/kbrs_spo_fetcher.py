@@ -12,7 +12,11 @@ NGDU-centric routing:
      header) — no full parsing until a match is found.
   5. On first per-device match: parse the already-in-hand raw once, persist
      as one ``SPO`` row plus its event set (``repairs_spo_event``, replaced
-     on re-fetch). No second RPC.
+     on re-fetch) via ``SpoMeasurementPersister``. No second RPC.
+
+This is the fallback path: repairs whose measurements the KBRS poller has not
+seen (history before the poller, poller downtime) — the primary path links
+``kbrs_measure`` rows without any Toucan RPC (``repairs.link_spo``).
 
 Parallelism is bounded by ``ToucanClientPool`` size — each in-flight RPC
 holds a client checked out from the pool.
@@ -24,20 +28,16 @@ Each stored SPO row carries:
 """
 
 import asyncio
-import json
 import re
 from collections.abc import Sequence
-from dataclasses import asdict
 from datetime import datetime, timedelta
-from io import BytesIO
 
-from apps.files.dto.internal.repositories.file import CreateFileDTO
-from apps.files.models.file import File
 from apps.files.repositories.file import FileRepository
 from apps.org.use_cases.get_ngdu_for_well import GetNGDUForWellUseCase
 from apps.repairs.models.repair import Repair
-from apps.wells.dto.internal.repositories.spo import CreateSPODTO, UpdateSPODTO
-from apps.wells.dto.internal.repositories.spo_event import CreateSPOEventDTO
+from apps.repairs.tasks.fill_analytics.fetchers.spo_persist import (
+    SpoMeasurementPersister,
+)
 from apps.wells.models.spo import SPO
 from apps.wells.repositories.spo import SPORepository
 from apps.wells.repositories.spo_event import SPOEventRepository
@@ -49,8 +49,6 @@ from shared.integrations.kbrs.api.dtos import (
     DeviceDto,
     LoadMeasurementRequestDto,
     MeasureListFilterDto,
-    MeasurementFullDto,
-    MeasurementPassportDto,
     MeasureRowDto,
 )
 from shared.integrations.kbrs.api.enums import MeasureDateCondition
@@ -81,7 +79,7 @@ def extract_well_number(well_name: str) -> int | None:
         return None
 
 
-def _owner_id_by_ngdu_abai_id(ngdu_abai_id: int) -> int | None:
+def owner_id_by_ngdu_abai_id(ngdu_abai_id: int) -> int | None:
     """Reverse-lookup of ``OWNERS_MAP``: ABAI NGDU id → kbrs owner_id."""
     for owner_id, meta in OWNERS_MAP.items():
         if int(meta["owner_abai_id"]) == int(ngdu_abai_id):
@@ -100,11 +98,13 @@ class KbrsSPOFetcher:
         get_ngdu_for_well: GetNGDUForWellUseCase,
     ) -> None:
         self._pool = pool
-        self._storage = storage
-        self._file_repo = file_repo
-        self._spo_repo = spo_repo
-        self._spo_event_repo = spo_event_repo
         self._get_ngdu_for_well = get_ngdu_for_well
+        self._persister = SpoMeasurementPersister(
+            storage=storage,
+            file_repo=file_repo,
+            spo_repo=spo_repo,
+            spo_event_repo=spo_event_repo,
+        )
 
     async def fetch_for_repair(
         self,
@@ -133,7 +133,7 @@ class KbrsSPOFetcher:
             )
             return []
 
-        owner_id = _owner_id_by_ngdu_abai_id(ngdu.abai_id)
+        owner_id = owner_id_by_ngdu_abai_id(ngdu.abai_id)
         if owner_id is None:
             logger.warning(
                 "SPO skipped for repair id=%s — NGDU abai_id=%s (%s) is not "
@@ -266,12 +266,12 @@ class KbrsSPOFetcher:
             target_well_number,
         )
 
-        return await self._persist_measurement(
-            repair=repair,
+        return await self._persister.persist(
             well_id=well_id,
-            measure=measure,
+            measure_id=measure.measure_id,
             raw_bytes=raw,
             full=full,
+            fallback_snapshot_time=repair.start_time,
         )
 
     async def _first_matching_measure(
@@ -327,197 +327,3 @@ class KbrsSPOFetcher:
         if well is None or well != target_well_number:
             return None
         return measure, raw
-
-    async def _persist_measurement(
-        self,
-        *,
-        repair: Repair,
-        well_id: int,
-        measure: MeasureRowDto,
-        raw_bytes: bytes,
-        full: MeasurementFullDto,
-    ) -> SPO | None:
-        parsed = full.chart
-        events = full.details.events
-
-        snapshot_time = parsed.start or repair.start_time
-        if snapshot_time is not None and snapshot_time.tzinfo is not None:
-            snapshot_time = snapshot_time.replace(tzinfo=None)
-
-        existing = await self._spo_repo.get_by_well_id_and_snapshot_time(
-            well_id=well_id,
-            snapshot_time=snapshot_time,
-        )
-        if (
-            existing is not None
-            and existing.chart_file_id
-            and existing.chart_json_file_id
-            and existing.notes_file_id
-            and existing.passport_file_id
-        ):
-            await self._persist_events(existing.id, events)
-            return existing
-
-        csv_bytes = self._render_csv(parsed)
-        chart_json_bytes = self._render_chart_json(parsed)
-        notes_bytes = self._render_notes(parsed)
-        passport_bytes = self._render_passport(full.details.passport)
-
-        prefix = f"spo/{well_id}/{measure.measure_id}"
-        master_file = await self._upload_and_register(
-            payload=raw_bytes,
-            s3_key=f"{prefix}/raw.bin",
-        )
-        chart_file = await self._upload_and_register(
-            payload=csv_bytes,
-            s3_key=f"{prefix}/chart.csv",
-        )
-        chart_json_file = await self._upload_and_register(
-            payload=chart_json_bytes,
-            s3_key=f"{prefix}/chart.json",
-        )
-        notes_file = await self._upload_and_register(
-            payload=notes_bytes,
-            s3_key=f"{prefix}/notes.json",
-        )
-        passport_file = await self._upload_and_register(
-            payload=passport_bytes,
-            s3_key=f"{prefix}/passport.json",
-        )
-
-        if master_file is None:
-            return None
-
-        if existing is None:
-            spo = await self._spo_repo.create(
-                CreateSPODTO(
-                    file_id=master_file.id,
-                    chart_file_id=chart_file.id if chart_file else None,
-                    chart_json_file_id=chart_json_file.id if chart_json_file else None,
-                    notes_file_id=notes_file.id if notes_file else None,
-                    passport_file_id=passport_file.id if passport_file else None,
-                    snapshot_time=snapshot_time,
-                    well_id=well_id,
-                ),
-            )
-        else:
-            spo = await self._spo_repo.update(
-                data=UpdateSPODTO(
-                    file_id=master_file.id,
-                    chart_file_id=chart_file.id if chart_file else None,
-                    chart_json_file_id=chart_json_file.id if chart_json_file else None,
-                    notes_file_id=notes_file.id if notes_file else None,
-                    passport_file_id=passport_file.id if passport_file else None,
-                ),
-                filters=(SPO.id == existing.id,),
-            )
-
-        await self._persist_events(spo.id, events)
-        return spo
-
-    async def _persist_events(
-        self,
-        spo_id: int,
-        events: Sequence,
-    ) -> None:
-        dtos = [
-            CreateSPOEventDTO(
-                spo_id=spo_id,
-                offset=event.offset,
-                time_text=event.time_text,
-                code=event.code,
-                text=event.text,
-                raw_text=event.raw_text,
-            )
-            for event in events
-        ]
-        await self._spo_event_repo.replace_for_spo(spo_id, dtos)
-        logger.info(
-            "Persisted %s SPO events for spo_id=%s.",
-            len(dtos),
-            spo_id,
-        )
-
-    @staticmethod
-    def _render_csv(parsed) -> bytes:  # noqa: ANN001
-        header = "timestamp,datetime,hook_weight_t,h2s_mg_m3,ch4_percent\n"
-        lines = [
-            header,
-            *(
-                f"{row.timestamp},"
-                f"{row.datetime.isoformat() if row.datetime else ''},"
-                f"{row.hook_weight_t if row.hook_weight_t is not None else ''},"
-                f"{row.h2s_mg_m3 if row.h2s_mg_m3 is not None else ''},"
-                f"{row.ch4_percent if row.ch4_percent is not None else ''}\n"
-                for row in parsed.rows
-            ),
-        ]
-        return "".join(lines).encode("utf-8")
-
-    @staticmethod
-    def _render_chart_json(parsed) -> bytes:  # noqa: ANN001
-        # Compact time-series shape for chart libs (ECharts / Highcharts /
-        # Chart.js all accept ``[[timestamp_ms, value], ...]`` natively).
-        # ``timestamp`` from the measurement is already unix seconds in UTC —
-        # multiplied by 1000 for milliseconds. ``value`` is left as ``null``
-        # for missing samples so gaps in one channel don't align others.
-        series_specs = (
-            ("hook_weight_t", "т"),
-            ("h2s_mg_m3", "мг/м³"),
-            ("ch4_percent", "%"),
-        )
-        series = [
-            {
-                "key": key,
-                "unit": unit,
-                "points": [
-                    [row.timestamp * 1000, getattr(row, key)]
-                    for row in parsed.rows
-                ],
-            }
-            for key, unit in series_specs
-        ]
-        payload = {
-            "start": parsed.start.isoformat() if parsed.start else None,
-            "end": parsed.end.isoformat() if parsed.end else None,
-            "row_count": len(parsed.rows),
-            "series": series,
-        }
-        return json.dumps(payload, ensure_ascii=False).encode("utf-8")
-
-    @staticmethod
-    def _render_notes(parsed) -> bytes:  # noqa: ANN001
-        meta = {
-            "magic": parsed.magic,
-            "records_count": parsed.records_count,
-            "row_count": len(parsed.rows),
-            "channels": parsed.channels,
-            "start": parsed.start.isoformat() if parsed.start else None,
-            "end": parsed.end.isoformat() if parsed.end else None,
-            "header_hint": parsed.header_ascii_hint,
-        }
-        return json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8")
-
-    @staticmethod
-    def _render_passport(passport: MeasurementPassportDto) -> bytes:
-        # ``values`` may contain datetimes and other non-JSON types injected by
-        # the details parser — ``default=str`` renders them safely.
-        return json.dumps(
-            asdict(passport),
-            ensure_ascii=False,
-            indent=2,
-            default=str,
-        ).encode("utf-8")
-
-    async def _upload_and_register(
-        self,
-        *,
-        payload: bytes,
-        s3_key: str,
-    ) -> File | None:
-        try:
-            await self._storage.upload_file(BytesIO(payload), s3_key)
-        except Exception:
-            logger.exception("Failed to upload SPO file to S3 (key=%s).", s3_key)
-            return None
-        return await self._file_repo.create(CreateFileDTO(file=s3_key))
