@@ -22,6 +22,24 @@ from apps.detectors.tasks.generate_conclusion.generate_conclusion import (  # no
 # Импорт регистрирует таску последовательной синхронизации оргструктуры.
 from apps.org.tasks.sync_org.sync_org import sync_org  # noqa: F401
 
+# Импорт регистрирует добытчики источников ремонтов (ABAI, КБРС, УТО) и
+# аналитику ремонтов (по событию и страховочный проход).
+from apps.repairs.tasks.fetch_sources.fetch_docs import fetch_repair_docs  # noqa: F401
+from apps.repairs.tasks.fetch_sources.fetch_dynamograms import (  # noqa: F401
+    fetch_repair_dynamograms,
+)
+from apps.repairs.tasks.fetch_sources.fetch_spo_toucan import (  # noqa: F401
+    fetch_repair_spo_toucan,
+)
+from apps.repairs.tasks.fetch_sources.fetch_transport import (  # noqa: F401
+    fetch_repair_transport,
+)
+from apps.repairs.tasks.fetch_sources.link_spo import link_repair_spo  # noqa: F401
+from apps.repairs.tasks.fill_analytics.fill_repair_analytics import (  # noqa: F401
+    run_repair_analytics,
+    sweep_repair_analytics,
+)
+
 # Импорт регистрирует таску последовательной синхронизации ремонтов.
 from apps.repairs.tasks.sync_repairs.sync_repairs import sync_repairs  # noqa: F401
 
@@ -139,5 +157,36 @@ celery_app.conf.beat_schedule = {
     "repairs-sync-daily": {
         "task": "repairs.sync",
         "schedule": crontab(hour=5, minute=0),
+    },
+    # Аналитика ремонтов. Источники тянут отдельные таски, аналитика идёт по
+    # событию от них (repairs.analytics.run_repair с debounce), а кроны ниже —
+    # страховка: догоняют потерянные события и первичный проход по кандидатам.
+    # ABAI не пушит изменения — только опрос: два запроса на ремонт, поэтому
+    # каждые 15 минут. СПО в основном приходит событием из опросчика КБРС
+    # (repairs.link_spo по measure_id); прямой Toucan — редкий запасной путь
+    # для ремонтов без замеров в kbrs_measure.
+    "repairs-fetch-docs": {
+        "task": "repairs.fetch.docs",
+        "schedule": crontab(minute="*/15"),
+    },
+    "repairs-fetch-dynamograms": {
+        "task": "repairs.fetch.dynamograms",
+        "schedule": crontab(minute="5-59/15"),
+    },
+    "repairs-link-spo-sweep": {
+        "task": "repairs.link_spo",
+        "schedule": crontab(minute="*/30"),
+    },
+    "repairs-fetch-spo-toucan": {
+        "task": "repairs.fetch.spo_toucan",
+        "schedule": crontab(minute=40, hour="*/6"),
+    },
+    "repairs-fetch-transport": {
+        "task": "repairs.fetch.transport",
+        "schedule": crontab(minute=50, hour="*/2"),
+    },
+    "repairs-analytics-sweep": {
+        "task": "repairs.analytics.sweep",
+        "schedule": crontab(minute=30),
     },
 }

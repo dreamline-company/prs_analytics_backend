@@ -177,7 +177,7 @@ class AICoordinator:
             ),
         )
 
-    async def process_overall(
+    async def process_overall(  # noqa: PLR0913
         self,
         *,
         analytics_id: int,
@@ -185,9 +185,15 @@ class AICoordinator:
         dynamogram_before: RepairDynamogramAIResult | None,
         dynamogram_after: RepairDynamogramAIResult | None,
         spo_results: list[RepairSPOAIResult],
+        inputs_fingerprint: str | None = None,
     ) -> RepairAIAnalysis:
         existing = await self.overall_ai_repo.get_by_analytics_id(analytics_id)
-        if self._is_current(existing, self.overall_processor.prompt_version):
+        # Вердикт актуален, только если и промпт, и набор входов те же: данные
+        # приходят асинхронно, и вердикт по неполным входам должен обновиться.
+        if (
+            self._is_current(existing, self.overall_processor.prompt_version)
+            and existing.inputs_fingerprint == inputs_fingerprint
+        ):
             return existing
 
         violations = await self._fetch_repair_violations(repair)
@@ -216,6 +222,7 @@ class AICoordinator:
                     result=result.result,
                     error=result.error,
                     processed_at=result.processed_at,
+                    inputs_fingerprint=inputs_fingerprint,
                 ),
             )
         return await self.overall_ai_repo.update_by_analytics_id(
@@ -227,6 +234,7 @@ class AICoordinator:
                 result=result.result,
                 error=result.error,
                 processed_at=result.processed_at,
+                inputs_fingerprint=inputs_fingerprint,
             ),
         )
 

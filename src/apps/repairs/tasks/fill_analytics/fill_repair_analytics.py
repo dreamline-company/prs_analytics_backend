@@ -1,39 +1,47 @@
-"""Periodically fills RepairAnalytics by pulling docs/dynamograms/SPO from APIs.
+"""Аналитика ремонта по уже собранным данным.
 
-Sources:
-  * dynamograms — ABAI GDIS API (``AbaiAsyncClient.get_gdis_results``)
-  * ПОР/Акт PDF — ABAI PRS API (``AbaiAsyncClient.get_prs_results``)
-  * SPO        — kbrs/Toucan RPC (``ToucanBackendClient``), routed via the
-                 brigade number on ``RepairSummary`` (бригада владеет девайсом).
+Во внешние источники отсюда не ходим: ПОР/акты, динамограммы, СПО и путёвки
+складывают отдельные таски ``apps.repairs.tasks.fetch_sources``. Здесь —
+выбор входов из БД, LLM-разборы, KPI и финализация.
 
-After every fetch pass, LLM processors (LangChain/LangGraph) analyze each
-dynamogram (before/after) and each SPO, then an aggregator produces one
-overall verdict for the repair. All results land in dedicated tables so the
-prompt owner can iterate on prompts without touching the schema.
+Запуск:
+    python -m apps.repairs.tasks.fill_analytics.fill_repair_analytics
+    python -m apps.repairs.tasks.fill_analytics.fill_repair_analytics --repair-id N
+    python -m apps.repairs.tasks.fill_analytics.fill_repair_analytics --well-id N
 
-Selection logic per repair:
-  * not finalized AND (active OR within grace window OR analytics missing)
-    → process this run.
+Celery:
+  * ``repairs.analytics.run_repair`` — один ремонт по событию добытчика
+    (debounce в триггере), под замком ремонта;
+  * ``repairs.analytics.sweep`` — часовой проход по кандидатам под общим
+    замком и с бюджетом времени: недоделанные ремонты дожидаются следующего.
 
-Finalization (mark ``is_finalized=True``, stop touching) — either:
-  * end_time + 10 days have passed (grace period ran out); OR
-  * RepairDoc has both ``por_file_id`` and ``act_file_id`` (act PDF arrived)
-    AND the overall AI analysis is ``completed``.
+Входы ремонта: динамограммы до/после (``repairs_dynamogram``: ближайшая к
+началу и ближайшая после конца), документ (``repairs_repair_docs``), СПО
+скважины в окне ремонта (``repairs_spo``). Общий вердикт пересчитывается,
+только если изменился отпечаток входов: данные приходят асинхронно, и без
+этого вердикт по неполным данным застыл бы навсегда. LLM по СПО работает
+только с закрытыми замерами (прибор перестал писать).
+
+Отбор кандидатов и финализация — см. ``fetch_sources.candidates``:
+  * кандидат — не финализирован и (активен, или в окне 10 дней после конца,
+    или без аналитики);
+  * финализация — end_time + 10 дней прошли, либо есть ПОР и акт, а общий
+    вердикт ``completed``.
 """
 
 import argparse
 import asyncio
-from collections.abc import AsyncIterator, Sequence
-from datetime import datetime, timedelta
+import time
+from dataclasses import dataclass
+from datetime import datetime
 
-from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.celery_app import celery_app, run_async
 from apps.files.repositories.file import FileRepository
+from apps.kbrs.repositories.measure import KbrsMeasureRepository
 from apps.models_registry import *  # noqa: F403
 from apps.org.repositories import UniqueBrigadeRepository
-from apps.org.repositories.org import OrgRepository
-from apps.org.use_cases.get_ngdu_for_well import GetNGDUForWellUseCase
 from apps.repairs.dto.internal.repositories.analytics import (
     CreateRepairAnalyticsDTO,
     CreateRepairAnalyticsDynamogramDTO,
@@ -58,7 +66,26 @@ from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.docs import RepairDocRepository
 from apps.repairs.repositories.kpi import RepairKPIRepository
 from apps.repairs.repositories.reports import RepairSummaryRepository
-from apps.repairs.repositories.transport import RepairTransportRepository
+from apps.repairs.tasks.fetch_sources.candidates import (
+    as_naive,
+    grace_cutoff,
+    is_measure_closed,
+    iter_candidate_repairs,
+    local_now,
+    repair_window,
+    resolve_repair_well,
+    scope_label,
+)
+from apps.repairs.tasks.fetch_sources.clients import build_repairs_storage
+from apps.repairs.tasks.fetch_sources.redis_utils import (
+    acquire_lock,
+    redis_lock,
+    release_lock,
+)
+from apps.repairs.tasks.fetch_sources.triggers import (
+    ANALYTICS_RUN_TASK,
+    ANALYTICS_SWEEP_TASK,
+)
 from apps.repairs.tasks.fill_analytics.ai.agent_factory import (
     build_dynamogram_agent,
     build_kpi_por_agent,
@@ -72,18 +99,7 @@ from apps.repairs.tasks.fill_analytics.ai.dynamogram_processor import (
 )
 from apps.repairs.tasks.fill_analytics.ai.overall_processor import OverallAIProcessor
 from apps.repairs.tasks.fill_analytics.ai.spo_processor import SPOAIProcessor
-from apps.repairs.tasks.fill_analytics.fetchers.abai_dynamogram_fetcher import (
-    AbaiDynamogramFetcher,
-)
-from apps.repairs.tasks.fill_analytics.fetchers.abai_repair_doc_fetcher import (
-    AbaiRepairDocFetcher,
-)
-from apps.repairs.tasks.fill_analytics.fetchers.kbrs_spo_fetcher import (
-    KbrsSPOFetcher,
-)
-from apps.repairs.tasks.fill_analytics.fetchers.uto_transport_fetcher import (
-    UtoTransportFetcher,
-)
+from apps.repairs.tasks.fill_analytics.inputs import RepairInputs
 from apps.repairs.tasks.fill_analytics.kpi.por_confirmation_processor import (
     PORConfirmationProcessor,
 )
@@ -95,378 +111,247 @@ from apps.repairs.tasks.fill_analytics.kpi.spo_analysis_processor import (
 )
 from apps.telemetry.repositories.tech_regime import TechRegimeRepository
 from apps.telemetry.repositories.telemetry import TelemetryRepository
+from apps.wells.models.spo import SPO
 from apps.wells.models.well import Well
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
 from apps.wells.repositories.spo_event import SPOEventRepository
 from apps.wells.repositories.well import WellRepository
-from apps.wells.repositories.well_org import WellOrgRepository
 from core import get_logger
 from core.settings import get_settings
-from shared.database.s3.storage import AiobotoFileStorage
 from shared.database.sql.setup import session_makers
-from shared.dependencies.db import get_aioboto_client_factory
-from shared.integrations.abai.api.client import AbaiAsyncClient
 from shared.integrations.cm.repositories.brigade_error_screens import (
     CMBrigadeErrorScreenRepository,
 )
 from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
-from shared.integrations.kbrs.api import (
-    ToucanClientConfig,
-    ToucanClientPool,
-    ToucanCredentialsDto,
-)
-from shared.integrations.uto.api.client import UtoWaybillClient
 
 logger = get_logger(__name__)
 settings = get_settings()
 
+# Замок ремонта: событийный запуск и sweep не должны считать один ремонт
+# одновременно. TTL — общий лимит celery-таски.
+REPAIR_LOCK_TTL_SEC = 30 * 60
+SWEEP_LOCK_KEY = "repairs:analytics:sweep"
+# Sweep останавливается за 5 минут до soft-лимита: текущий ремонт дорабатывает,
+# остальные ждут следующего часа.
+SWEEP_TIME_BUDGET_SEC = 20 * 60
+
+
+def repair_lock_key(repair_id: int) -> str:
+    return f"repairs:analytics:lock:{repair_id}"
+
+
+@dataclass(slots=True)
+class RunResult:
+    processed: int = 0
+    finalized: int = 0
+    skipped_locked: int = 0
+    failed: int = 0
+    # Остались необработанные кандидаты — кончился бюджет времени.
+    deferred: bool = False
+
 
 class FillRepairAnalytics:
-    """Orchestrates one pass of analytics filling for all candidate repairs."""
-
-    ITER_SIZE = 200
-    GRACE_DAYS = 10
+    """Один проход аналитики по ремонтам: все кандидаты или явная область."""
 
     def __init__(
         self,
-        abai_client: AbaiAsyncClient | None = None,
-        toucan_pool: ToucanClientPool | None = None,
-        uto_client: UtoWaybillClient | None = None,
         *,
         repair_id: int | None = None,
         well_id: int | None = None,
+        time_budget_sec: float | None = None,
     ) -> None:
         if repair_id is not None and well_id is not None:
             msg = "Pass either repair_id or well_id, not both."
             raise ValueError(msg)
-        self._abai_client = abai_client
-        self._toucan_pool = toucan_pool
-        self._uto_client = uto_client
         self._repair_id = repair_id
         self._well_id = well_id
+        self._time_budget_sec = time_budget_sec
 
-    async def run(self) -> None:
-        scope_label = (
-            f"repair_id={self._repair_id}"
-            if self._repair_id is not None
-            else f"well_id={self._well_id}"
-            if self._well_id is not None
-            else "all candidates"
-        )
+    async def run(self) -> RunResult:
+        result = RunResult()
+        now = local_now()
+        cutoff = grace_cutoff(now)
+        started = time.monotonic()
         logger.info(
-            "FillRepairAnalytics started (grace=%s days, batch=%s, scope=%s).",
-            self.GRACE_DAYS,
-            self.ITER_SIZE,
-            scope_label,
+            "FillRepairAnalytics started (scope=%s, budget=%s).",
+            scope_label(repair_id=self._repair_id, well_id=self._well_id),
+            self._time_budget_sec,
         )
 
-        abai_client = self._abai_client or AbaiAsyncClient(
-            username=settings.ABAI_LOGIN,
-            password=settings.ABAI_PASS,
-            domain=settings.ABAI_DOMAIN,
-            connect_to=settings.ABAI_CONNECT_THROUGH,
-            timeout=120,
-            max_concurrent_downloads=100,
-        )
-        toucan_pool = self._toucan_pool
-        uto_client = self._uto_client
-        storage = AiobotoFileStorage(
-            bucket_name=settings.PRS_REPAIRS_BUCKET_NAME,
-            client_factory=get_aioboto_client_factory(),
-        )
-
-        processed = 0
-        finalized = 0
-        now = datetime.now(tz=settings.ZONE_INFO).replace(tzinfo=None)
-        grace_cutoff = now - timedelta(days=self.GRACE_DAYS)
-
-        try:
-            async with (
-                session_makers["app"]() as session,
-                session_makers["cm"]() as cm_session,
-            ):
-                deps = _Dependencies.build(session)
-
-                get_ngdu_for_well = GetNGDUForWellUseCase(
-                    well_org_repository=WellOrgRepository(session),
-                    org_repository=OrgRepository(session),
-                )
-
-                dyn_fetcher = AbaiDynamogramFetcher(
-                    abai_client=abai_client,
-                    storage=storage,
-                    file_repo=deps.file_repo,
-                    dynamogram_repo=deps.dynamogram_repo,
-                )
-                doc_fetcher = AbaiRepairDocFetcher(
-                    abai_client=abai_client,
-                    storage=storage,
-                    file_repo=deps.file_repo,
-                    repair_doc_repo=deps.doc_repo,
-                )
-                spo_fetcher = (
-                    KbrsSPOFetcher(
-                        pool=toucan_pool,
-                        storage=storage,
-                        file_repo=deps.file_repo,
-                        spo_repo=deps.spo_repo,
-                        spo_event_repo=deps.spo_event_repo,
-                        get_ngdu_for_well=get_ngdu_for_well,
-                    )
-                    if toucan_pool is not None
-                    else None
-                )
-                transport_fetcher = (
-                    UtoTransportFetcher(
-                        client=uto_client,
-                        summary_repo=deps.summary_repo,
-                        transport_repo=deps.transport_repo,
-                    )
-                    if uto_client is not None
-                    else None
-                )
-                ai_coordinator = AICoordinator(
-                    dynamogram_processor=DynamogramAIProcessor(
-                        build_dynamogram_agent(),
-                        model_name=settings.LLM_MODEL_NAME,
-                    ),
-                    spo_processor=SPOAIProcessor(
-                        build_spo_agent(),
-                        model_name=settings.LLM_MODEL_NAME,
-                    ),
-                    overall_processor=OverallAIProcessor(
-                        build_overall_agent(),
-                        model_name=settings.LLM_MODEL_NAME,
-                    ),
-                    dynamogram_ai_repo=deps.dynamogram_ai_repo,
-                    spo_ai_repo=deps.spo_ai_repo,
-                    overall_ai_repo=deps.overall_ai_repo,
-                    file_repo=deps.file_repo,
-                    storage=storage,
-                    repair_brigade_repo=RepairBrigadeRepository(session),
-                    unique_brigade_repo=UniqueBrigadeRepository(session),
-                    cm_brigade_repo=CMBrigadeRepository(cm_session),
-                    cm_brigade_error_screen_repo=CMBrigadeErrorScreenRepository(
-                        cm_session,
-                    ),
-                )
-                kpi_calculator = RepairKPICalculator(
-                    kpi_repo=deps.kpi_repo,
-                    well_repo=deps.well_repo,
-                    summary_repo=deps.summary_repo,
-                    doc_repo=deps.doc_repo,
-                    analytics_spo_repo=deps.analytics_spo_repo,
-                    spo_event_repo=deps.spo_event_repo,
-                    file_repo=deps.file_repo,
-                    storage=storage,
-                    tech_regime_repo=deps.tech_regime_repo,
-                    telemetry_repo=deps.telemetry_repo,
-                    repair_brigade_repo=RepairBrigadeRepository(session),
-                    unique_brigade_repo=UniqueBrigadeRepository(session),
-                    cm_brigade_repo=CMBrigadeRepository(cm_session),
-                    cm_brigade_error_screen_repo=CMBrigadeErrorScreenRepository(
-                        cm_session,
-                    ),
-                    por_processor=PORConfirmationProcessor(
-                        build_kpi_por_agent(),
-                        model_name=settings.LLM_MODEL_NAME,
-                    ),
-                    spo_analysis_processor=SPOAnalysisProcessor(
-                        build_kpi_spo_analysis_agent(),
-                        model_name=settings.LLM_MODEL_NAME,
-                    ),
-                )
-
-                async for repairs in self._iter_candidates(session, grace_cutoff):
-                    logger.debug("Batch: %s candidate repairs.", len(repairs))
-                    for repair in repairs:
-                        try:
-                            did_finalize = await self._process_repair(
-                                repair=repair,
-                                deps=deps,
-                                dyn_fetcher=dyn_fetcher,
-                                doc_fetcher=doc_fetcher,
-                                spo_fetcher=spo_fetcher,
-                                transport_fetcher=transport_fetcher,
-                                ai_coordinator=ai_coordinator,
-                                kpi_calculator=kpi_calculator,
-                                grace_cutoff=grace_cutoff,
-                            )
-                            await session.commit()
-                            processed += 1
-                            if did_finalize:
-                                finalized += 1
-                        except Exception:
-                            logger.exception(
-                                "Failed processing repair id=%s; rolling back.",
-                                repair.id,
-                            )
-                            await session.rollback()
-
-            logger.info(
-                "FillRepairAnalytics done. Processed=%s, finalized=%s.",
-                processed,
-                finalized,
+        async with (
+            session_makers["app"]() as session,
+            session_makers["cm"]() as cm_session,
+        ):
+            deps = _Dependencies.build(session)
+            ai_coordinator, kpi_calculator = self._build_processors(
+                deps,
+                session=session,
+                cm_session=cm_session,
             )
-        finally:
-            await abai_client.aclose()
-            if toucan_pool is not None:
-                await toucan_pool.close()
-            if uto_client is not None:
-                await asyncio.to_thread(uto_client.close)
+            async for repairs in iter_candidate_repairs(
+                session,
+                grace_cutoff=cutoff,
+                repair_id=self._repair_id,
+                well_id=self._well_id,
+            ):
+                for repair in repairs:
+                    if self._budget_exhausted(started):
+                        logger.info(
+                            "Time budget exhausted; remaining candidates wait "
+                            "for the next run.",
+                        )
+                        result.deferred = True
+                        self._log_result(result)
+                        return result
+                    await self._process_locked(
+                        repair,
+                        session=session,
+                        deps=deps,
+                        ai_coordinator=ai_coordinator,
+                        kpi_calculator=kpi_calculator,
+                        now=now,
+                        cutoff=cutoff,
+                        result=result,
+                    )
+        self._log_result(result)
+        return result
 
-    async def _process_repair(  # noqa: PLR0913, PLR0912, C901
+    def _budget_exhausted(self, started: float) -> bool:
+        return (
+            self._time_budget_sec is not None
+            and time.monotonic() - started >= self._time_budget_sec
+        )
+
+    @staticmethod
+    def _log_result(result: RunResult) -> None:
+        logger.info(
+            "FillRepairAnalytics done. Processed=%s, finalized=%s, "
+            "skipped_locked=%s, failed=%s, deferred=%s.",
+            result.processed,
+            result.finalized,
+            result.skipped_locked,
+            result.failed,
+            result.deferred,
+        )
+
+    async def _process_locked(  # noqa: PLR0913
+        self,
+        repair: Repair,
+        *,
+        session: AsyncSession,
+        deps: "_Dependencies",
+        ai_coordinator: AICoordinator,
+        kpi_calculator: RepairKPICalculator,
+        now: datetime,
+        cutoff: datetime,
+        result: RunResult,
+    ) -> None:
+        key = repair_lock_key(repair.id)
+        token = await acquire_lock(key, ttl_sec=REPAIR_LOCK_TTL_SEC)
+        if token is None:
+            logger.info(
+                "Repair id=%s is being processed elsewhere; skipped.",
+                repair.id,
+            )
+            result.skipped_locked += 1
+            return
+        try:
+            did_finalize = await self._process_repair(
+                repair=repair,
+                deps=deps,
+                ai_coordinator=ai_coordinator,
+                kpi_calculator=kpi_calculator,
+                now=now,
+                grace_cutoff=cutoff,
+            )
+            await session.commit()
+        except Exception:
+            logger.exception(
+                "Failed processing repair id=%s; rolling back.",
+                repair.id,
+            )
+            await session.rollback()
+            result.failed += 1
+        else:
+            result.processed += 1
+            if did_finalize:
+                result.finalized += 1
+        finally:
+            await release_lock(key, token)
+
+    async def _process_repair(  # noqa: PLR0913
         self,
         *,
         repair: Repair,
         deps: "_Dependencies",
-        dyn_fetcher: AbaiDynamogramFetcher,
-        doc_fetcher: AbaiRepairDocFetcher,
-        spo_fetcher: KbrsSPOFetcher | None,
-        transport_fetcher: UtoTransportFetcher | None,
         ai_coordinator: AICoordinator,
         kpi_calculator: RepairKPICalculator,
+        now: datetime,
         grace_cutoff: datetime,
     ) -> bool:
         logger.info(
-            "Processing repair id=%s well_id=%s abai_well_id=%s start=%s end=%s",
+            "Processing repair id=%s abai_well_id=%s start=%s end=%s",
             repair.id,
-            repair.well_id,
             repair.abai_well_id,
             repair.start_time,
             repair.end_time,
         )
-        well = None
-        if repair.well_id is not None:
-            well = await deps.well_repo.get_by_id(id_=repair.well_id)
-        elif repair.abai_well_id is not None:
-            well = await deps.well_repo.get_by_abai_id(abai_id=repair.abai_well_id)
-            if well is not None:
-                logger.info(
-                    "Resolved well via abai_id=%s → well.id=%s (repair id=%s).",
-                    repair.abai_well_id,
-                    well.id,
-                    repair.id,
-                )
-
-        abai_well_id = well.abai_id if well else repair.abai_well_id
-        effective_well_id = well.id if well else repair.well_id
-
+        well = await resolve_repair_well(repair, deps.well_repo)
         analytics = await self._ensure_analytics(repair, deps.analytics_repo)
+        inputs = await self._collect_inputs(repair, well, deps, now=now)
+        logger.info(
+            "Repair id=%s inputs: well=%s before=%s after=%s doc=%s spos=%s closed=%s",
+            repair.id,
+            well.id if well else None,
+            inputs.before.id if inputs.before else None,
+            inputs.after.id if inputs.after else None,
+            inputs.doc.id if inputs.doc else None,
+            [spo.id for spo in inputs.spos],
+            sorted(inputs.closed_spo_ids),
+        )
 
-        before = after = None
-        spos: list = []
-
-        if abai_well_id is not None:
-            before, after = await dyn_fetcher.fetch_before_after(
-                repair,
-                abai_well_id,
-                well_id=effective_well_id,
+        await self._link_dynamograms(
+            analytics_id=analytics.id,
+            before_id=inputs.before.id if inputs.before else None,
+            after_id=inputs.after.id if inputs.after else None,
+            analytics_dyn_repo=deps.analytics_dyn_repo,
+        )
+        if inputs.doc is not None and analytics.repair_docs_id != inputs.doc.id:
+            await deps.analytics_repo.update_by_repair_id(
+                repair_id=repair.id,
+                data=UpdateRepairAnalyticsDTO(repair_docs_id=inputs.doc.id),
             )
-            logger.info(
-                "Repair id=%s dynamograms: before=%s after=%s",
-                repair.id,
-                before.id if before else None,
-                after.id if after else None,
-            )
-            await self._link_dynamograms(
+        primary_spo = inputs.primary_spo
+        if primary_spo is not None:
+            await self._link_spo(
                 analytics_id=analytics.id,
-                before_id=before.id if before else None,
-                after_id=after.id if after else None,
-                analytics_dyn_repo=deps.analytics_dyn_repo,
+                spo_id=primary_spo.id,
+                analytics_spo_repo=deps.analytics_spo_repo,
             )
 
-            doc = await doc_fetcher.fetch(repair, abai_well_id)
-            logger.info(
-                "Repair id=%s doc: %s",
-                repair.id,
-                doc.id if doc else None,
-            )
-            if doc is not None and analytics.repair_docs_id != doc.id:
-                await deps.analytics_repo.update_by_repair_id(
-                    repair_id=repair.id,
-                    data=UpdateRepairAnalyticsDTO(repair_docs_id=doc.id),
-                )
-        else:
-            logger.warning(
-                "Repair id=%s has no abai_well_id → skipping dynamograms + docs.",
-                repair.id,
-            )
-
-        if spo_fetcher is None:
-            logger.warning(
-                "Repair id=%s → spo_fetcher is None "
-                "(toucan_pool not initialized), skipping SPO.",
-                repair.id,
-            )
-        elif effective_well_id is None or well is None or abai_well_id is None:
-            logger.warning(
-                "Repair id=%s → cannot fetch SPO: well_id=%s, "
-                "well.name=%s, abai_well_id=%s.",
-                repair.id,
-                effective_well_id,
-                well.name if well else None,
-                abai_well_id,
-            )
-        else:
-            spos = await spo_fetcher.fetch_for_repair(
-                repair,
-                well_id=effective_well_id,
-                well_name=well.name,
-                abai_well_id=abai_well_id,
-            )
-            logger.info(
-                "Repair id=%s SPO count=%s (ids=%s)",
-                repair.id,
-                len(spos),
-                [s.id for s in spos],
-            )
-            primary_spo = spos[0] if spos else None
-            if primary_spo is not None:
-                await self._link_spo(
-                    analytics_id=analytics.id,
-                    spo_id=primary_spo.id,
-                    analytics_spo_repo=deps.analytics_spo_repo,
-                )
-
-        if transport_fetcher is not None:
-            transports = await transport_fetcher.fetch_for_repair(repair)
-            logger.info(
-                "Repair id=%s transport rows upserted=%s (ids=%s)",
-                repair.id,
-                len(transports),
-                [t.id for t in transports],
-            )
-        else:
-            logger.warning(
-                "Repair id=%s → transport_fetcher is None "
-                "(uto_client not initialized), skipping transports.",
-                repair.id,
-            )
-
-        # AI processing: per-item results feed the overall analysis.
+        # AI: разборы по элементам питают общий вердикт.
         dyn_before_ai = (
             await ai_coordinator.process_dynamogram(
-                dynamogram=before,
+                dynamogram=inputs.before,
                 role="before",
                 repair_id=repair.id,
             )
-            if before is not None
+            if inputs.before is not None
             else None
         )
         dyn_after_ai = (
             await ai_coordinator.process_dynamogram(
-                dynamogram=after,
+                dynamogram=inputs.after,
                 role="after",
                 repair_id=repair.id,
             )
-            if after is not None
+            if inputs.after is not None
             else None
         )
         spo_ai_results = [
             await ai_coordinator.process_spo(spo=spo, repair_id=repair.id)
-            for spo in spos
+            for spo in inputs.closed_spos
         ]
         overall_ai = await ai_coordinator.process_overall(
             analytics_id=analytics.id,
@@ -474,6 +359,7 @@ class FillRepairAnalytics:
             dynamogram_before=dyn_before_ai,
             dynamogram_after=dyn_after_ai,
             spo_results=spo_ai_results,
+            inputs_fingerprint=inputs.fingerprint(),
         )
 
         usage = ai_coordinator.pop_repair_usage(repair.id)
@@ -490,6 +376,9 @@ class FillRepairAnalytics:
             repair=repair,
             dynamogram_before_ai=dyn_before_ai,
             dynamogram_after_ai=dyn_after_ai,
+            well_id=well.id if well else None,
+            spo_closed=inputs.primary_spo_closed,
+            spo_revision=primary_spo.raw_size if primary_spo else None,
         )
 
         if await self._should_finalize(
@@ -505,59 +394,105 @@ class FillRepairAnalytics:
             return True
         return False
 
-    async def _iter_candidates(
-        self,
-        session: AsyncSession,
-        grace_cutoff: datetime,
-    ) -> AsyncIterator[Sequence[Repair]]:
-        if self._repair_id is not None:
-            qs = select(Repair).where(Repair.id == self._repair_id)
-            result = await session.execute(qs)
-            repairs = result.scalars().all()
-            if repairs:
-                yield repairs
-            else:
-                logger.warning(
-                    "No repair found with id=%s.",
-                    self._repair_id,
-                )
-            return
-
-        last_id = 0
-        while True:
-            qs = (
-                select(Repair)
-                .outerjoin(
-                    RepairAnalytics,
-                    RepairAnalytics.repair_id == Repair.id,
-                )
-                .where(Repair.id > last_id)
-                .order_by(Repair.id.asc())
-                .limit(self.ITER_SIZE)
+    @staticmethod
+    async def _collect_inputs(
+        repair: Repair,
+        well: Well | None,
+        deps: "_Dependencies",
+        *,
+        now: datetime,
+    ) -> RepairInputs:
+        before = after = None
+        spos: list[SPO] = []
+        if well is not None:
+            before = await deps.dynamogram_repo.get_closest_before(
+                well.id,
+                as_naive(repair.start_time),
             )
-            if self._well_id is not None:
-                qs = qs.join(Well, Repair.abai_well_id == Well.abai_id)
-                qs = qs.where(Well.id == self._well_id)
-            else:
-                qs = qs.where(
-                    or_(
-                        RepairAnalytics.is_finalized.is_(None),
-                        RepairAnalytics.is_finalized.is_(False),
-                    ),
-                    or_(
-                        Repair.end_time.is_(None),
-                        Repair.end_time >= grace_cutoff,
-                        RepairAnalytics.id.is_(None),
-                    ),
+            if repair.end_time is not None:
+                after = await deps.dynamogram_repo.get_closest_after(
+                    well.id,
+                    as_naive(repair.end_time),
                 )
-            result = await session.execute(qs)
-            repairs = result.scalars().all()
-            if not repairs:
-                break
-            yield repairs
-            last_id = repairs[-1].id
-            if len(repairs) < self.ITER_SIZE:
-                break
+            start, end = repair_window(repair, now=now)
+            spos = list(
+                await deps.spo_repo.list_by_well_id_in_window(well.id, start, end),
+            )
+        else:
+            logger.warning(
+                "Repair id=%s has no local well → dynamograms and SPO skipped.",
+                repair.id,
+            )
+        doc = await deps.doc_repo.get_by_repair_id(repair.id)
+        closed = await _closed_spo_ids(spos, deps.measure_repo, now=now)
+        return RepairInputs(
+            before=before,
+            after=after,
+            doc=doc,
+            spos=spos,
+            closed_spo_ids=closed,
+        )
+
+    @staticmethod
+    def _build_processors(
+        deps: "_Dependencies",
+        *,
+        session: AsyncSession,
+        cm_session: AsyncSession,
+    ) -> tuple[AICoordinator, RepairKPICalculator]:
+        storage = build_repairs_storage()
+        repair_brigade_repo = RepairBrigadeRepository(session)
+        unique_brigade_repo = UniqueBrigadeRepository(session)
+        cm_brigade_repo = CMBrigadeRepository(cm_session)
+        cm_brigade_error_screen_repo = CMBrigadeErrorScreenRepository(cm_session)
+        ai_coordinator = AICoordinator(
+            dynamogram_processor=DynamogramAIProcessor(
+                build_dynamogram_agent(),
+                model_name=settings.LLM_MODEL_NAME,
+            ),
+            spo_processor=SPOAIProcessor(
+                build_spo_agent(),
+                model_name=settings.LLM_MODEL_NAME,
+            ),
+            overall_processor=OverallAIProcessor(
+                build_overall_agent(),
+                model_name=settings.LLM_MODEL_NAME,
+            ),
+            dynamogram_ai_repo=deps.dynamogram_ai_repo,
+            spo_ai_repo=deps.spo_ai_repo,
+            overall_ai_repo=deps.overall_ai_repo,
+            file_repo=deps.file_repo,
+            storage=storage,
+            repair_brigade_repo=repair_brigade_repo,
+            unique_brigade_repo=unique_brigade_repo,
+            cm_brigade_repo=cm_brigade_repo,
+            cm_brigade_error_screen_repo=cm_brigade_error_screen_repo,
+        )
+        kpi_calculator = RepairKPICalculator(
+            kpi_repo=deps.kpi_repo,
+            well_repo=deps.well_repo,
+            summary_repo=deps.summary_repo,
+            doc_repo=deps.doc_repo,
+            analytics_spo_repo=deps.analytics_spo_repo,
+            spo_event_repo=deps.spo_event_repo,
+            file_repo=deps.file_repo,
+            storage=storage,
+            tech_regime_repo=deps.tech_regime_repo,
+            telemetry_repo=deps.telemetry_repo,
+            repair_brigade_repo=repair_brigade_repo,
+            unique_brigade_repo=unique_brigade_repo,
+            cm_brigade_repo=cm_brigade_repo,
+            cm_brigade_error_screen_repo=cm_brigade_error_screen_repo,
+            por_processor=PORConfirmationProcessor(
+                build_kpi_por_agent(),
+                model_name=settings.LLM_MODEL_NAME,
+            ),
+            spo_analysis_processor=SPOAnalysisProcessor(
+                build_kpi_spo_analysis_agent(),
+                model_name=settings.LLM_MODEL_NAME,
+            ),
+        )
+        return ai_coordinator, kpi_calculator
 
     @staticmethod
     async def _ensure_analytics(
@@ -634,14 +569,11 @@ class FillRepairAnalytics:
         grace_cutoff: datetime,
         overall_ai_status: str,
     ) -> bool:
-        # Docs-complete branch requires the AI verdict too — otherwise we would
-        # freeze the row before analysis lands. The overdue branch finalizes
-        # regardless, since we've given the pipeline its full grace window.
+        # Ветка «документы собраны» требует и вердикт — иначе строка замёрзнет
+        # до разбора. Ветка по сроку финализирует безусловно: окно вышло.
         docs_complete = await cls._docs_complete(repair.id, doc_repo)
         end_time = repair.end_time
-        if end_time is not None and end_time.tzinfo is not None:
-            end_time = end_time.replace(tzinfo=None)
-        if end_time is not None and end_time < grace_cutoff:
+        if end_time is not None and as_naive(end_time) < grace_cutoff:
             return True
         return docs_complete and overall_ai_status == AI_STATUS_COMPLETED
 
@@ -658,65 +590,49 @@ class FillRepairAnalytics:
         )
 
 
-class _Dependencies:
-    __slots__ = (
-        "analytics_dyn_repo",
-        "analytics_repo",
-        "analytics_spo_repo",
-        "doc_repo",
-        "dynamogram_ai_repo",
-        "dynamogram_repo",
-        "file_repo",
-        "kpi_repo",
-        "overall_ai_repo",
-        "spo_ai_repo",
-        "spo_event_repo",
-        "spo_repo",
-        "summary_repo",
-        "tech_regime_repo",
-        "telemetry_repo",
-        "transport_repo",
-        "well_repo",
-    )
+async def _closed_spo_ids(
+    spos: list[SPO],
+    measure_repo: KbrsMeasureRepository,
+    *,
+    now: datetime,
+) -> frozenset[int]:
+    """СПО, чьи замеры прибор уже не пишет.
 
-    def __init__(  # noqa: PLR0913
-        self,
-        *,
-        analytics_repo: RepairAnalyticsRepository,
-        analytics_dyn_repo: RepairAnalyticsDynamogramRepository,
-        analytics_spo_repo: RepairAnalyticsSPORepository,
-        doc_repo: RepairDocRepository,
-        dynamogram_repo: DynamogramRepository,
-        spo_repo: SPORepository,
-        spo_event_repo: SPOEventRepository,
-        summary_repo: RepairSummaryRepository,
-        transport_repo: RepairTransportRepository,
-        file_repo: FileRepository,
-        well_repo: WellRepository,
-        dynamogram_ai_repo: RepairDynamogramAIResultRepository,
-        spo_ai_repo: RepairSPOAIResultRepository,
-        overall_ai_repo: RepairAIAnalysisRepository,
-        kpi_repo: RepairKPIRepository,
-        tech_regime_repo: TechRegimeRepository,
-        telemetry_repo: TelemetryRepository,
-    ) -> None:
-        self.analytics_repo = analytics_repo
-        self.analytics_dyn_repo = analytics_dyn_repo
-        self.analytics_spo_repo = analytics_spo_repo
-        self.doc_repo = doc_repo
-        self.dynamogram_repo = dynamogram_repo
-        self.spo_repo = spo_repo
-        self.spo_event_repo = spo_event_repo
-        self.summary_repo = summary_repo
-        self.transport_repo = transport_repo
-        self.file_repo = file_repo
-        self.well_repo = well_repo
-        self.dynamogram_ai_repo = dynamogram_ai_repo
-        self.spo_ai_repo = spo_ai_repo
-        self.overall_ai_repo = overall_ai_repo
-        self.kpi_repo = kpi_repo
-        self.tech_regime_repo = tech_regime_repo
-        self.telemetry_repo = telemetry_repo
+    СПО без привязки к замеру опросчика (история, прямой Toucan) считаются
+    закрытыми: другого признака у них нет.
+    """
+    measure_ids = [spo.kbrs_measure_id for spo in spos if spo.kbrs_measure_id]
+    measures = await measure_repo.map_by_measure_ids(measure_ids)
+    closed: set[int] = set()
+    for spo in spos:
+        if spo.kbrs_measure_id is None:
+            closed.add(spo.id)
+            continue
+        measure = measures.get(spo.kbrs_measure_id)
+        if measure is None or is_measure_closed(measure.end_time, now=now):
+            closed.add(spo.id)
+    return frozenset(closed)
+
+
+@dataclass(slots=True)
+class _Dependencies:
+    analytics_repo: RepairAnalyticsRepository
+    analytics_dyn_repo: RepairAnalyticsDynamogramRepository
+    analytics_spo_repo: RepairAnalyticsSPORepository
+    doc_repo: RepairDocRepository
+    dynamogram_repo: DynamogramRepository
+    spo_repo: SPORepository
+    spo_event_repo: SPOEventRepository
+    summary_repo: RepairSummaryRepository
+    file_repo: FileRepository
+    well_repo: WellRepository
+    measure_repo: KbrsMeasureRepository
+    dynamogram_ai_repo: RepairDynamogramAIResultRepository
+    spo_ai_repo: RepairSPOAIResultRepository
+    overall_ai_repo: RepairAIAnalysisRepository
+    kpi_repo: RepairKPIRepository
+    tech_regime_repo: TechRegimeRepository
+    telemetry_repo: TelemetryRepository
 
     @classmethod
     def build(cls, session: AsyncSession) -> "_Dependencies":
@@ -729,9 +645,9 @@ class _Dependencies:
             spo_repo=SPORepository(session),
             spo_event_repo=SPOEventRepository(session),
             summary_repo=RepairSummaryRepository(session),
-            transport_repo=RepairTransportRepository(session),
             file_repo=FileRepository(session),
             well_repo=WellRepository(session),
+            measure_repo=KbrsMeasureRepository(session),
             dynamogram_ai_repo=RepairDynamogramAIResultRepository(session),
             spo_ai_repo=RepairSPOAIResultRepository(session),
             overall_ai_repo=RepairAIAnalysisRepository(session),
@@ -741,48 +657,44 @@ class _Dependencies:
         )
 
 
+# --- Celery ------------------------------------------------------------------
+
+
+@celery_app.task(name=ANALYTICS_RUN_TASK)
+def run_repair_analytics(repair_id: int) -> None:
+    """Аналитика одного ремонта по событию добытчика (см. triggers)."""
+    run_async(FillRepairAnalytics(repair_id=repair_id).run())
+
+
+async def _sweep() -> None:
+    async with redis_lock(SWEEP_LOCK_KEY, ttl_sec=REPAIR_LOCK_TTL_SEC) as acquired:
+        if not acquired:
+            logger.info("Repair analytics sweep already running; skipped.")
+            return
+        await FillRepairAnalytics(time_budget_sec=SWEEP_TIME_BUDGET_SEC).run()
+
+
+@celery_app.task(name=ANALYTICS_SWEEP_TASK)
+def sweep_repair_analytics() -> None:
+    """Страховочный проход по кандидатам: догоняет потерянные события."""
+    run_async(_sweep())
+
+
+# --- CLI ---------------------------------------------------------------------
+
+
 async def main(
     *,
     repair_id: int | None = None,
     well_id: int | None = None,
 ) -> None:
-    abai_client = AbaiAsyncClient(
-        username=settings.ABAI_LOGIN,
-        password=settings.ABAI_PASS,
-        domain=settings.ABAI_DOMAIN,
-        connect_to=settings.ABAI_CONNECT_THROUGH,
-        timeout=120,
-        max_concurrent_downloads=100,
-    )
-    toucan_pool = await ToucanClientPool.create(
-        size=settings.KBRS_POOL_SIZE,
-        config=ToucanClientConfig(host=settings.KBRS_HOST),
-        credentials=ToucanCredentialsDto(
-            login=settings.KBRS_LOGIN,
-            password=settings.KBRS_PASSWORD,
-        ),
-    )
-
-    uto_client = UtoWaybillClient(
-        login=settings.UTO_LOGIN,
-        password=settings.UTO_PASS,
-        connect_to=settings.UTO_CONNECT_THROUGH,
-        verify=False,
-    )
-    await asyncio.to_thread(uto_client.login)
-
-    await FillRepairAnalytics(
-        abai_client=abai_client,
-        toucan_pool=toucan_pool,
-        uto_client=uto_client,
-        repair_id=repair_id,
-        well_id=well_id,
-    ).run()
+    await FillRepairAnalytics(repair_id=repair_id, well_id=well_id).run()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Fill repair analytics. Without args processes all candidates.",
+        description="Run repair analytics over collected data. "
+        "Without args processes all candidates.",
     )
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument(
