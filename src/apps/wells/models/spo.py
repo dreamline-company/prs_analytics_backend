@@ -39,3 +39,12 @@ class SPO(AppBaseModel, IntPkMixin):
         ForeignKey("wells_well.id"),
         nullable=False,
     )
+    # Toucan measure_id (``kbrs_measure.measure_id``): по нему линкер находит
+    # уже связанный замер, а ``raw_size`` показывает, вырос ли он с прошлого
+    # разбора событий. Пусто у СПО, созданных до появления связывания.
+    kbrs_measure_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        index=True,
+    )
+    raw_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

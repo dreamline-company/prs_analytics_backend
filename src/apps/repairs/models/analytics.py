@@ -162,6 +162,9 @@ class RepairAIAnalysis(
         unique=True,
         nullable=False,
     )
+    # Отпечаток входов (динамограммы, СПО, ПОР/акт), по которым посчитан
+    # вердикт: изменился — вердикт пересчитывается.
+    inputs_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class RepairKPI(AppBaseModel, IntPkMixin, TimedMixinModel):

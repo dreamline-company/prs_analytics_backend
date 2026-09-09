@@ -39,7 +39,8 @@ class UpdateRepairSPOAIResultDTO(_AIResultBaseUpdateDTO):
 
 class CreateRepairAIAnalysisDTO(_AIResultBaseCreateDTO):
     analytics_id: int
+    inputs_fingerprint: str | None = None
 
 
 class UpdateRepairAIAnalysisDTO(_AIResultBaseUpdateDTO):
-    pass
+    inputs_fingerprint: str | None = None
