@@ -46,6 +46,13 @@ class RepairTypeRepository(
     async def delete_by_id(self, repair_type_id: int) -> None:
         await self.delete(filters=(RepairType.id == repair_type_id,))
 
+    async def list_by_ids(self, ids: Sequence[int]) -> Sequence[RepairType]:
+        if not ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(filters=(RepairType.id.in_(ids),), order_by=(RepairType.id,)),
+        )
+
 
 class RepairRepository(
     AsyncAlchemyRepository[CreateRepairDTO, UpdateRepairDTO, Repair],

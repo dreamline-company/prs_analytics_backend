@@ -137,3 +137,10 @@ class WellRepository(
 
     async def delete_by_id(self, well_id: int) -> None:
         await self.delete(filters=(Well.id == well_id,))
+
+    async def list_by_ids(self, ids: Sequence[int]) -> Sequence[Well]:
+        if not ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(filters=(Well.id.in_(ids),), order_by=(Well.id,)),
+        )

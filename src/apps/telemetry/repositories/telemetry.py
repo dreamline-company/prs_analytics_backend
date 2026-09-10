@@ -116,3 +116,60 @@ class TelemetryRepository(
             ),
         )
         return tms[0] if tms else None
+
+    async def get_last_by_well_ids_before(
+        self,
+        well_ids: Sequence[int],
+        *,
+        before: datetime,
+    ) -> dict[int, Telemetry]:
+        """Последний отсчёт каждой скважины строго до ``before``.
+
+        Вариант ``get_last_by_well_ids`` для отчётов «на дату»: тот же LATERAL
+        по индексу (well_id, date_time), только с верхней границей времени.
+        """
+        if not well_ids:
+            return {}
+
+        requested = select(
+            func.unnest(cast(list(well_ids), ARRAY(BigInteger))).label("well_id"),
+        ).subquery("requested")
+        last_row = (
+            select(Telemetry)
+            .where(
+                Telemetry.well_id == requested.c.well_id,
+                Telemetry.date_time < before,
+            )
+            .order_by(Telemetry.date_time.desc(), Telemetry.id.desc())
+            .limit(1)
+            .lateral("last_row")
+        )
+        last = aliased(Telemetry, last_row)
+        stmt = select(last).select_from(requested).join(last, true())
+        result = await self.session.execute(stmt)
+        return {row.well_id: row for row in result.scalars()}
+
+    async def list_by_well_ids_in_period(
+        self,
+        well_ids: Sequence[int],
+        *,
+        date_time_from: datetime,
+        date_time_to: datetime,
+    ) -> dict[int, list[Telemetry]]:
+        """История замеров скважин за окно, по возрастанию времени; ключ — well_id."""
+        if not well_ids:
+            return {}
+        rows = await self.get_list(
+            QuerySpec(
+                filters=(
+                    Telemetry.well_id.in_(well_ids),
+                    Telemetry.date_time >= date_time_from,
+                    Telemetry.date_time < date_time_to,
+                ),
+                order_by=(Telemetry.date_time.asc(), Telemetry.id.asc()),
+            ),
+        )
+        history: dict[int, list[Telemetry]] = {}
+        for row in rows:
+            history.setdefault(row.well_id, []).append(row)
+        return history
