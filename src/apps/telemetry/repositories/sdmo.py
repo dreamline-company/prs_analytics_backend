@@ -374,7 +374,8 @@ class SdmoFcDataRepository(
         self,
         station_ids: Sequence[int],
     ) -> RowMapping | None:
-        """Последний отсчёт (savetime, момент, скорость, заполнение) по станциям.
+        """Последний отсчёт (savetime, station_id, момент, скорость, заполнение)
+        по станциям. Значения сырые — koef применяет ``SdmoRegisterScaler``.
 
         ``station_ids`` — локальные id станций. Запрос делается по одной
         станции за раз: равенство по station_id + LIMIT 1 — это обратный
@@ -390,6 +391,8 @@ class SdmoFcDataRepository(
                     joins=(),
                     fields=(
                         SdmoFcData.savetime,
+                        # Тип станции нужен потребителю для koef справочника.
+                        SdmoFcData.station_id,
                         getattr(SdmoFcData, f"r_{PUMP_MOMENT_REGISTER}").label(
                             "pump_moment",
                         ),
@@ -418,8 +421,9 @@ class SdmoFcDataRepository(
         start_time: datetime | None = None,
         end_time: datetime | None = None,
     ) -> Sequence[RowMapping]:
-        """Ряд (savetime, rotor_speed, pump_moment, engine_current) по станциям
-        (локальные id)."""
+        """Ряд (savetime, station_id, rotor_speed, pump_moment, engine_current)
+        по станциям (локальные id). Значения сырые — koef применяет
+        ``SdmoRegisterScaler``."""
         filters: list = [SdmoFcData.station_id.in_(station_ids)]
         if start_time is not None:
             filters.append(SdmoFcData.savetime >= start_time)
@@ -431,6 +435,7 @@ class SdmoFcDataRepository(
                 joins=(),
                 fields=(
                     SdmoFcData.savetime,
+                    SdmoFcData.station_id,
                     getattr(SdmoFcData, f"r_{ROTOR_SPEED_REGISTER}").label(
                         "rotor_speed",
                     ),

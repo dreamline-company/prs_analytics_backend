@@ -25,11 +25,18 @@ class WellCardPassportDTO(WellRatesDTO):
     строкой матрицы; здесь к ним добавляется оборудование.
     """
 
-    # SdmoFcData (последний отсчёт по привязанным станциям СДМО).
+    # SdmoFcData (последний отсчёт по привязанным станциям СДМО), значения
+    # приведены по koef справочника fc_reg для типа станции (см. sdmo_scaled).
     pump_moment: float | None  # Момент насоса — регистр 1991
-    pump_speed: float | None  # Скорость насоса, об/мин — регистр 1998
+    pump_speed: float | None  # Скорость насоса — регистр 1998
+    # Единицы скорости по типу станции: «ход/мин» у ШГН, «об/мин» у ЭВН;
+    # None — тип станции неизвестен.
+    pump_speed_units: str | None = None
     pump_fill: float | None  # Заполнение насоса, % — регистр 1997
     sdmo_time: datetime | None  # Время отсчёта — SdmoFcData.savetime
+    # False — у станции нет type_1900 (или регистра нет в справочнике для её
+    # типа): pump_* отданы сырыми, как в telemetry_sdmo_fc_data.
+    sdmo_scaled: bool = False
     # Статус станции (1 — онлайн, 0 — не онлайн) — регистр 1999 «Статус
     # (VLT SALT)», последнее заполненное значение по станциям скважины.
     sdmo_vlt_status: int | None

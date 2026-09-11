@@ -9,6 +9,7 @@ from apps.telemetry.dto.queries.sdmo import ListSdmoParametersByWellIdQuery
 from apps.telemetry.dto.responses.sdmo import ListSdmoParametersResponseDTO
 from apps.telemetry.repositories.sdmo import (
     SdmoFcDataRepository,
+    SdmoFcRegRepository,
     SdmoStationRepository,
 )
 from apps.telemetry.use_cases.list_sdmo_parameters_by_well_id import (
@@ -36,6 +37,7 @@ async def get_sdmo_parameters(
     use_case = ListSdmoParametersByWellIdUseCase(
         sdmo_station_repository=SdmoStationRepository(session=session),
         sdmo_fc_data_repository=SdmoFcDataRepository(session=session),
+        sdmo_fc_reg_repository=SdmoFcRegRepository(session=session),
     )
     parameters = await use_case.execute(
         ListSdmoParametersByWellIdQuery(

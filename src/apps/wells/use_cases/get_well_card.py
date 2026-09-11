@@ -8,10 +8,16 @@ from apps.detectors.services import WellIncidentStatusService
 from apps.repairs.services import CurrentRepairService
 from apps.telemetry.models.sdmo import SdmoStation
 from apps.telemetry.repositories.sdmo import (
+    ROTOR_SPEED_REGISTER,
     SdmoFcDataRepository,
+    SdmoFcRegRepository,
     SdmoStationRepository,
 )
-from apps.telemetry.services import WellRatesService
+from apps.telemetry.services import (
+    PUMP_PARAMETER_REGISTERS,
+    SdmoRegisterScaler,
+    WellRatesService,
+)
 from apps.wells.dto.internal.well_card import (
     WellCardDTO,
     WellCardPassportDTO,
@@ -41,6 +47,7 @@ class GetWellCardUseCase:
         well_rates_service: WellRatesService,
         sdmo_station_repository: SdmoStationRepository,
         sdmo_fc_data_repository: SdmoFcDataRepository,
+        sdmo_fc_reg_repository: SdmoFcRegRepository,
         well_status_history_repository: WellStatusHistoryRepository,
         coord_point_service: CoordPointService,
         well_incident_status_service: WellIncidentStatusService,
@@ -51,6 +58,7 @@ class GetWellCardUseCase:
         self.well_rates_service = well_rates_service
         self.sdmo_station_repository = sdmo_station_repository
         self.sdmo_fc_data_repository = sdmo_fc_data_repository
+        self.sdmo_fc_reg_repository = sdmo_fc_reg_repository
         self.well_status_history_repository = well_status_history_repository
         self.coord_point_service = coord_point_service
         self.well_incident_status_service = well_incident_status_service
@@ -68,12 +76,30 @@ class GetWellCardUseCase:
         )
         stations = await self.sdmo_station_repository.list_by_well_id(well_id=well.id)
         pump = None
+        pump_values: dict[str, float | None] = {}
+        pump_scaled = False
+        speed_units = None
         vlt_status = None
         if stations:
             fc_data_repository = self.sdmo_fc_data_repository
             pump = await fc_data_repository.get_last_pump_parameters_by_stations(
                 station_ids=[station.id for station in stations],
             )
+            if pump is not None:
+                # koef справочника по типу станции отсчёта; без типа — сырое
+                # с sdmo_scaled=False.
+                station_type = self._station_type(stations, pump["station_id"])
+                scaler = await SdmoRegisterScaler.load(self.sdmo_fc_reg_repository)
+                scaled = scaler.scale_row(
+                    pump,
+                    type_1900=station_type,
+                    registers=PUMP_PARAMETER_REGISTERS,
+                )
+                pump_values, pump_scaled = scaled.values, scaled.scaled
+                speed_units = scaler.units(
+                    addr=ROTOR_SPEED_REGISTER,
+                    type_1900=station_type,
+                )
             # Тем же запросом, что и матрица: строка матрицы и карточка должны
             # показывать один и тот же статус станции.
             vlt_statuses = await fc_data_repository.get_last_vlt_status_by_well_ids(
@@ -102,15 +128,24 @@ class GetWellCardUseCase:
             coord=coord,
             passport=WellCardPassportDTO(
                 **rates.model_dump(),
-                pump_moment=pump["pump_moment"] if pump else None,
-                pump_speed=pump["pump_speed"] if pump else None,
-                pump_fill=pump["pump_fill"] if pump else None,
+                pump_moment=pump_values.get("pump_moment"),
+                pump_speed=pump_values.get("pump_speed"),
+                pump_speed_units=speed_units,
+                pump_fill=pump_values.get("pump_fill"),
                 sdmo_time=pump["savetime"] if pump else None,
+                sdmo_scaled=pump_scaled,
                 sdmo_vlt_status=vlt_status,
                 h_din_m=dynamic_level.h_din_m if dynamic_level else None,
                 h_din_date=dynamic_level.meas_date if dynamic_level else None,
                 zero_rate_days=ZERO_RATE_DAYS_STUB,
             ),
+        )
+
+    @staticmethod
+    def _station_type(stations: Sequence[SdmoStation], station_id: int) -> int | None:
+        return next(
+            (station.type_1900 for station in stations if station.id == station_id),
+            None,
         )
 
     @staticmethod

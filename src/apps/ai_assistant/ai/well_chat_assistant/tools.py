@@ -25,11 +25,17 @@ from apps.detectors.use_cases.get_well_ai_conclusion import (
 from apps.repairs.models.repair import Repair
 from apps.repairs.repositories.repair import RepairRepository
 from apps.telemetry.repositories.sdmo import (
+    ROTOR_SPEED_REGISTER,
     SdmoFcDataRepository,
+    SdmoFcRegRepository,
     SdmoStationRepository,
 )
 from apps.telemetry.repositories.tech_regime import TechRegimeRepository
 from apps.telemetry.repositories.telemetry import TelemetryRepository
+from apps.telemetry.services.sdmo_scale import (
+    PUMP_PARAMETER_REGISTERS,
+    SdmoRegisterScaler,
+)
 from apps.telemetry.services.well_rates import WellRatesService
 from apps.wells.repositories.well import WellRepository
 from shared.database.sql.setup import session_makers
@@ -161,10 +167,25 @@ async def get_pump_telemetry(config: RunnableConfig) -> dict[str, Any]:
         )
         if pump is None:
             return {"error": "no_sdmo_data", "well_id": well_id}
+        # koef справочника по типу станции; без типа — сырые значения и
+        # sdmo_scaled=False, чтобы модель не выдавала их за физические.
+        station_type = next(
+            (s.type_1900 for s in stations if s.id == pump["station_id"]),
+            None,
+        )
+        scaler = await SdmoRegisterScaler.load(SdmoFcRegRepository(session))
+        scaled = scaler.scale_row(
+            pump,
+            type_1900=station_type,
+            registers=PUMP_PARAMETER_REGISTERS,
+        )
         return {
-            "pump_moment": pump["pump_moment"],
-            "pump_speed": pump["pump_speed"],
-            "pump_fill": pump["pump_fill"],
+            **scaled.values,
+            "pump_speed_units": scaler.units(
+                addr=ROTOR_SPEED_REGISTER,
+                type_1900=station_type,
+            ),
+            "sdmo_scaled": scaled.scaled,
             "sdmo_time": _iso(pump["savetime"]),
         }
 
