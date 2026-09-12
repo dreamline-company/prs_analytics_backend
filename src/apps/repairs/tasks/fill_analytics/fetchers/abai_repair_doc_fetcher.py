@@ -6,7 +6,9 @@ ABAI returns one PDF per repair record that contains:
 
 Strategy:
   * always re-download the PDF (acts may be appended later);
-  * upload the bytes to S3 each call (cheap), then register a new File row;
+  * compare its SHA-256 with the stored one — unchanged PDF is not re-uploaded
+    and does not spawn a new ``File`` row (the fetcher now runs every quarter
+    of an hour, without the check it would litter S3 and ``files_file``);
   * keep ``por_file_id`` always set;
   * set ``act_file_id`` only after the repair has finished.
 
@@ -14,7 +16,10 @@ This mirrors what the user described: «в начале только ПОР, в 
 акт в тот же PDF».
 """
 
+import hashlib
+from dataclasses import dataclass
 from io import BytesIO
+from typing import Literal
 
 from apps.files.dto.internal.repositories.file import CreateFileDTO
 from apps.files.repositories.file import FileRepository
@@ -30,6 +35,41 @@ from shared.database.s3.storage import AiobotoFileStorage
 from shared.integrations.abai.api.client import AbaiAsyncClient, AbaiFile
 
 logger = get_logger(__name__)
+
+DocAction = Literal["skip", "set_act", "upload"]
+
+
+@dataclass(frozen=True, slots=True)
+class DocFetchOutcome:
+    doc: RepairDoc | None
+    # Документ появился или изменился — повод пересчитать аналитику.
+    changed: bool
+
+
+def plan_doc_update(
+    existing: RepairDoc | None,
+    *,
+    digest: str,
+    is_finished: bool,
+) -> DocAction:
+    """Что делать со скачанным PDF относительно сохранённого документа.
+
+    * ``upload`` — документа нет или содержимое изменилось;
+    * ``set_act`` — PDF тот же, но ремонт завершился, а акт ещё не отмечен:
+      достаточно указать актом уже загруженный файл;
+    * ``skip`` — ничего не изменилось.
+    """
+    if existing is None or existing.por_file_id is None:
+        return "upload"
+    if existing.source_hash != digest:
+        return "upload"
+    if is_finished and existing.act_file_id is None:
+        return "set_act"
+    return "skip"
+
+
+def content_digest(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
 
 
 class AbaiRepairDocFetcher:
@@ -49,10 +89,11 @@ class AbaiRepairDocFetcher:
         self,
         repair: Repair,
         abai_well_id: int,
-    ) -> RepairDoc | None:
+    ) -> DocFetchOutcome:
+        existing = await self._repair_doc_repo.get_by_repair_id(repair.id)
         pdf = await self._find_pdf(repair, abai_well_id)
         if pdf is None:
-            return None
+            return DocFetchOutcome(doc=existing, changed=False)
 
         try:
             payload = await self._download_bytes(pdf)
@@ -62,35 +103,66 @@ class AbaiRepairDocFetcher:
                 pdf.id,
                 repair.id,
             )
-            return None
+            return DocFetchOutcome(doc=existing, changed=False)
 
+        digest = content_digest(payload)
+        is_finished = repair.end_time is not None
+        action = plan_doc_update(existing, digest=digest, is_finished=is_finished)
+        if action == "skip":
+            return DocFetchOutcome(doc=existing, changed=False)
+        if action == "set_act":
+            doc = await self._repair_doc_repo.update_by_repair_id(
+                repair_id=repair.id,
+                data=UpdateRepairDocDTO(act_file_id=existing.por_file_id),
+            )
+            return DocFetchOutcome(doc=doc, changed=True)
+        return await self._store(
+            repair,
+            pdf=pdf,
+            payload=payload,
+            digest=digest,
+            existing=existing,
+            is_finished=is_finished,
+        )
+
+    async def _store(  # noqa: PLR0913
+        self,
+        repair: Repair,
+        *,
+        pdf: AbaiFile,
+        payload: bytes,
+        digest: str,
+        existing: RepairDoc | None,
+        is_finished: bool,
+    ) -> DocFetchOutcome:
         s3_key = f"repair_docs/{repair.id}/{pdf.id}_{pdf.file_name}"
         try:
             await self._storage.upload_file(BytesIO(payload), s3_key)
         except Exception:
             logger.exception("Failed to upload PRS PDF to S3 (key=%s).", s3_key)
-            return None
+            return DocFetchOutcome(doc=existing, changed=False)
 
         file_row = await self._file_repo.create(CreateFileDTO(file=s3_key))
 
-        is_finished = repair.end_time is not None
-        existing = await self._repair_doc_repo.get_by_repair_id(repair.id)
         if existing is None:
-            return await self._repair_doc_repo.create(
+            doc = await self._repair_doc_repo.create(
                 CreateRepairDocDTO(
                     repair_id=repair.id,
                     por_file_id=file_row.id,
                     act_file_id=file_row.id if is_finished else None,
+                    source_hash=digest,
                 ),
             )
+            return DocFetchOutcome(doc=doc, changed=True)
 
-        update = UpdateRepairDocDTO(por_file_id=file_row.id)
+        update = UpdateRepairDocDTO(por_file_id=file_row.id, source_hash=digest)
         if is_finished:
             update.act_file_id = file_row.id
-        return await self._repair_doc_repo.update_by_repair_id(
+        doc = await self._repair_doc_repo.update_by_repair_id(
             repair_id=repair.id,
             data=update,
         )
+        return DocFetchOutcome(doc=doc, changed=True)
 
     async def _find_pdf(
         self,
@@ -122,7 +194,5 @@ class AbaiRepairDocFetcher:
             headers=headers,
         ) as resp:
             resp.raise_for_status()
-            chunks: list[bytes] = [
-                chunk async for chunk in resp.aiter_bytes() if chunk
-            ]
+            chunks: list[bytes] = [chunk async for chunk in resp.aiter_bytes() if chunk]
             return b"".join(chunks)

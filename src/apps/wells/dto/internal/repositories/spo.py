@@ -11,6 +11,8 @@ class CreateSPODTO(RepositoryDTO):
     passport_file_id: int | None = None
     snapshot_time: datetime
     well_id: int
+    kbrs_measure_id: int | None = None
+    raw_size: int | None = None
 
 
 class UpdateSPODTO(RepositoryDTO):
@@ -21,3 +23,5 @@ class UpdateSPODTO(RepositoryDTO):
     passport_file_id: int | None = None
     snapshot_time: datetime | None = None
     well_id: int | None = None
+    kbrs_measure_id: int | None = None
+    raw_size: int | None = None

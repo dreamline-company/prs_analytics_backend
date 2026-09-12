@@ -34,11 +34,10 @@ async def get_file_by_id(
         ),
     ] = 3600,
 ) -> FileDownloadResponseDTO:
-    # Uploads currently land in REPORTS_BUCKET_NAME (see fill_repair_analytics,
-    # upload_parsed_summaries). If buckets diverge later, add a bucket column
-    # to File and pass it through here.
+    # Все загрузки лежат в едином бакете приложения (S3_BUCKET_NAME); строка
+    # File хранит только ключ.
     storage = AiobotoFileStorage(
-        bucket_name=settings.PRS_REPAIRS_BUCKET_NAME,
+        bucket_name=settings.S3_BUCKET_NAME,
         client_factory=get_aioboto_client_factory(),
         presign_client_factory=get_aioboto_presign_client_factory(),
     )

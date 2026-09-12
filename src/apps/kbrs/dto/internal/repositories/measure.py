@@ -8,6 +8,7 @@ class CreateKbrsMeasureDTO(RepositoryDTO):
     owner_id: int
     device_id: int
     device_type: int = 0
+    device_description: str | None = None
     raw_size: int = 0
     well_number: int | None = None
     start_time: datetime | None = None
@@ -22,6 +23,7 @@ class CreateKbrsMeasureDTO(RepositoryDTO):
 
 
 class UpdateKbrsMeasureDTO(RepositoryDTO):
+    device_description: str | None = None
     raw_size: int | None = None
     well_number: int | None = None
     start_time: datetime | None = None

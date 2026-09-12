@@ -104,3 +104,7 @@ Tasks live in `{app}/tasks/{task_name}/` as standalone async classes with a `.ru
 ### AI assistant
 
 LangGraph/LangChain logic is isolated in `src/apps/ai_assistant/ai/`. The chat assistant uses a LangGraph agent (`agent.py`) with tools (`tools.py`). AI use cases must not be invoked from routers directly — route through `use_cases/`.
+
+## Git
+
+- Do NOT add a `Co-Authored-By: Claude ...` trailer (or any other Claude/Anthropic attribution) to commit messages or PR bodies. Commits are authored by the user only.

@@ -93,19 +93,29 @@ class RepairKPICalculator:
     por_processor: PORConfirmationProcessor
     spo_analysis_processor: SPOAnalysisProcessor
 
-    async def compute_and_store(
+    async def compute_and_store(  # noqa: PLR0913
         self,
         *,
         analytics_id: int,
         repair: Repair,
         dynamogram_before_ai: RepairDynamogramAIResult | None,
         dynamogram_after_ai: RepairDynamogramAIResult | None,
+        well_id: int | None = None,
+        spo_closed: bool = True,
+        spo_revision: int | None = None,
     ) -> RepairKPI:
+        """Собрать и сохранить KPI ремонта.
+
+        ``spo_closed`` — основной замер СПО уже не пишется прибором: разбор
+        событий имеет смысл только по закрытому замеру. ``spo_revision`` —
+        объём замера (``repairs_spo.raw_size``): выросший замер даёт новый
+        ключ переиспользования и пересчитывается.
+        """
         computed_at = datetime.now(tz=settings.ZONE_INFO).replace(tzinfo=None)
         existing = await self.kpi_repo.get_by_analytics_id(analytics_id)
         prev = existing.metrics if existing and existing.metrics else {}
 
-        report_items = await self._report_items(repair.id)
+        report_items = await self._report_items(repair, well_id)
 
         metrics = {
             "tech_regime": await self._tech_regime(repair),
@@ -120,6 +130,8 @@ class RepairKPICalculator:
                 repair,
                 report_items,
                 prev.get("spo_analysis"),
+                closed=spo_closed,
+                revision=spo_revision,
             ),
             "safety_violations": {"count": await self._count_violations(repair)},
             "dynamogram_kpi": self._dynamogram_kpi(
@@ -247,19 +259,28 @@ class RepairKPICalculator:
 
     # --- Анализ спуско-подъёмных операций ------------------------------------
 
-    async def _spo_analysis(
+    async def _spo_analysis(  # noqa: PLR0913
         self,
         analytics_id: int,
         repair: Repair,
         report_items: list[str],
         prev: dict | None,
+        *,
+        closed: bool = True,
+        revision: int | None = None,
     ) -> dict[str, Any]:
         link = await self.analytics_spo_repo.get_by_analytics_id(analytics_id)
         spo_id = link.spo_id if link else None
         version = self.spo_analysis_processor.prompt_version
         if spo_id is None:
             return self._empty_block("СПО не привязано к ремонту.", version=version)
-        reused = self._reuse(prev, version=version, source=spo_id)
+        if not closed:
+            return self._empty_block(
+                "Замер СПО ещё пишется — разбор после его закрытия.",
+                version=version,
+            )
+        source = f"{spo_id}:{revision}" if revision is not None else spo_id
+        reused = self._reuse(prev, version=version, source=source)
         if reused is not None:
             return reused
 
@@ -274,7 +295,7 @@ class RepairKPICalculator:
                 report_items=report_items,
             ),
         )
-        return self._deviation_block(result, version=version, source=spo_id)
+        return self._deviation_block(result, version=version, source=source)
 
     # --- KPI динамограмм -----------------------------------------------------
 
@@ -339,12 +360,24 @@ class RepairKPICalculator:
 
     # --- helpers -------------------------------------------------------------
 
-    async def _report_items(self, repair_id: int) -> list[str]:
-        summaries = await self.summary_repo.list_by_repair_id(repair_id)
+    async def _report_items(self, repair: Repair, well_id: int | None) -> list[str]:
+        # Загрузка сводок ``repair_id`` не проставляет — сводки ремонта берутся
+        # и по ссылке, и по скважине с датами внутри ремонта.
+        summaries = list(await self.summary_repo.list_by_repair_id(repair.id))
+        if well_id is not None:
+            end = repair.end_time or datetime.now()  # noqa: DTZ005
+            seen = {summary.id for summary in summaries}
+            summaries.extend(
+                summary
+                for summary in await self.summary_repo.list_by_well_ids_in_dates(
+                    [well_id],
+                    date_from=repair.start_time.date(),
+                    date_to=end.date(),
+                )
+                if summary.id not in seen
+            )
         return [
-            str(item)
-            for summary in summaries
-            for item in (summary.shift_details or [])
+            str(item) for summary in summaries for item in (summary.shift_details or [])
         ]
 
     @staticmethod
@@ -361,7 +394,7 @@ class RepairKPICalculator:
         result: Any,  # noqa: ANN401 — AIProcessingResult
         *,
         version: str,
-        source: int | None,
+        source: int | str | None,
     ) -> dict[str, Any]:
         parsed = RepairKPICalculator._parsed(result)
         return {
@@ -376,7 +409,7 @@ class RepairKPICalculator:
         prev: dict | None,
         *,
         version: str,
-        source: int | None,
+        source: int | str | None,
     ) -> dict | None:
         """Reuse a stored AI sub-verdict if source + prompt version are unchanged."""
         if (

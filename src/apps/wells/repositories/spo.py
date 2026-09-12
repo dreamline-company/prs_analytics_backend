@@ -37,6 +37,21 @@ class SPORepository(
         )
         return rs[0] if rs else None
 
+    async def get_by_kbrs_measure_id(
+        self,
+        kbrs_measure_id: int,
+        *,
+        well_id: int,
+    ) -> SPO | None:
+        return await self.get_one(
+            QuerySpec(
+                filters=(
+                    SPO.kbrs_measure_id == kbrs_measure_id,
+                    SPO.well_id == well_id,
+                ),
+            ),
+        )
+
     async def get_by_well_id_and_snapshot_time(
         self,
         well_id: int,

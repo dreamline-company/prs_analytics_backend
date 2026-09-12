@@ -37,7 +37,7 @@ async def main() -> None:
         ),
     )
     storage = AiobotoFileStorage(
-        bucket_name=settings.SPO_BUCKET_NAME,
+        bucket_name=settings.S3_BUCKET_NAME,
         client_factory=get_aioboto_client_factory(),
     )
     poller = KbrsMeasurePoller(

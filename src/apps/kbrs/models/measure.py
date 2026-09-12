@@ -28,6 +28,11 @@ class KbrsMeasure(AppBaseModel, IntPkMixin, TimedMixinModel):
     owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
     device_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
     device_type: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Описание прибора из справочника Toucan (DirectoryData приходит с логином).
+    device_description: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
     # Размер сырого payload при последнем фетче: если при перечитке размер не
     # изменился — замер не дорос, парсинг и перезаливка не нужны.
     raw_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)

@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import json
 import time
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from io import BytesIO
@@ -38,12 +39,14 @@ from apps.kbrs.models.measure import (
     KbrsMeasure,
 )
 from apps.kbrs.repositories.measure import KbrsMeasureRepository
+from apps.repairs.tasks.fetch_sources.triggers import schedule_spo_link
 from core import get_logger
 from core.settings import get_settings
 from shared.constants.kbrs import OWNERS_MAP
 from shared.database.s3.storage import AiobotoFileStorage
 from shared.database.sql.setup import session_makers
 from shared.integrations.kbrs.api import (
+    DeviceDto,
     LoadMeasurementRequestDto,
     MeasureListFilterDto,
     MeasurementFullDto,
@@ -99,7 +102,7 @@ class _KnownMeasure:
 class KbrsMeasurePoller:
     """Держит Toucan-сессии и бесконечно опрашивает новые замеры."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         *,
         pool: ToucanClientPool,
@@ -197,16 +200,22 @@ class KbrsMeasurePoller:
                 len(pending),
             )
 
+            descriptions = await self._device_descriptions(
+                {row.owner_id for row in pending},
+            )
             fetched = 0
             for row in pending:
                 if self._stop_event.is_set():
                     break
                 try:
-                    await self._fetch_and_persist(
+                    linkable_well = await self._fetch_and_persist(
                         row,
                         existing=known.get(row.measure_id),
                         measure_repo=measure_repo,
                         file_repo=file_repo,
+                        device_description=descriptions.get(
+                            (int(row.owner_id), int(row.device_id)),
+                        ),
                     )
                 except Exception:
                     logger.exception(
@@ -217,6 +226,10 @@ class KbrsMeasurePoller:
                 else:
                     await session.commit()
                     fetched += 1
+                    if linkable_well is not None:
+                        # Связывание с ремонтом — отдельная celery-таска:
+                        # опросчик не ждёт S3 и парсинг чужого пайплайна.
+                        schedule_spo_link(row.measure_id)
             if fetched:
                 logger.info("Poll: fetched %s measures.", fetched)
 
@@ -263,6 +276,35 @@ class KbrsMeasurePoller:
                 rows.setdefault(row.measure_id, row)
         return list(rows.values())
 
+    async def _device_descriptions(
+        self,
+        owner_ids: set[int],
+    ) -> dict[tuple[int, int], str]:
+        """Описания приборов по (owner_id, device_id).
+
+        Справочник приборов приходит вместе с логином в Toucan, ``list_devices``
+        фильтрует его в памяти клиента — RPC здесь нет. Прибор, добавленный
+        после логина сессии, появится после перелогина; до этого описание
+        остаётся пустым и дозаполняется при следующем обновлении замера.
+        """
+        result: dict[tuple[int, int], str] = {}
+        for owner_id in sorted(owner_ids):
+            try:
+                devices = await self._pool.call_with_retry(
+                    lambda client, owner_id=owner_id: client.list_devices(
+                        owner_id=owner_id,
+                    ),
+                )
+            except Exception:  # noqa: BLE001 — описание не критично для замера
+                logger.warning(
+                    "list_devices failed for owner_id=%s; descriptions skipped.",
+                    owner_id,
+                    exc_info=True,
+                )
+                continue
+            result.update(device_description_map(devices))
+        return result
+
     async def _fetch_and_persist(
         self,
         row: MeasureRowDto,
@@ -270,7 +312,14 @@ class KbrsMeasurePoller:
         existing: _KnownMeasure | None,
         measure_repo: KbrsMeasureRepository,
         file_repo: FileRepository,
-    ) -> None:
+        device_description: str | None = None,
+    ) -> int | None:
+        """Скачать и сохранить замер.
+
+        Возвращает номер скважины из паспорта, если содержимое замера
+        изменилось и его можно связать с ремонтом; ``None`` — замер не вырос
+        или скважина в паспорте не прочиталась.
+        """
         # Только measure_id: с device_id/update_offset сервер отдаёт дельту
         # без паспорта в заголовке (см. KbrsSPOFetcher._probe_measure).
         request = LoadMeasurementRequestDto(measure_id=row.measure_id)
@@ -284,7 +333,7 @@ class KbrsMeasurePoller:
                 existing.id,
                 UpdateKbrsMeasureDTO(fetched_at=_local_now()),
             )
-            return
+            return None
 
         well_number = MeasurementPassportPeeker.read_well(raw)
         full: MeasurementFullDto | None = None
@@ -313,6 +362,8 @@ class KbrsMeasurePoller:
         }
         if well_number is not None:
             values["well_number"] = well_number
+        if device_description:
+            values["device_description"] = device_description
         if full is not None:
             values["chart_json_file_id"] = await self._upload(
                 file_repo,
@@ -361,6 +412,7 @@ class KbrsMeasurePoller:
             len(raw),
             "" if full else " (parse error)",
         )
+        return well_number
 
     async def _upload(
         self,
@@ -382,6 +434,22 @@ class KbrsMeasurePoller:
             return existing_file_id
         file = await file_repo.create(CreateFileDTO(file=s3_key))
         return file.id
+
+
+def device_description_map(
+    devices: Sequence[DeviceDto],
+) -> dict[tuple[int, int], str]:
+    """(owner_id, device_id) → description; приборы с нечисловым id пропускаются."""
+    result: dict[tuple[int, int], str] = {}
+    for device in devices:
+        try:
+            device_id = int(device.device_id)
+        except (TypeError, ValueError):
+            continue
+        description = (device.description or "").strip()
+        if description:
+            result[(int(device.owner_id), device_id)] = description
+    return result
 
 
 def _local_now() -> datetime:
