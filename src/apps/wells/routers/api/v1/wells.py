@@ -17,6 +17,7 @@ from apps.repairs.repositories.repair import RepairRepository
 from apps.repairs.services import CurrentRepairService
 from apps.telemetry.repositories.sdmo import (
     SdmoFcDataRepository,
+    SdmoFcRegRepository,
     SdmoStationRepository,
 )
 from apps.telemetry.repositories.tech_regime import TechRegimeRepository
@@ -211,6 +212,7 @@ async def get_well_card(
         ),
         sdmo_station_repository=SdmoStationRepository(session=session),
         sdmo_fc_data_repository=SdmoFcDataRepository(session=session),
+        sdmo_fc_reg_repository=SdmoFcRegRepository(session=session),
         well_status_history_repository=WellStatusHistoryRepository(session=session),
         coord_point_service=CoordPointService(
             well_coord_repository=WellCoordRepository(session=session),

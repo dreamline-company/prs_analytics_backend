@@ -42,7 +42,9 @@ class SdmoFcRegDTO(BaseModel):
 class SdmoParametersDTO(BaseModel):
     """Срез параметров СДМО на один отсчёт savetime.
 
-    Значения сырые, как в telemetry_sdmo_fc_data (koef из fc_reg не применён).
+    Значения приведены по koef справочника fc_reg для типа станции отсчёта.
+    ``scaled=False`` — у станции нет type_1900 (или регистра нет в справочнике
+    для её типа): значения сырые, как в telemetry_sdmo_fc_data.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -51,3 +53,4 @@ class SdmoParametersDTO(BaseModel):
     rotor_speed: float | None
     pump_moment: float | None
     engine_current: float | None
+    scaled: bool = False
