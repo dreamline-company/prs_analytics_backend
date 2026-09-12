@@ -9,6 +9,11 @@ from apps.detectors.load_imbalance.tasks.run_incidents.run_incidents import (  #
 from apps.detectors.rod_breaks.tasks.run_incidents.run_incidents import (  # noqa: F401
     run_rod_break_incidents,
 )
+
+# Импорт регистрирует утреннюю сборку суточных ведомостей R2/R9 по НГДУ.
+from apps.detectors.tasks.build_daily_sheets.build_daily_sheets import (  # noqa: F401
+    build_daily_sheets,
+)
 from apps.detectors.tasks.dispatch.dispatch import (  # noqa: F401
     dispatch_detectors,
     sweep_detectors,
@@ -107,6 +112,13 @@ celery_app.conf.beat_schedule = {
     "detectors-load-imbalance-daily": {
         "task": "detectors.load_imbalance.run_incidents",
         "schedule": crontab(hour=4, minute=10),
+    },
+    # Суточные ведомости R2/R9 по подключённым НГДУ за вчера: после суточного
+    # прогона R9 и ночных загрузок ABAI. Уже собранные даты пропускаются;
+    # запрос за произвольную дату идёт через API тем же сборщиком.
+    "detectors-daily-sheets": {
+        "task": "detectors.daily_sheet.build",
+        "schedule": crontab(hour=7, minute=30),
     },
     # Ежедневная догрузка привязок скважин к оргструктуре из ABAI (новые id +
     # правки dend/org). После org.sync, чтобы матрица по НГДУ опиралась на

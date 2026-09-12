@@ -445,3 +445,21 @@ class SdmoFcDataRepository(
                 order_by=(SdmoFcData.savetime,),
             ),
         )
+
+    async def list_reporting_station_ids(
+        self,
+        *,
+        abai_ngdu_id: int,
+        day: date,
+    ) -> set[int]:
+        """Станции НГДУ с хотя бы одним отсчётом за сутки — охват ведомости."""
+        stmt = (
+            select(SdmoFcData.station_id)
+            .where(
+                SdmoFcData.abai_ngdu_id == abai_ngdu_id,
+                SdmoFcData.day == day,
+            )
+            .distinct()
+        )
+        result = await self.session.execute(stmt)
+        return set(result.scalars().all())

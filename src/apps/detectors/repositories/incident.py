@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from apps.detectors.dto.internal.repositories.incident import (
@@ -21,6 +21,7 @@ from apps.detectors.models.incident import (
     DetectorCursor,
     DetectorIncident,
 )
+from apps.telemetry.models.sdmo import SdmoStation
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
 
@@ -244,6 +245,63 @@ class DetectorIncidentRepository(
             ),
         )
         return int(result.scalar_one())
+
+    async def list_for_ngdu_sheet(
+        self,
+        *,
+        detector_code: str,
+        abai_ngdu_id: int,
+        opened_before: datetime,
+        normalized_since: datetime,
+    ) -> Sequence[DetectorIncident]:
+        """Кандидаты в суточную ведомость НГДУ.
+
+        Принадлежность НГДУ — через станцию СДМО эпизода (``entity_id``): R2 и
+        R9 считаются по её ленте, и НГДУ у неё тот, из чьей базы она пришла.
+        Окно широкое — точное состояние «на дату» выводится на чтении.
+        """
+        stmt = (
+            select(DetectorIncident)
+            .join(SdmoStation, SdmoStation.id == DetectorIncident.entity_id)
+            .where(
+                DetectorIncident.detector_code == detector_code,
+                SdmoStation.abai_ngdu_id == abai_ngdu_id,
+                DetectorIncident.opened_at < opened_before,
+                or_(
+                    DetectorIncident.normalized_at.is_(None),
+                    DetectorIncident.normalized_at >= normalized_since,
+                ),
+            )
+            .order_by(DetectorIncident.opened_at.desc(), DetectorIncident.id.desc())
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
+    async def list_history_by_well_ids(
+        self,
+        *,
+        detector_code: str,
+        well_ids: Sequence[int],
+        opened_since: datetime,
+        opened_before: datetime,
+    ) -> Sequence[DetectorIncident]:
+        """Эпизоды правила по скважинам за окно — для пометки «повторно»."""
+        if not well_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(
+                    DetectorIncident.detector_code == detector_code,
+                    DetectorIncident.well_id.in_(well_ids),
+                    DetectorIncident.opened_at >= opened_since,
+                    DetectorIncident.opened_at < opened_before,
+                ),
+                order_by=(
+                    DetectorIncident.opened_at.desc(),
+                    DetectorIncident.id.desc(),
+                ),
+            ),
+        )
 
 
 class DetectorCursorRepository(
