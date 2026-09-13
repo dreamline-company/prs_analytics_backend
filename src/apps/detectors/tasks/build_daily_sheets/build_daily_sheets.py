@@ -70,7 +70,7 @@ class BuildDailySheets:
         sheet_date = self.sheet_date or (local_now().date() - timedelta(days=1))
         stats = BuildStats()
         storage = AiobotoFileStorage(
-            bucket_name=settings.PRS_REPAIRS_BUCKET_NAME,
+            bucket_name=settings.S3_BUCKET_NAME,
             client_factory=get_aioboto_client_factory(),
             presign_client_factory=get_aioboto_presign_client_factory(),
         )
@@ -78,7 +78,8 @@ class BuildDailySheets:
             orgs = await self._orgs(session)
             if not orgs:
                 logger.warning(
-                    "Daily sheets: no NGDU to build for (ngdu_id=%s)", self.ngdu_id,
+                    "Daily sheets: no NGDU to build for (ngdu_id=%s)",
+                    self.ngdu_id,
                 )
                 return stats
             use_case = GetDailySheetUseCase(session, storage=storage)
@@ -177,11 +178,15 @@ async def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build R2/R9 daily sheets.")
     parser.add_argument(
-        "--date", type=date.fromisoformat, help="YYYY-MM-DD, по умолчанию вчера",
+        "--date",
+        type=date.fromisoformat,
+        help="YYYY-MM-DD, по умолчанию вчера",
     )
     parser.add_argument("--detector", choices=SHEET_DETECTOR_CODES)
     parser.add_argument(
-        "--ngdu-id", type=int, help="org.id НГДУ; по умолчанию все подключённые",
+        "--ngdu-id",
+        type=int,
+        help="org.id НГДУ; по умолчанию все подключённые",
     )
     parser.add_argument("--rebuild", action="store_true")
     asyncio.run(main(parser.parse_args()))
