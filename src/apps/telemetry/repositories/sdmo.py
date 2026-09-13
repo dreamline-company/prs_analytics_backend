@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import BigInteger, RowMapping, cast, func, select, true
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -453,18 +453,39 @@ class SdmoFcDataRepository(
 
     async def list_reporting_station_ids(
         self,
+        station_ids: Sequence[int],
         *,
-        abai_ngdu_id: int,
         day: date,
     ) -> set[int]:
-        """Станции НГДУ с хотя бы одним отсчётом за сутки — охват ведомости."""
-        stmt = (
+        """Станции из списка, у которых есть хотя бы один отсчёт за сутки.
+
+        Охват суточной ведомости. LATERAL с ``LIMIT 1`` на станцию по индексу
+        ``(station_id, savetime)`` — сотни точечных index scan'ов вместо
+        последовательного чтения всей таблицы: по ``(abai_ngdu_id, day)``
+        индекса нет, а таблица на проде — сотни миллионов строк.
+        """
+        if not station_ids:
+            return set()
+
+        day_start = datetime.combine(day, datetime.min.time())
+        day_end = day_start + timedelta(days=1)
+        requested = select(
+            func.unnest(cast(list(station_ids), ARRAY(BigInteger))).label(
+                "station_id",
+            ),
+        ).subquery("requested")
+        any_row = (
             select(SdmoFcData.station_id)
             .where(
-                SdmoFcData.abai_ngdu_id == abai_ngdu_id,
-                SdmoFcData.day == day,
+                SdmoFcData.station_id == requested.c.station_id,
+                SdmoFcData.savetime >= day_start,
+                SdmoFcData.savetime < day_end,
             )
-            .distinct()
+            .limit(1)
+            .lateral("any_row")
+        )
+        stmt = (
+            select(requested.c.station_id).select_from(requested).join(any_row, true())
         )
         result = await self.session.execute(stmt)
         return set(result.scalars().all())

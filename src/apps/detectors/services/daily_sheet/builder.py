@@ -238,7 +238,7 @@ class DailySheetBuilder:
             station.id for station in stations if station.well_id is not None
         ]
         reporting = await self.fc_data_repo.list_reporting_station_ids(
-            abai_ngdu_id=target.abai_ngdu_id,
+            station_ids,
             day=target.sheet_date,
         )
         cursors = (
@@ -253,7 +253,7 @@ class DailySheetBuilder:
         )
         return DailySheetCoverageDTO(
             stations_total=len(station_ids),
-            stations_reporting=len(reporting.intersection(station_ids)),
+            stations_reporting=len(reporting),
             stations_processed=processed,
             partial_day=partial_day,
         )
