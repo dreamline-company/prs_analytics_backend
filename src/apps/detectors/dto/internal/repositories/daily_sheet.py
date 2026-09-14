@@ -9,6 +9,7 @@ class UpsertDailySheetDTO(RepositoryDTO):
     detector_code: str
     abai_ngdu_id: int
     sheet_date: date
+    oil_field_prefixes: str = ""
     status: str
     file_id: int | None = None
     rows_count: int = 0

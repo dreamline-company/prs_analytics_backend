@@ -21,8 +21,16 @@ from apps.detectors.repositories import DetectorRepository
 from apps.detectors.repositories.daily_sheet import DetectorDailySheetRepository
 from apps.detectors.services.daily_sheet.builder import DailySheetBuilder, SheetTarget
 from apps.detectors.services.daily_sheet.config import CONFIG_VERSION
-from apps.detectors.services.daily_sheet.errors import DailySheetNgduNotFoundError
+from apps.detectors.services.daily_sheet.errors import (
+    DailySheetNgduNotFoundError,
+    DailySheetOilFieldNotFoundError,
+)
+from apps.detectors.services.daily_sheet.oil_fields import (
+    OilFieldRef,
+    resolve_oil_fields,
+)
 from apps.files.services.file import FileService
+from apps.org.repositories.oil_field import OilFieldRepository
 from apps.org.repositories.org import OrgRepository
 from shared.constants.ngdu import AbaiNGDUIDsEnum
 from shared.database.s3.storage import AiobotoFileStorage
@@ -56,6 +64,7 @@ class GetDailySheetUseCase:
                 detector_code=target.detector_code,
                 abai_ngdu_id=target.abai_ngdu_id,
                 sheet_date=target.sheet_date,
+                oil_field_prefixes=target.prefixes_key,
             )
         )
         if stored is not None and self._is_reusable(stored):
@@ -90,7 +99,30 @@ class GetDailySheetUseCase:
             ngdu_name=display_ngdu_name(org.name_ru),
             abai_ngdu_id=org.abai_id,
             sheet_date=query.sheet_date,
+            oil_fields=await self._resolve_oil_fields(org.id, query.oil_field_names),
         )
+
+    async def _resolve_oil_fields(
+        self,
+        ngdu_id: int,
+        names: list[str] | None,
+    ) -> tuple[OilFieldRef, ...]:
+        """Имена/префиксы месторождений -> справочник НГДУ; неизвестные — 404."""
+        if not names:
+            return ()
+        available = await OilFieldRepository(self.session).list_oil_fields(
+            ngdu_id=ngdu_id,
+        )
+        found, unknown = resolve_oil_fields(names, available)
+        if unknown or not found:
+            raise DailySheetOilFieldNotFoundError(
+                details={
+                    "ngdu_id": ngdu_id,
+                    "unknown": unknown or names,
+                    "available": [field.name for field in available],
+                },
+            )
+        return tuple(found)
 
     @staticmethod
     def _is_reusable(stored: DetectorDailySheet) -> bool:
@@ -115,6 +147,7 @@ class GetDailySheetUseCase:
             ngdu_name=target.ngdu_name,
             abai_ngdu_id=stored.abai_ngdu_id,
             sheet_date=stored.sheet_date,
+            oil_fields=content.get("oil_fields", []),
             status=stored.status,
             rows_count=stored.rows_count,
             coverage=(

@@ -44,6 +44,17 @@ async def get_daily_sheet(  # noqa: PLR0913
         date,
         Query(alias="date", description="Дата ведомости, YYYY-MM-DD"),
     ],
+    oil_field_names: Annotated[
+        list[str] | None,
+        Query(
+            alias="oil_field_name",
+            description=(
+                "Месторождение по имени или префиксу из /org/v1/oil-fields "
+                "(без учёта регистра); параметр повторяемый — "
+                "?oil_field_name=BLG&oil_field_name=GRN. Без него — весь НГДУ"
+            ),
+        ),
+    ] = None,
     rebuild: Annotated[  # noqa: FBT002 — query-параметр FastAPI
         bool,
         Query(description="Пересобрать, даже если ведомость за дату уже есть"),
@@ -63,6 +74,7 @@ async def get_daily_sheet(  # noqa: PLR0913
             detector_code=detector_code,
             ngdu_id=ngdu_id,
             sheet_date=sheet_date,
+            oil_field_names=oil_field_names,
             rebuild=rebuild,
             expires_in=expires_in,
         ),

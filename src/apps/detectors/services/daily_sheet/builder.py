@@ -17,6 +17,7 @@ from apps.detectors.conclusion import catalog
 from apps.detectors.dto.internal.daily_sheet import (
     DailySheetCoverageDTO,
     DailySheetDTO,
+    DailySheetOilFieldDTO,
     DailySheetRowDTO,
     DailySheetTopItemDTO,
 )
@@ -67,6 +68,11 @@ from apps.detectors.services.daily_sheet.errors import (
     DailySheetDetectorNotFoundError,
 )
 from apps.detectors.services.daily_sheet.metrics import edge_means, window_medians
+from apps.detectors.services.daily_sheet.oil_fields import (
+    OilFieldRef,
+    prefixes_key,
+    well_matches,
+)
 from apps.detectors.services.daily_sheet.render import render_docx
 from apps.detectors.services.daily_sheet.selection import (
     Episode,
@@ -112,6 +118,16 @@ class SheetTarget:
     ngdu_name: str
     abai_ngdu_id: int
     sheet_date: date
+    # Фильтр по месторождениям; пустой кортеж — весь НГДУ.
+    oil_fields: tuple[OilFieldRef, ...] = ()
+
+    @property
+    def prefixes(self) -> tuple[str, ...]:
+        return tuple(field.prefix for field in self.oil_fields)
+
+    @property
+    def prefixes_key(self) -> str:
+        return prefixes_key(self.oil_fields)
 
 
 def local_now() -> datetime:
@@ -126,9 +142,9 @@ def file_key(sheet: DailySheetDTO) -> str:
     except ValueError:
         ngdu_code = str(sheet.abai_ngdu_id)
     built = sheet.built_at or local_now()
-    name = (
-        f"Vedomost_{sheet.detector_code}_{ngdu_code}_{sheet.sheet_date:%Y-%m-%d}.docx"
-    )
+    fields = "-".join(field.prefix for field in sheet.oil_fields)
+    scope = f"{ngdu_code}_{fields}" if fields else ngdu_code
+    name = f"Vedomost_{sheet.detector_code}_{scope}_{sheet.sheet_date:%Y-%m-%d}.docx"
     return (
         f"detectors/daily_sheet/{sheet.detector_code}/{sheet.abai_ngdu_id}/"
         f"{sheet.sheet_date:%Y-%m-%d}/{built:%Y%m%dT%H%M%S}_{name}"
@@ -198,6 +214,7 @@ class DailySheetBuilder:
             abai_ngdu_id=target.abai_ngdu_id,
             opened_before=day_end,
             normalized_since=day_start - timedelta(days=NORMALIZED_TAIL_DAYS),
+            well_name_prefixes=target.prefixes or None,
         )
         episodes = episodes_on_date(incidents, sheet_date=target.sheet_date)
         contexts = await self._contexts(
@@ -215,9 +232,10 @@ class DailySheetBuilder:
         )
         await self._store(sheet)
         logger.info(
-            "Daily sheet %s ngdu=%s date=%s: rows=%s file_id=%s",
+            "Daily sheet %s ngdu=%s fields=%r date=%s: rows=%s file_id=%s",
             target.detector_code,
             target.abai_ngdu_id,
+            target.prefixes_key,
             target.sheet_date,
             sheet.rows_count,
             sheet.file_id,
@@ -234,9 +252,20 @@ class DailySheetBuilder:
         partial_day: bool,
     ) -> DailySheetCoverageDTO:
         stations = await self.station_repo.list_by_ngdu(target.abai_ngdu_id)
-        station_ids = [
-            station.id for station in stations if station.well_id is not None
-        ]
+        stations = [station for station in stations if station.well_id is not None]
+        if target.prefixes:
+            # Месторождение — по имени скважины, не по коду станции: коды
+            # бывают другими (MLD_2631 у VMB_2631).
+            wells = await self.well_repo.list_by_ids(
+                [station.well_id for station in stations],
+            )
+            names = {well.id: well.name for well in wells}
+            stations = [
+                station
+                for station in stations
+                if well_matches(names.get(station.well_id, ""), target.prefixes)
+            ]
+        station_ids = [station.id for station in stations]
         reporting = await self.fc_data_repo.list_reporting_station_ids(
             station_ids,
             day=target.sheet_date,
@@ -573,6 +602,10 @@ class DailySheetBuilder:
             ngdu_name=target.ngdu_name,
             abai_ngdu_id=target.abai_ngdu_id,
             sheet_date=target.sheet_date,
+            oil_fields=[
+                DailySheetOilFieldDTO(id=f.id, prefix=f.prefix, name=f.name)
+                for f in target.oil_fields
+            ],
             status=DAILY_SHEET_STATUS_COMPLETED,
             rows_count=len(rows),
             coverage=coverage,
@@ -596,6 +629,9 @@ class DailySheetBuilder:
             "detector_code": sheet.detector_code,
             "abai_ngdu_id": sheet.abai_ngdu_id,
             "sheet_date": sheet.sheet_date,
+            "oil_field_prefixes": prefixes_key(
+                [OilFieldRef(f.id, f.prefix, f.name) for f in sheet.oil_fields],
+            ),
             "rows_count": sheet.rows_count,
             "coverage": sheet.coverage.model_dump() if sheet.coverage else None,
             "built_at": sheet.built_at,
@@ -615,7 +651,7 @@ class DailySheetBuilder:
                     file_id=db_file.id,
                     content=sheet.model_dump(
                         mode="json",
-                        include={"top", "attention", "rows", "notes"},
+                        include={"oil_fields", "top", "attention", "rows", "notes"},
                     ),
                 ),
             )

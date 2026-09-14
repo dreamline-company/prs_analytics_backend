@@ -14,6 +14,9 @@ class GetDailySheetQuery(BaseModel):
     # Локальный org.id НГДУ — тот же ключ, что в /org/v1/ngdus и сводке КПЭ.
     ngdu_id: int = Field(ge=1)
     sheet_date: date
+    # Месторождения НГДУ по имени или префиксу из /org/v1/oil-fields (без учёта
+    # регистра); None — весь НГДУ.
+    oil_field_names: list[str] | None = None
     # Пересобрать, даже если ведомость за дату уже сохранена.
     rebuild: bool = False
     expires_in: int = Field(default=3600, ge=60, le=7 * 24 * 3600)

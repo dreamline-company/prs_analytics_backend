@@ -15,6 +15,14 @@ class DailySheetDetectorNotFoundError(HttpError):
     status_code = status.HTTP_404_NOT_FOUND
 
 
+class DailySheetOilFieldNotFoundError(HttpError):
+    """Месторождения нет в справочнике этого НГДУ (имя или префикс)."""
+
+    message = "Oil field not found in this NGDU."
+    code = "daily_sheet_oil_field_not_found"
+    status_code = status.HTTP_404_NOT_FOUND
+
+
 class DailySheetDateInFutureError(HttpError):
     message = "Sheet date is in the future."
     code = "daily_sheet_date_in_future"
