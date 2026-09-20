@@ -29,7 +29,9 @@ DAILY_SHEET_STATUS_FAILED = "failed"
 
 
 class DetectorDailySheet(AppBaseModel, IntPkMixin, TimedMixinModel):
-    """Одна ведомость = (правило, НГДУ, дата); пересборка перезаписывает строку."""
+    """Одна ведомость = (правило, НГДУ, дата, месторождения); пересборка
+    перезаписывает строку. Ведомость по всему НГДУ и ведомости по отдельным
+    месторождениям — разные артефакты с общим сборщиком."""
 
     __tablename__ = "detectors_daily_sheet"
     __table_args__ = (
@@ -37,7 +39,8 @@ class DetectorDailySheet(AppBaseModel, IntPkMixin, TimedMixinModel):
             "detector_code",
             "abai_ngdu_id",
             "sheet_date",
-            name="uq_detectors_daily_sheet_detector_ngdu_date",
+            "oil_field_prefixes",
+            name="uq_detectors_daily_sheet_detector_ngdu_date_fields",
         ),
     )
 
@@ -48,6 +51,15 @@ class DetectorDailySheet(AppBaseModel, IntPkMixin, TimedMixinModel):
     # НГДУ-источник телеметрии (AbaiNGDUIDsEnum) — как у станций СДМО.
     abai_ngdu_id: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     sheet_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # Фильтр по месторождениям: префиксы имён скважин через запятую,
+    # отсортированные («BLG,GRN»); пустая строка — весь НГДУ. Часть ключа,
+    # поэтому не NULL: в UNIQUE два NULL не конфликтуют.
+    oil_field_prefixes: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        default="",
+        server_default="",
+    )
     status: Mapped[str] = mapped_column(String(20), nullable=False)
 
     # Готовый docx в едином бакете приложения; NULL у неудачной сборки.

@@ -45,6 +45,12 @@ class DailySheetTopItemDTO(BaseModel):
     text: str
 
 
+class DailySheetOilFieldDTO(BaseModel):
+    id: int
+    prefix: str
+    name: str
+
+
 class DailySheetDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -54,6 +60,8 @@ class DailySheetDTO(BaseModel):
     ngdu_name: str
     abai_ngdu_id: int
     sheet_date: date
+    # Месторождения фильтра; пустой список — ведомость по всему НГДУ.
+    oil_fields: list[DailySheetOilFieldDTO] = []
     status: str
     rows_count: int
     coverage: DailySheetCoverageDTO | None

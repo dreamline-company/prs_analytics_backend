@@ -22,6 +22,7 @@ from apps.detectors.models.incident import (
     DetectorIncident,
 )
 from apps.telemetry.models.sdmo import SdmoStation
+from apps.wells.models.well import Well
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
 
@@ -253,26 +254,40 @@ class DetectorIncidentRepository(
         abai_ngdu_id: int,
         opened_before: datetime,
         normalized_since: datetime,
+        well_name_prefixes: Sequence[str] | None = None,
     ) -> Sequence[DetectorIncident]:
         """Кандидаты в суточную ведомость НГДУ.
 
         Принадлежность НГДУ — через станцию СДМО эпизода (``entity_id``): R2 и
         R9 считаются по её ленте, и НГДУ у неё тот, из чьей базы она пришла.
-        Окно широкое — точное состояние «на дату» выводится на чтении.
+        ``well_name_prefixes`` — месторождения как префиксы имени скважины
+        (``BLG`` в ``BLG_0177``); код станции для этого не годится, он бывает
+        другим (``MLD_2631`` у скважины ``VMB_2631``). Окно широкое — точное
+        состояние «на дату» выводится на чтении.
         """
-        stmt = (
-            select(DetectorIncident)
-            .join(SdmoStation, SdmoStation.id == DetectorIncident.entity_id)
-            .where(
-                DetectorIncident.detector_code == detector_code,
-                SdmoStation.abai_ngdu_id == abai_ngdu_id,
-                DetectorIncident.opened_at < opened_before,
+        filters = [
+            DetectorIncident.detector_code == detector_code,
+            SdmoStation.abai_ngdu_id == abai_ngdu_id,
+            DetectorIncident.opened_at < opened_before,
+            or_(
+                DetectorIncident.normalized_at.is_(None),
+                DetectorIncident.normalized_at >= normalized_since,
+            ),
+        ]
+        stmt = select(DetectorIncident).join(
+            SdmoStation,
+            SdmoStation.id == DetectorIncident.entity_id,
+        )
+        if well_name_prefixes is not None:
+            stmt = stmt.join(Well, Well.id == DetectorIncident.well_id)
+            filters.append(
                 or_(
-                    DetectorIncident.normalized_at.is_(None),
-                    DetectorIncident.normalized_at >= normalized_since,
+                    *(Well.name.like(f"{prefix}\\_%") for prefix in well_name_prefixes),
                 ),
             )
-            .order_by(DetectorIncident.opened_at.desc(), DetectorIncident.id.desc())
+        stmt = stmt.where(*filters).order_by(
+            DetectorIncident.opened_at.desc(),
+            DetectorIncident.id.desc(),
         )
         result = await self.session.execute(stmt)
         return result.scalars().all()

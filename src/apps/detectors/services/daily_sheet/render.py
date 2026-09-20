@@ -26,6 +26,10 @@ from apps.detectors.services.daily_sheet.config import (
     TABLE_WIDTHS_CM,
     TOP_SIZE,
 )
+from apps.detectors.services.daily_sheet.oil_fields import (
+    OilFieldRef,
+    oil_fields_label,
+)
 
 _FONT = "Times New Roman"
 _BODY_PT = 10
@@ -43,12 +47,13 @@ def render_docx(sheet: DailySheetDTO) -> BytesIO:
     if sheet.detector_name_ru:
         rule += f" «{sheet.detector_name_ru}»"
     _paragraph(document, f"по правилу {rule}", center=True)
-    _paragraph(
-        document,
-        f"за {sheet.sheet_date:%d.%m.%Y}        НГДУ «{sheet.ngdu_name}»",
-        bold=True,
-        center=True,
+    scope = f"за {sheet.sheet_date:%d.%m.%Y}        НГДУ «{sheet.ngdu_name}»"
+    fields_label = oil_fields_label(
+        [OilFieldRef(f.id, f.prefix, f.name) for f in sheet.oil_fields],
     )
+    if fields_label:
+        scope += f", {fields_label}"
+    _paragraph(document, scope, bold=True, center=True)
     _paragraph(document, _coverage_line(sheet), size=9)
 
     if sheet.rows:
@@ -83,9 +88,10 @@ def _coverage_line(sheet: DailySheetDTO) -> str:
     coverage = sheet.coverage
     if coverage is None:
         return "Охват: нет данных."
+    scope = "станций выбранных месторождений" if sheet.oil_fields else "станций НГДУ"
     text = (
         f"Охват: телеметрию за сутки дали {coverage.stations_reporting} из "
-        f"{coverage.stations_total} станций НГДУ"
+        f"{coverage.stations_total} {scope}"
     )
     if coverage.stations_processed is not None:
         text += f"; правило обработало {coverage.stations_processed}"

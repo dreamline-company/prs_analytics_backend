@@ -34,6 +34,12 @@ from apps.detectors.services.daily_sheet.metrics import (
     ratio,
     window_medians,
 )
+from apps.detectors.services.daily_sheet.oil_fields import (
+    oil_fields_label,
+    prefixes_key,
+    resolve_oil_fields,
+    well_matches,
+)
 from apps.detectors.services.daily_sheet.render import render_docx
 from apps.detectors.services.daily_sheet.selection import (
     Episode,
@@ -403,3 +409,24 @@ def test_render_docx_with_rows_and_empty() -> None:
     empty = _document_xml(render_docx(_sheet([])))
     assert "не зафиксировано" in empty
     assert "<w:tbl>" not in empty
+
+
+# --- фильтр по месторождениям --------------------------------------------------
+
+
+def test_resolve_oil_fields_by_name_or_prefix_case_insensitive() -> None:
+    available = [
+        SimpleNamespace(id=7, prefix="BLG", name="BLG"),
+        SimpleNamespace(id=15, prefix="GRN", name="Гран"),
+    ]
+    found, unknown = resolve_oil_fields(["grn", " Гран ", "blg", "XXX"], available)
+    assert [f.prefix for f in found] == ["BLG", "GRN"]
+    assert unknown == ["XXX"]
+    assert prefixes_key(found) == "BLG,GRN"
+    assert prefixes_key([]) == ""
+    assert well_matches("GRN_0012", ["BLG", "GRN"])
+    assert not well_matches("UZK_0377", ["BLG", "GRN"])
+    assert not well_matches("00001-CT", ["BLG"])
+    assert oil_fields_label(found) == "месторождения BLG, Гран (GRN)"
+    assert oil_fields_label(found[:1]) == "месторождение BLG"
+    assert oil_fields_label([]) == ""

@@ -38,6 +38,7 @@ class DetectorDailySheetRepository(
         detector_code: str,
         abai_ngdu_id: int,
         sheet_date: date,
+        oil_field_prefixes: str = "",
     ) -> DetectorDailySheet | None:
         return await self.get_one(
             QuerySpec(
@@ -45,6 +46,7 @@ class DetectorDailySheetRepository(
                     DetectorDailySheet.detector_code == detector_code,
                     DetectorDailySheet.abai_ngdu_id == abai_ngdu_id,
                     DetectorDailySheet.sheet_date == sheet_date,
+                    DetectorDailySheet.oil_field_prefixes == oil_field_prefixes,
                 ),
             ),
         )
@@ -57,7 +59,7 @@ class DetectorDailySheetRepository(
         """
         stmt = pg_insert(DetectorDailySheet).values(**data.model_dump())
         stmt = stmt.on_conflict_do_update(
-            constraint="uq_detectors_daily_sheet_detector_ngdu_date",
+            constraint="uq_detectors_daily_sheet_detector_ngdu_date_fields",
             set_={
                 **{name: getattr(stmt.excluded, name) for name in _MUTABLE_COLUMNS},
                 "updated_at": func.now(),
