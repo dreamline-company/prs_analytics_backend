@@ -29,3 +29,25 @@ class UpdateDailySheetDTO(RepositoryDTO):
     built_at: datetime | None = None
     error: str | None = None
     config_version: str | None = None
+
+
+class UpsertDailySheetDeliveryDTO(RepositoryDTO):
+    """Запись журнала рассылки; конфликт по (НГДУ, дата) — перезапись."""
+
+    abai_ngdu_id: int
+    sheet_date: date
+    status: str
+    recipients: list[str] | None = None
+    sheets: list[dict] | None = None
+    subject: str | None = None
+    sent_at: datetime | None = None
+    error: str | None = None
+
+
+class UpdateDailySheetDeliveryDTO(RepositoryDTO):
+    status: str | None = None
+    recipients: list[str] | None = None
+    sheets: list[dict] | None = None
+    subject: str | None = None
+    sent_at: datetime | None = None
+    error: str | None = None

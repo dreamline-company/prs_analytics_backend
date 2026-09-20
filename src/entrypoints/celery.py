@@ -24,6 +24,11 @@ from apps.detectors.tasks.generate_conclusion.generate_conclusion import (  # no
     generate_conclusion,
 )
 
+# Импорт регистрирует утреннюю рассылку суточных ведомостей R2/R9 на почту.
+from apps.detectors.tasks.mail_daily_sheets.mail_daily_sheets import (  # noqa: F401
+    mail_daily_sheets,
+)
+
 # Импорт регистрирует таску последовательной синхронизации оргструктуры.
 from apps.org.tasks.sync_org.sync_org import sync_org  # noqa: F401
 
@@ -137,6 +142,13 @@ celery_app.conf.beat_schedule = {
     "detectors-daily-sheets": {
         "task": "detectors.daily_sheet.build",
         "schedule": crontab(hour=7, minute=30),
+    },
+    # Рассылка вчерашних ведомостей по НГДУ на почту (SMTP_*,
+    # DAILY_SHEET_MAIL_TO*). Ведомость берётся из кэша утренней сборки, а при
+    # её отсутствии собирается на месте; повторно за дату не уходит.
+    "detectors-daily-sheets-mail": {
+        "task": "detectors.daily_sheet.mail",
+        "schedule": crontab(hour=7, minute=50),
     },
     # Ежедневная догрузка привязок скважин к оргструктуре из ABAI (новые id +
     # правки dend/org). После org.sync, чтобы матрица по НГДУ опиралась на

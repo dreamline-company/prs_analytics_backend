@@ -239,5 +239,24 @@ class Settings(CoreSettings):
     LLM_API_KEY: SecretStr
     LLM_MODEL_NAME: str
 
+    # SMTP — рассылка суточных ведомостей. Пустой SMTP_HOST выключает отправку:
+    # таск рассылки логирует письмо и выходит, ничего не падает.
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = 587
+    SMTP_USER: str | None = None
+    SMTP_PASSWORD: SecretStr | None = None
+    # STARTTLS на 587 (по умолчанию) либо неявный TLS на 465.
+    SMTP_STARTTLS: bool = True
+    SMTP_SSL: bool = False
+    SMTP_TIMEOUT_SECONDS: int = 30
+    SMTP_FROM: str | None = None
+
+    # Получатели ведомостей R2/R9: общий список через запятую и необязательное
+    # переопределение по НГДУ — JSON вида {"KMG": ["a@x", "b@x"], "12": [...]}
+    # (ключ — код AbaiNGDUIDsEnum или его abai id). НГДУ без своего списка
+    # получает общий; пустой общий и пустое переопределение — письмо не шлётся.
+    DAILY_SHEET_MAIL_TO: str = ""
+    DAILY_SHEET_MAIL_TO_BY_NGDU: str = ""
+
     # REPAIRS:
     FREQUENT_REPAIR_THRESHOLD: int = 3

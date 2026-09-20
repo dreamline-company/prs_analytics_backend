@@ -79,3 +79,37 @@ class DetectorDailySheet(AppBaseModel, IntPkMixin, TimedMixinModel):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Версия порогов/формулировок ведомости на момент сборки.
     config_version: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+DELIVERY_STATUS_SENT = "sent"
+DELIVERY_STATUS_FAILED = "failed"
+DELIVERY_STATUS_SKIPPED = "skipped"
+
+
+class DetectorDailySheetDelivery(AppBaseModel, IntPkMixin, TimedMixinModel):
+    """Журнал рассылки ведомостей: одно письмо = (НГДУ, дата) с R2 и R9 внутри.
+
+    Держит идемпотентность утреннего таска: отправленное за дату письмо не
+    уходит второй раз, повтор возможен только явным ``--resend``.
+    """
+
+    __tablename__ = "detectors_daily_sheet_delivery"
+    __table_args__ = (
+        UniqueConstraint(
+            "abai_ngdu_id",
+            "sheet_date",
+            name="uq_detectors_daily_sheet_delivery_ngdu_date",
+        ),
+    )
+
+    abai_ngdu_id: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    sheet_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Кому ушло — на момент отправки, списки в настройках меняются.
+    recipients: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Ведомости в письме: [{detector_code, sheet_id, file_id, rows_count}];
+    # правила без ведомости (нет телеметрии) — с причиной вместо sheet_id.
+    sheets: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
