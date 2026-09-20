@@ -24,11 +24,9 @@ from apps.detectors.dto.queries.daily_sheet import GetDailySheetQuery
 from apps.detectors.services.daily_sheet.builder import local_now
 from apps.detectors.services.daily_sheet.config import SHEET_DETECTOR_CODES
 from apps.detectors.services.daily_sheet.errors import DailySheetDataNotReadyError
+from apps.detectors.services.daily_sheet.targets import list_target_ngdus
 from apps.detectors.use_cases.get_daily_sheet import GetDailySheetUseCase
 from apps.models_registry import *  # noqa: F403
-from apps.org.models.org import Org
-from apps.org.repositories.org import OrgRepository
-from apps.org.use_cases.list_ngdus import LISTED_NGDU_ABAI_IDS
 from core import get_logger
 from core.settings import get_settings
 from shared.database.s3.storage import AiobotoFileStorage
@@ -75,7 +73,8 @@ class BuildDailySheets:
             presign_client_factory=get_aioboto_presign_client_factory(),
         )
         async with session_makers["app"]() as session:
-            orgs = await self._orgs(session)
+            # Снимок НГДУ до цикла: rollback на «нет телеметрии» протушил бы ORM.
+            orgs = await list_target_ngdus(session, ngdu_id=self.ngdu_id)
             if not orgs:
                 logger.warning(
                     "Daily sheets: no NGDU to build for (ngdu_id=%s)",
@@ -145,15 +144,6 @@ class BuildDailySheets:
                 stats.built += 1
             else:
                 stats.cached += 1
-
-    async def _orgs(self, session: AsyncSession) -> Sequence[Org]:
-        repo = OrgRepository(session)
-        if self.ngdu_id is not None:
-            org = await repo.get_by_id(self.ngdu_id)
-            return [org] if org is not None else []
-        return await repo.list_by_abai_ids(
-            [item.value for item in LISTED_NGDU_ABAI_IDS],
-        )
 
 
 @celery_app.task(name=DAILY_SHEET_TASK)

@@ -4,6 +4,10 @@ from apps.detectors.models.conclusion import (
     DetectorConclusion,
     DetectorConclusionFeedback,
 )
+from apps.detectors.models.daily_sheet import (
+    DetectorDailySheet,
+    DetectorDailySheetDelivery,
+)
 from apps.detectors.models.incident import (
     Detector,
     DetectorCursor,
@@ -52,6 +56,8 @@ __all__ = (
     "DetectorConclusion",
     "DetectorConclusionFeedback",
     "DetectorCursor",
+    "DetectorDailySheet",
+    "DetectorDailySheetDelivery",
     "DetectorIncident",
     "Dynamogram",
     "File",
