@@ -92,7 +92,10 @@ class BrigadeErrorScreen(CMBaseModel, IntPkMixin):
         server_default="false",
     )
 
+    # В CM колонка — timestamp with time zone: с timezone=True драйвер принимает
+    # aware-границы в фильтрах и отдаёт aware-значения (репозиторий приводит их
+    # к наивному местному времени приложения).
     timestamp: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
     )
