@@ -52,6 +52,9 @@ class ToucanClientPool:
         for c in clients:
             self._q.put_nowait(c)
         self._size = len(clients)
+        # Целевой размер: после неудачного перелогина пул временно сжимается,
+        # а при следующем acquire() пытается дорасти обратно.
+        self._target_size = len(clients)
         self._closed = False
         # Monotonic counter for unique machine_unique on re-logins.
         self._boot_counter = len(clients)
@@ -96,6 +99,12 @@ class ToucanClientPool:
         if self._closed:
             msg = "ToucanClientPool is closed"
             raise ToucanApiError(msg)
+
+        if self._q.empty() and self._size < self._target_size:
+            # Пул сжался после неудачных перелогинов: пробуем дорастить, чтобы
+            # не зависнуть навсегда на пустой очереди. Ошибка логина уходит
+            # вызывающему вместо бесконечного ожидания.
+            await self._regrow_one()
 
         client = await self._q.get()
         transport_broken = False
@@ -221,6 +230,19 @@ class ToucanClientPool:
             return
         self._q.put_nowait(fresh)
         logger.info("Recycled Toucan pool client (worker_id=%s).", worker_id)
+
+    async def _regrow_one(self) -> None:
+        self._boot_counter += 1
+        worker_id = self._boot_counter
+        fresh = await asyncio.to_thread(self._boot_one, worker_id)
+        self._size += 1
+        self._q.put_nowait(fresh)
+        logger.info(
+            "Toucan pool regrew to %s/%s (worker_id=%s).",
+            self._size,
+            self._target_size,
+            worker_id,
+        )
 
     def _boot_one(self, worker_id: int) -> ToucanBackendClient:
         client = ToucanBackendClient(self._config)
