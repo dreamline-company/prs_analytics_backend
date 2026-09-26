@@ -11,6 +11,7 @@
   вызывающей стороне списком.
 """
 
+import re
 from collections import defaultdict
 from datetime import date
 
@@ -37,6 +38,12 @@ from core import get_logger
 from shared.errors import HttpError
 
 logger = get_logger(__name__)
+
+
+# «KRK_179V», «SKS_004P»: префикс, 3–4 цифры и одна буква-суффикс.
+_SUFFIXED_NAME_RE = re.compile(r"^([A-Z]{3})_(\d{3,4})[A-Za-z]$")
+# «DSR_1/1»: доссорские скважины с дробью, однозначный номер без нуля.
+_SLASH_NAME_RE = re.compile(r"^([A-Z]{3})_(\d)/(\d+)$")
 
 
 class WellsNotFoundError(HttpError):
@@ -77,13 +84,18 @@ class UploadParsedSummariesUseCase:
         if not accepted:
             raise WellsNotFoundError(details={"well_names": sorted(unknown_wells)})
 
-        dtos_by_key = self._build_create_dtos(accepted, wells_by_name)
+        repairs_by_well = await self._load_repairs_by_well(accepted, wells_by_name)
+        dtos_by_key = self._build_create_dtos(accepted, wells_by_name, repairs_by_well)
         existing_keys = await self.repair_summary_repository.list_existing_keys(
             dtos_by_key.keys(),
         )
         await self.repair_summary_repository.bulk_upsert(list(dtos_by_key.values()))
 
-        linked_brigades = await self._link_brigades(accepted, wells_by_name)
+        linked_brigades = await self._link_brigades(
+            accepted,
+            wells_by_name,
+            repairs_by_well,
+        )
 
         await self.session.commit()
 
@@ -125,6 +137,10 @@ class UploadParsedSummariesUseCase:
 
         unknown = names - wells_by_name.keys()
         if unknown:
+            fallback = await self._resolve_fallback(unknown)
+            wells_by_name.update(fallback)
+            unknown = unknown - fallback.keys()
+        if unknown:
             logger.warning(
                 "Unknown wells in parsed summaries (%s): %s",
                 len(unknown),
@@ -132,15 +148,91 @@ class UploadParsedSummariesUseCase:
             )
         return wells_by_name, unknown
 
-    @staticmethod
-    def _build_create_dtos(
+    async def _resolve_fallback(self, names: set[str]) -> dict[str, Well]:
+        """Запасное разрешение имён из сводок, которых нет в ``wells_well`` как есть.
+
+        Сводки пишут номер скважины руками, поэтому:
+          1. регистр суффикса не совпадает с БД (``SKS_004P`` -> ``SKS_004p``);
+          2. буква после номера — пометка, а не часть имени: в БД есть только
+             ``KRK_0179``, а в сводке «179В» -> ``KRK_179V``.
+        Сначала поиск без учёта регистра, затем — то же имя без суффикса.
+        """
+        resolved: dict[str, Well] = {}
+        ci = await self.well_repository.list_by_names_ci(list(names))
+        by_lower = {well.name.lower(): well for well in ci}
+        for name in names:
+            well = by_lower.get(name.lower())
+            if well is not None:
+                resolved[name] = well
+
+        stripped: dict[str, str] = {}  # исходное имя -> кандидат в БД
+        for name in names - resolved.keys():
+            m = _SUFFIXED_NAME_RE.match(name)
+            if m:
+                stripped[name] = f"{m.group(1)}_{int(m.group(2)):04d}"
+                continue
+            m = _SLASH_NAME_RE.match(name)
+            if m:  # «DSR_1/1» в БД записана как «DSR_01/1»
+                stripped[name] = f"{m.group(1)}_0{m.group(2)}/{m.group(3)}"
+        if stripped:
+            plain = await self.well_repository.list_by_names(
+                list(set(stripped.values())),
+            )
+            plain_by_name = {well.name: well for well in plain}
+            for name, candidate in stripped.items():
+                well = plain_by_name.get(candidate)
+                if well is not None:
+                    resolved[name] = well
+        if resolved:
+            logger.info(
+                "Parsed summaries: %s well name(s) resolved by fallback: %s",
+                len(resolved),
+                {name: well.name for name, well in sorted(resolved.items())[:20]},
+            )
+        return resolved
+
+    async def _load_repairs_by_well(
+        self,
         summaries: list[UploadParsedSummaryDTO],
         wells_by_name: dict[str, Well],
+    ) -> dict[int, list[Repair]]:
+        """Ремонты скважин батча, пересекающие диапазон дат сводок, по well_id.
+
+        Один батчевый запрос на загрузку: по нему сводке проставляется
+        ``repair_id`` (иначе выдача сводок по ремонту и шаг «Сводка» в таймлайне
+        пусты) и привязывается бригада. ``Repair.well_id`` загрузчиком не
+        заполняется — держим обратный маппинг abai_well_id → well_id.
+        """
+        wells = {wells_by_name[s.well_name] for s in summaries}
+        if not wells:
+            return {}
+        dates = [s.start_date for s in summaries]
+        well_id_by_abai = {well.abai_id: well.id for well in wells}
+        repairs = await self.repair_repository.list_covering_range(
+            sorted(well.id for well in wells),
+            sorted(well_id_by_abai),
+            date_from=min(dates),
+            date_to=max(dates),
+        )
+        repairs_by_well: dict[int, list[Repair]] = defaultdict(list)
+        for repair in repairs:
+            well_id = repair.well_id or well_id_by_abai.get(repair.abai_well_id)
+            if well_id is not None:
+                repairs_by_well[well_id].append(repair)
+        return repairs_by_well
+
+    @classmethod
+    def _build_create_dtos(
+        cls,
+        summaries: list[UploadParsedSummaryDTO],
+        wells_by_name: dict[str, Well],
+        repairs_by_well: dict[int, list[Repair]],
     ) -> dict[SummaryKey, CreateRepairSummaryDTO]:
         """Схлопнуть батч до одной записи на ключ «скважина × сутки × смена».
 
         Внутри месячного файла одна и та же смена может встретиться дважды
         (повтор строки, склейка листов) — берём последнюю: она свежее.
+        ``repair_id`` — самый свежий ремонт скважины, покрывающий сутки сводки.
         """
         result: dict[SummaryKey, CreateRepairSummaryDTO] = {}
         for summary in summaries:
@@ -150,9 +242,14 @@ class UploadParsedSummariesUseCase:
                 if summary.second_well_name
                 else None
             )
+            repair = cls._pick_repair(
+                repairs_by_well.get(well_id, []),
+                summary.start_date,
+            )
 
             key: SummaryKey = (well_id, summary.start_date, summary.shift_type_number)
             result[key] = CreateRepairSummaryDTO(
+                repair_id=repair.id if repair is not None else None,
                 well_id=well_id,
                 second_well_id=second_well.id if second_well else None,
                 date=summary.start_date,
@@ -170,11 +267,13 @@ class UploadParsedSummariesUseCase:
         self,
         summaries: list[UploadParsedSummaryDTO],
         wells_by_name: dict[str, Well],
+        repairs_by_well: dict[int, list[Repair]],
     ) -> int:
         """Привязать бригаду к ремонту, покрывающему сутки сводки.
 
-        Данные тянутся тремя батчевыми запросами (ремонты, существующие связки,
-        бригады) — на батче в тысячи сводок построчный поиск давал N+1.
+        Данные тянутся батчевыми запросами (существующие связки, бригады;
+        ремонты уже загружены) — на батче в тысячи сводок построчный поиск
+        давал N+1.
         """
         pairs = {
             (wells_by_name[s.well_name].id, s.start_date, s.brigade_number)
@@ -183,27 +282,6 @@ class UploadParsedSummariesUseCase:
         }
         if not pairs:
             return 0
-
-        well_ids = {well_id for well_id, _, _ in pairs}
-        dates = [summary_date for _, summary_date, _ in pairs]
-        # Repair.well_id загрузчиком не заполняется — держим обратный маппинг
-        # abai_well_id → well_id, чтобы разложить ремонты по скважинам.
-        well_id_by_abai = {
-            well.abai_id: well.id
-            for well in wells_by_name.values()
-            if well.id in well_ids
-        }
-        repairs = await self.repair_repository.list_covering_range(
-            sorted(well_ids),
-            sorted(well_id_by_abai),
-            date_from=min(dates),
-            date_to=max(dates),
-        )
-        repairs_by_well: dict[int, list[Repair]] = defaultdict(list)
-        for repair in repairs:
-            well_id = repair.well_id or well_id_by_abai.get(repair.abai_well_id)
-            if well_id is not None:
-                repairs_by_well[well_id].append(repair)
 
         matched: dict[int, int] = {}  # repair_id -> brigade_number
         for well_id, summary_date, brigade_number in sorted(pairs):

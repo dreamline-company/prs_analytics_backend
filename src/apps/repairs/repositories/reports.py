@@ -1,7 +1,7 @@
 from collections.abc import Iterable, Sequence
 from datetime import date
 
-from sqlalchemy import or_, select, tuple_
+from sqlalchemy import func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from apps.repairs.dto.internal.repositories.reports import (
@@ -124,6 +124,11 @@ class RepairSummaryRepository(
                         RepairSummary.shift_type_number,
                     ],
                     set_={
+                        # уже проставленную связь с ремонтом не затираем NULL
+                        "repair_id": func.coalesce(
+                            stmt.excluded.repair_id,
+                            RepairSummary.repair_id,
+                        ),
                         "second_well_id": stmt.excluded.second_well_id,
                         "brigade_number": stmt.excluded.brigade_number,
                         "pump_type": stmt.excluded.pump_type,
