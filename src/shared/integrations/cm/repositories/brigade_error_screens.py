@@ -1,15 +1,54 @@
 from collections.abc import Sequence
 from datetime import datetime
 
+from core.settings import get_settings
 from shared.integrations.cm.models import BrigadeErrorScreen
 from shared.integrations.cm.repositories.base import CMReadOnlyRepository
 from shared.repository.sqlalchemy import QuerySpec
+
+
+def to_local_naive(value: datetime) -> datetime:
+    """Момент из CM (``timestamptz``, приходит в UTC) -> наивное местное время.
+
+    Всё приложение живёт в наивном местном времени (``Repair.start_time``,
+    ``datetime.now()`` в use case), поэтому экраны нарушений приводятся к нему
+    на границе репозитория — иначе сравнение с датами ремонта падает с
+    «can't compare offset-naive and offset-aware datetimes».
+    """
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(get_settings().ZONE_INFO).replace(tzinfo=None)
+
+
+def to_aware(value: datetime) -> datetime:
+    """Наивное местное время -> aware для фильтра по ``timestamptz``."""
+    if value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=get_settings().ZONE_INFO)
 
 
 class CMBrigadeErrorScreenRepository(
     CMReadOnlyRepository[BrigadeErrorScreen],
 ):
     model = BrigadeErrorScreen
+
+    async def get_one(
+        self,
+        spec: QuerySpec | None = None,
+    ) -> BrigadeErrorScreen | None:
+        row = await super().get_one(spec)
+        if row is not None:
+            row.timestamp = to_local_naive(row.timestamp)
+        return row
+
+    async def get_list(
+        self,
+        spec: QuerySpec | None = None,
+    ) -> Sequence[BrigadeErrorScreen]:
+        rows = await super().get_list(spec)
+        for row in rows:
+            row.timestamp = to_local_naive(row.timestamp)
+        return rows
 
     async def get_by_id(
         self,
@@ -59,8 +98,8 @@ class CMBrigadeErrorScreenRepository(
             QuerySpec(
                 filters=(
                     BrigadeErrorScreen.brigade_id.in_(brigade_ids),
-                    BrigadeErrorScreen.timestamp >= start_time,
-                    BrigadeErrorScreen.timestamp <= end_time,
+                    BrigadeErrorScreen.timestamp >= to_aware(start_time),
+                    BrigadeErrorScreen.timestamp <= to_aware(end_time),
                 ),
                 order_by=(BrigadeErrorScreen.timestamp,),
             ),
@@ -89,8 +128,8 @@ class CMBrigadeErrorScreenRepository(
         return await self.get_list(
             QuerySpec(
                 filters=(
-                    BrigadeErrorScreen.timestamp >= start_time,
-                    BrigadeErrorScreen.timestamp <= end_time,
+                    BrigadeErrorScreen.timestamp >= to_aware(start_time),
+                    BrigadeErrorScreen.timestamp <= to_aware(end_time),
                 ),
                 order_by=(BrigadeErrorScreen.timestamp.desc(),),
             ),
