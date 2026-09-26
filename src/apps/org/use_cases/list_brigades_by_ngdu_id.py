@@ -17,6 +17,7 @@ from apps.org.dto.internal.brigade import (
 )
 from apps.repairs.dto.internal.repair import RepairDTO
 from apps.wells.dto.internal.well import WellShortDTO
+from apps.wells.services.well_status import WellStatusService
 from core.settings import get_settings
 
 _YEAR = timedelta(days=365)
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     from apps.repairs.repositories.repair import RepairRepository
     from apps.wells.models.well import Well
     from apps.wells.repositories import WellRepository
+    from apps.wells.repositories.spo import SPORepository
     from shared.integrations.cm.models import BrigadeErrorScreen
     from shared.integrations.cm.repositories.brigade_error_screens import (
         CMBrigadeErrorScreenRepository,
@@ -51,7 +53,9 @@ class ListBrigadesByNGDUIdUseCase:
         well_repository: WellRepository,
         cm_brigade_repository: CMBrigadeRepository,
         cm_brigade_error_screen_repository: CMBrigadeErrorScreenRepository,
+        spo_repository: SPORepository,
     ) -> None:
+        self.well_status_service = WellStatusService(spo_repository)
         self.unique_brigade_repository = unique_brigade_repository
         self.repair_brigade_repository = repair_brigade_repository
         self.repair_repository = repair_repository
@@ -77,18 +81,22 @@ class ListBrigadesByNGDUIdUseCase:
                 continue
             active.sort(key=lambda r: r.start_time, reverse=True)
             active_repair_by_brigade[bid] = active[0]
-        violations_by_brigade, active_dangers_by_brigade = (
-            await self._compute_violations(
-                brigades,
-                brigade_repairs,
-                active_repair_by_brigade,
-            )
+        (
+            violations_by_brigade,
+            active_dangers_by_brigade,
+        ) = await self._compute_violations(
+            brigades,
+            brigade_repairs,
+            active_repair_by_brigade,
         )
         wells_by_repair_id = await self._load_wells_for_active_repairs(
             active_repair_by_brigade,
         )
         frequent_repair_abai_well_ids = await self._frequent_repair_abai_well_ids(
             active_repair_by_brigade,
+        )
+        live_spo_well_ids = await self.well_status_service.live_spo_well_ids(
+            w.id for w in wells_by_repair_id.values()
         )
 
         result: list[BrigadeDTO] = []
@@ -103,6 +111,10 @@ class ListBrigadesByNGDUIdUseCase:
                     active_repair.abai_well_id in frequent_repair_abai_well_ids
                 )
                 well = wells_by_repair_id.get(active_repair.id)
+                dto.status = WellStatusService.status(
+                    is_spo_live=well is not None and well.id in live_spo_well_ids,
+                    active_repair=active_repair,
+                )
                 if well is not None:
                     screens = active_dangers_by_brigade.get(brigade.id, [])
                     dangers = [
@@ -121,6 +133,7 @@ class ListBrigadesByNGDUIdUseCase:
                         well=WellShortDTO.model_validate(well),
                         repair=RepairDTO.model_validate(active_repair),
                         dangers=dangers,
+                        status=dto.status,
                     )
             result.append(dto)
         return result

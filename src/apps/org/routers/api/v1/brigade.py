@@ -31,6 +31,7 @@ from apps.org.use_cases.list_brigades_in_danger_zone import (
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.repair import RepairRepository
 from apps.wells.repositories import WellRepository
+from apps.wells.repositories.spo import SPORepository
 from shared.dependencies.db import get_app_session, get_cm_session
 from shared.dto.api import AppResponse
 from shared.integrations.cm.repositories.brigade_error_screens import (
@@ -48,6 +49,7 @@ async def list_brigades_by_ngdu_id(
     ngdu_id: Annotated[int, Query(ge=1, description="NGDU ID (filter)")],
 ) -> ListBrigadesResponseDTO:
     use_case = ListBrigadesByNGDUIdUseCase(
+        spo_repository=SPORepository(session=app_session),
         unique_brigade_repository=UniqueBrigadeRepository(session=app_session),
         repair_brigade_repository=RepairBrigadeRepository(session=app_session),
         repair_repository=RepairRepository(session=app_session),
