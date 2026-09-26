@@ -5,11 +5,15 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 from apps.org.use_cases.list_brigades_by_ngdu_id import ListBrigadesByNGDUIdUseCase
 from apps.wells.dto.internal.well_matrix import WELL_STATUS_PRS, WELL_STATUS_SPO
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 BRIGADES = [SimpleNamespace(id=i, name=f"Бригада №{i}", ngdu_id=5) for i in (1, 2, 3)]
 WELLS = {
@@ -79,10 +83,10 @@ class _Wells:
 class _Spo:
     async def list_well_ids_with_live_measures(
         self,
-        well_ids,
+        well_ids: Sequence[int],
         *,
-        now,
-        grace,
+        now: datetime,
+        grace: timedelta,
     ) -> set[int]:
         del now, grace
         return {11} & set(well_ids)
