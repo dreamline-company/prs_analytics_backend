@@ -66,7 +66,7 @@ class ABAILoadTechRegime:
                     await app_session.commit()
                     logger.info(
                         "Loaded tech regimes. Loaded items count: %s",
-                        len(regimes),
+                        count,
                     )
 
                 except Exception:

@@ -252,6 +252,12 @@ class AbaiAsyncClient:
             },
         )
         self._logged_in = False
+        # Логин под блокировкой: корутины, делящие один клиент (gather в
+        # загрузчиках), иначе одновременно шлют prelogin с общим cookie-jar и
+        # получают 419/401. Поколение растёт на каждом успешном логине, чтобы
+        # 401 от запроса со старой сессией не сбрасывал уже обновлённую.
+        self._login_lock = asyncio.Lock()
+        self._login_gen = 0
 
     # ---- управление жизненным циклом / контекстный менеджер -------------- #
     async def __aenter__(self) -> AbaiAsyncClient:
@@ -289,10 +295,13 @@ class AbaiAsyncClient:
         *,
         headers: dict | None = None,
         expect_json: bool = True,
+        relogin: bool = True,
         **kwargs,
     ) -> httpx.Response:
         last_exc: Exception | None = None
+        relogin_done = False
         for attempt in range(1, self.max_retries + 1):
+            login_gen = self._login_gen
             try:
                 resp = await self._client.request(
                     method,
@@ -316,10 +325,25 @@ class AbaiAsyncClient:
             if resp.status_code in (401, 419) or (
                 expect_json and "login" in str(resp.url) and "/api/" in path
             ):
-                raise AbaiAuthError(
-                    f"Сессия недействительна (status={resp.status_code}, url={resp.url}). "
-                    "Нужен повторный login().",
+                if not relogin or relogin_done:
+                    raise AbaiAuthError(
+                        f"Сессия недействительна (status={resp.status_code}, url={resp.url}). "
+                        "Нужен повторный login().",
+                    )
+                # Сессия протухла (TTL на стороне ABAI) — перелогиниваемся один
+                # раз и повторяем запрос. Сбрасываем флаг, только если никто не
+                # перелогинился, пока этот запрос был в полёте.
+                log.warning(
+                    "Сессия ABAI недействительна (status=%s, %s %s) — перелогин.",
+                    resp.status_code,
+                    method,
+                    path,
                 )
+                if self._login_gen == login_gen:
+                    self._logged_in = False
+                await self._ensure_login()
+                relogin_done = True
+                continue
             if resp.status_code >= 500:
                 last_exc = AbaiError(f"HTTP {resp.status_code} от {path}")
                 log.warning(
@@ -357,7 +381,9 @@ class AbaiAsyncClient:
             )
 
         log.info("Загружаю страницу логина для получения _token…")
-        page = await self._request("GET", self.LOGIN_PAGE, expect_json=False)
+        page = await self._request(
+            "GET", self.LOGIN_PAGE, expect_json=False, relogin=False
+        )
         page.raise_for_status()
         token = self._extract_form_token(page.text)
         if not token:
@@ -381,6 +407,7 @@ class AbaiAsyncClient:
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             },
             expect_json=False,
+            relogin=False,
         )
 
         if str(resp.url).rstrip("/").endswith("login"):
@@ -394,6 +421,7 @@ class AbaiAsyncClient:
             )
 
         self._logged_in = True
+        self._login_gen += 1
         log.info("Логин успешен (user=%s, domain=%s).", self.username, self.domain)
         return self
 
@@ -406,8 +434,12 @@ class AbaiAsyncClient:
         return m.group(1) if m else None
 
     async def _ensure_login(self) -> None:
-        if not self._logged_in:
-            await self.login()
+        if self._logged_in:
+            return
+        async with self._login_lock:
+            # Пока ждали блокировку, другая корутина могла уже залогиниться.
+            if not self._logged_in:
+                await self.login()
 
     # ----------------------------- скважины -------------------------------- #
     async def search_wells(self, query: str, dzo: int = 4) -> list[dict]:
@@ -680,32 +712,57 @@ class AbaiAsyncClient:
         dest.mkdir(parents=True, exist_ok=True)
 
         async with self._download_sem:
-            headers = {"Accept": "*/*"}
-            token = self._xsrf_token
-            if token:
-                headers["X-XSRF-TOKEN"] = token
+            for relogin_attempt in (False, True):
+                login_gen = self._login_gen
+                headers = {"Accept": "*/*"}
+                token = self._xsrf_token
+                if token:
+                    headers["X-XSRF-TOKEN"] = token
 
-            async with self._client.stream(
-                "GET",
-                f"/ru/attachments/{file_id}",
-                headers=headers,
-            ) as resp:
-                if resp.status_code in (401, 419) or "login" in str(resp.url):
-                    raise AbaiAuthError(f"Нет доступа к вложению {file_id} (сессия?).")
-                resp.raise_for_status()
-
-                name = (
-                    filename
-                    or self._filename_from_response(resp)
-                    or f"attachment_{file_id}"
-                )
-                out_path = dest / self._safe_filename(name)
-                with open(out_path, "wb") as fh:
-                    async for chunk in resp.aiter_bytes(chunk_size):
-                        if chunk:
-                            fh.write(chunk)
+                async with self._client.stream(
+                    "GET",
+                    f"/ru/attachments/{file_id}",
+                    headers=headers,
+                ) as resp:
+                    if resp.status_code in (401, 419) or "login" in str(resp.url):
+                        if relogin_attempt:
+                            raise AbaiAuthError(
+                                f"Нет доступа к вложению {file_id} (сессия?).",
+                            )
+                        log.warning(
+                            "Сессия ABAI недействительна при скачивании %s — перелогин.",
+                            file_id,
+                        )
+                        if self._login_gen == login_gen:
+                            self._logged_in = False
+                        await self._ensure_login()
+                        continue
+                    resp.raise_for_status()
+                    out_path = await self._save_stream(
+                        resp,
+                        dest,
+                        filename
+                        or self._filename_from_response(resp)
+                        or f"attachment_{file_id}",
+                        chunk_size,
+                    )
+                    break
 
         log.info("Скачано: %s (%d байт)", out_path, out_path.stat().st_size)
+        return out_path
+
+    async def _save_stream(
+        self,
+        resp: httpx.Response,
+        dest: Path,
+        name: str,
+        chunk_size: int,
+    ) -> Path:
+        out_path = dest / self._safe_filename(name)
+        with open(out_path, "wb") as fh:
+            async for chunk in resp.aiter_bytes(chunk_size):
+                if chunk:
+                    fh.write(chunk)
         return out_path
 
     @staticmethod
