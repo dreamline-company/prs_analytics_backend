@@ -20,7 +20,12 @@ from typing import TYPE_CHECKING
 
 from apps.org.dto.internal.brigade import BrigadeDangerDTO, BrigadeShortDTO
 from apps.repairs.dto.internal.repair import RepairDTO
-from apps.wells.dto.internal.well_matrix import WellLegendDTO, WellMatrixItemDTO
+from apps.wells.dto.internal.well_matrix import (
+    WELL_STATUS_PRS,
+    WELL_STATUS_SPO,
+    WellLegendDTO,
+    WellMatrixItemDTO,
+)
 from core.settings import get_settings
 
 _YEAR = timedelta(days=365)
@@ -33,6 +38,7 @@ if TYPE_CHECKING:
     from apps.repairs.repositories.repair import RepairRepository
     from apps.wells.dto.queries.well import GetWellsMatrixQuery
     from apps.wells.models.well import Well
+    from apps.wells.repositories.spo import SPORepository
     from apps.wells.services import NGDUWellsService
     from shared.integrations.cm.models import BrigadeErrorScreen
     from shared.integrations.cm.repositories.brigade_error_screens import (
@@ -55,8 +61,10 @@ class GetWellsMatrixUseCase:
         unique_brigade_repository: UniqueBrigadeRepository,
         cm_brigade_repository: CMBrigadeRepository,
         cm_brigade_error_screen_repository: CMBrigadeErrorScreenRepository,
+        spo_repository: SPORepository,
     ) -> None:
         self.ngdu_wells_service = ngdu_wells_service
+        self.spo_repository = spo_repository
         self.repair_repository = repair_repository
         self.repair_brigade_repository = repair_brigade_repository
         self.unique_brigade_repository = unique_brigade_repository
@@ -91,6 +99,7 @@ class GetWellsMatrixUseCase:
         frequent_repair_abai_well_ids = await self._frequent_repair_abai_well_ids(
             [w.abai_id for w in wells],
         )
+        live_spo_well_ids = await self._live_spo_well_ids([w.id for w in wells])
 
         return [
             self._build_item(
@@ -99,6 +108,7 @@ class GetWellsMatrixUseCase:
                 brigade_by_repair_id=brigade_by_repair_id,
                 dangers_by_brigade_id=dangers_by_brigade_id,
                 is_frequent_repair=w.abai_id in frequent_repair_abai_well_ids,
+                is_spo_live=w.id in live_spo_well_ids,
             )
             for w in sorted(wells, key=lambda w: w.name)
         ]
@@ -117,7 +127,26 @@ class GetWellsMatrixUseCase:
         )
         return {abai_id for abai_id, count in counts.items() if count > threshold}
 
-    def _build_item(
+    async def _live_spo_well_ids(self, well_ids: list[int]) -> set[int]:
+        """Скважины, где прямо сейчас идёт СПО (живой замер КБРС)."""
+        settings = get_settings()
+        now = datetime.now(tz=settings.ZONE_INFO).replace(tzinfo=None)
+        return await self.spo_repository.list_well_ids_with_live_measures(
+            well_ids,
+            now=now,
+            grace=timedelta(minutes=settings.KBRS_POLL_REFRESH_GRACE_MINUTES),
+        )
+
+    @staticmethod
+    def _status(*, is_spo_live: bool, active_repair: Repair | None) -> str | None:
+        """СПО важнее ПРС: операция идёт внутри ремонта; без обоих — пусто."""
+        if is_spo_live:
+            return WELL_STATUS_SPO
+        if active_repair is not None:
+            return WELL_STATUS_PRS
+        return None
+
+    def _build_item(  # noqa: PLR0913
         self,
         *,
         well: Well,
@@ -125,13 +154,16 @@ class GetWellsMatrixUseCase:
         brigade_by_repair_id: dict[int, UniqueBrigade],
         dangers_by_brigade_id: dict[int, list[BrigadeErrorScreen]],
         is_frequent_repair: bool,
+        is_spo_live: bool,
     ) -> WellMatrixItemDTO:
+        status = self._status(is_spo_live=is_spo_live, active_repair=active_repair)
         if active_repair is None:
             return WellMatrixItemDTO(
                 id=well.id,
                 name=well.name,
                 is_on_repair=False,
                 is_frequent_repair=is_frequent_repair,
+                status=status,
             )
         brigade = brigade_by_repair_id.get(active_repair.id)
         brigade_dto = (
@@ -154,6 +186,7 @@ class GetWellsMatrixUseCase:
             is_on_repair=True,
             repair_id=active_repair.id,
             is_frequent_repair=is_frequent_repair,
+            status=status,
             legend=WellLegendDTO(
                 repair=RepairDTO.model_validate(active_repair),
                 brigade=brigade_dto,

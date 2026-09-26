@@ -1,6 +1,9 @@
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from sqlalchemy import select
+
+from apps.kbrs.models.measure import KbrsMeasure
 from apps.wells.dto.internal.repositories.spo import CreateSPODTO, UpdateSPODTO
 from apps.wells.models.spo import SPO
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
@@ -18,6 +21,35 @@ class SPORepository(
                 order_by=(SPO.snapshot_time,),
             ),
         )
+
+    async def list_well_ids_with_live_measures(
+        self,
+        well_ids: Sequence[int],
+        *,
+        now: datetime,
+        grace: timedelta,
+    ) -> set[int]:
+        """Скважины, у которых СПО ещё идёт.
+
+        Живым считается замер КБРС, чья последняя точка графика (``end_time``)
+        не старше ``grace`` от ``now`` — тот же критерий, по которому опросчик
+        продолжает перечитывать замер. Замеры со сбитыми часами прибора
+        (``start_time`` в будущем) не учитываются.
+        """
+        if not well_ids:
+            return set()
+        stmt = (
+            select(SPO.well_id)
+            .join(KbrsMeasure, KbrsMeasure.measure_id == SPO.kbrs_measure_id)
+            .where(
+                SPO.well_id.in_(list(well_ids)),
+                KbrsMeasure.end_time >= now - grace,
+                KbrsMeasure.start_time <= now,
+            )
+            .distinct()
+        )
+        rows = await self.session.execute(stmt)
+        return {row[0] for row in rows}
 
     async def get_in_window(
         self,
