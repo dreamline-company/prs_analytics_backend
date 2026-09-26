@@ -51,6 +51,7 @@ from apps.wells.repositories.gdis import (
     GdisCurrentValueRepository,
     GdisMetricRepository,
 )
+from apps.wells.repositories.spo import SPORepository
 from apps.wells.repositories.status_history import WellStatusHistoryRepository
 from apps.wells.repositories.well import WellRepository
 from apps.wells.repositories.well_expl import WellExplRepository
@@ -125,6 +126,7 @@ async def get_wells_matrix(
         cm_brigade_error_screen_repository=CMBrigadeErrorScreenRepository(
             session=cm_session,
         ),
+        spo_repository=SPORepository(session=app_session),
     )
     matrix = await use_case.execute(GetWellsMatrixQuery(ngdu_id=ngdu_id))
     return WellsMatrixResponseDTO(data=matrix)
