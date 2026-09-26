@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-from sqlalchemy import bindparam, insert, select, update
+from sqlalchemy import bindparam, func, insert, select, update
 
 from apps.wells.dto.internal.repositories.well import CreateWellDTO, UpdateWellDTO
 from apps.wells.models.well import Well
@@ -62,6 +62,19 @@ class WellRepository(
                 ),
                 order_by=(Well.name,),
                 limit=limit,
+            ),
+        )
+
+    async def list_by_names_ci(self, names: Sequence[str]) -> Sequence[Well]:
+        """Скважины по именам без учёта регистра (суффиксы в БД бывают строчными:
+        ``SKS_004p``, ``BLG_001n``)."""
+        if not names:
+            return ()
+        lowered = list({name.lower() for name in names})
+        return await self.get_list(
+            QuerySpec(
+                filters=(func.lower(Well.name).in_(lowered),),
+                order_by=(Well.name,),
             ),
         )
 
