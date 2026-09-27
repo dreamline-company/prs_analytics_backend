@@ -8,8 +8,9 @@
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 
 from apps.repairs.models.docs import RepairDoc
 from apps.wells.models.dynamogram import Dynamogram
@@ -30,6 +31,34 @@ def inputs_fingerprint(
         "spo": sorted((int(spo_id), size) for spo_id, size in spo_revisions.items()),
         "por": por_file_id,
         "act": act_file_id,
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def overall_fingerprint(
+    base: str,
+    *,
+    end_time: datetime | None,
+    violations: Sequence[tuple[str, str]],
+    spo_ai_outcomes: Mapping[int, tuple[str, str | None]],
+) -> str:
+    """Отпечаток входов общего вердикта: базовый + то, что тоже идёт в промпт.
+
+    Помимо динамограмм/СПО/документов вердикт зависит от:
+      * закрытия ремонта — ``end_time`` есть в промпте, вердикт по открытому
+        ремонту после закрытия должен пересчитаться;
+      * нарушений бригады из CM — модель обязана назвать их число;
+      * исхода AI-разбора каждого СПО — упавший разбор исключается из входов,
+        и когда он позже удаётся, вердикт должен обновиться.
+    """
+    payload = {
+        "base": base,
+        "end": end_time.isoformat() if end_time is not None else None,
+        "violations": sorted(violations),
+        "spo_ai": sorted(
+            (int(spo_id), list(outcome)) for spo_id, outcome in spo_ai_outcomes.items()
+        ),
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

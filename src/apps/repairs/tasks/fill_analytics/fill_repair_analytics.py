@@ -67,6 +67,7 @@ from apps.repairs.repositories.docs import RepairDocRepository
 from apps.repairs.repositories.kpi import RepairKPIRepository
 from apps.repairs.repositories.reports import RepairSummaryRepository
 from apps.repairs.tasks.fetch_sources.candidates import (
+    ai_retry_cutoff,
     as_naive,
     grace_cutoff,
     is_measure_closed,
@@ -194,6 +195,7 @@ class FillRepairAnalytics:
                 grace_cutoff=cutoff,
                 repair_id=self._repair_id,
                 well_id=self._well_id,
+                retry_failed_ai_since=ai_retry_cutoff(now),
             ):
                 for repair in repairs:
                     if self._budget_exhausted(started):
@@ -385,6 +387,7 @@ class FillRepairAnalytics:
             repair=repair,
             doc_repo=deps.doc_repo,
             grace_cutoff=grace_cutoff,
+            retry_cutoff=ai_retry_cutoff(now),
             overall_ai_status=overall_ai.status,
         ):
             await deps.analytics_repo.update_by_repair_id(
@@ -567,15 +570,18 @@ class FillRepairAnalytics:
         repair: Repair,
         doc_repo: RepairDocRepository,
         grace_cutoff: datetime,
+        retry_cutoff: datetime,
         overall_ai_status: str,
     ) -> bool:
-        # Ветка «документы собраны» требует и вердикт — иначе строка замёрзнет
-        # до разбора. Ветка по сроку финализирует безусловно: окно вышло.
+        # Обе ветки требуют готовый вердикт — иначе строка замёрзнет с упавшим.
+        # По сроку: упавший вердикт получает окно повторов (AI_RETRY_DAYS) и
+        # лишь после него ремонт финализируется как есть.
         docs_complete = await cls._docs_complete(repair.id, doc_repo)
         end_time = repair.end_time
+        completed = overall_ai_status == AI_STATUS_COMPLETED
         if end_time is not None and as_naive(end_time) < grace_cutoff:
-            return True
-        return docs_complete and overall_ai_status == AI_STATUS_COMPLETED
+            return completed or as_naive(end_time) < retry_cutoff
+        return docs_complete and completed
 
     @staticmethod
     async def _docs_complete(

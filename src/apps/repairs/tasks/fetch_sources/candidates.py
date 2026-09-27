@@ -15,10 +15,14 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.repairs.models.analytics import RepairAnalytics
+from apps.repairs.models.analytics import (
+    AI_STATUS_FAILED,
+    RepairAIAnalysis,
+    RepairAnalytics,
+)
 from apps.repairs.models.repair import Repair
 from apps.wells.models.well import Well
 from apps.wells.repositories.well import WellRepository
@@ -27,6 +31,9 @@ from core.settings import get_settings
 settings = get_settings()
 
 GRACE_DAYS = 10
+# Ремонт с упавшим общим вердиктом остаётся кандидатом аналитики ещё столько
+# дней после GRACE_DAYS — вердикт повторяется каждым проходом, пока не удастся.
+AI_RETRY_DAYS = 30
 ITER_SIZE = 200
 # Замер КБРС считается закрытым, когда опросчик перестал его перечитывать:
 # правый край старше окна обновления живых замеров.
@@ -57,6 +64,11 @@ def grace_cutoff(now: datetime) -> datetime:
     return now - timedelta(days=GRACE_DAYS)
 
 
+def ai_retry_cutoff(now: datetime) -> datetime:
+    """Раньше этой даты закрытый ремонт с упавшим вердиктом уже не повторяем."""
+    return now - timedelta(days=GRACE_DAYS + AI_RETRY_DAYS)
+
+
 def repair_window(repair: Repair, *, now: datetime) -> tuple[datetime, datetime]:
     """Интервал, в котором ищутся замеры СПО ремонта: [start, end + сутки]."""
     start = as_naive(repair.start_time)
@@ -84,11 +96,14 @@ async def iter_candidate_repairs(  # noqa: PLR0913
     well_id: int | None = None,
     repair_ids: Sequence[int] | None = None,
     batch_size: int = ITER_SIZE,
+    retry_failed_ai_since: datetime | None = None,
 ) -> AsyncIterator[Sequence[Repair]]:
     """Ремонты-кандидаты батчами по возрастанию id.
 
     Явная область (``repair_id``, ``well_id``, ``repair_ids``) отдаёт ремонты
-    без фильтра финализации. Без области — только кандидаты по правилу модуля.
+    без фильтра финализации. Без области — только кандидаты по правилу модуля;
+    с ``retry_failed_ai_since`` — ещё и незафинализированные ремонты с упавшим
+    общим вердиктом, закрытые не раньше этой даты (только для аналитики).
     """
     if repair_id is not None:
         repairs = (
@@ -115,6 +130,21 @@ async def iter_candidate_repairs(  # noqa: PLR0913
                 Well.id == well_id,
             )
         else:
+            window = [
+                Repair.end_time.is_(None),
+                Repair.end_time >= grace_cutoff,
+                RepairAnalytics.id.is_(None),
+            ]
+            if retry_failed_ai_since is not None:
+                failed_ai = select(RepairAIAnalysis.analytics_id).where(
+                    RepairAIAnalysis.status == AI_STATUS_FAILED,
+                )
+                window.append(
+                    and_(
+                        Repair.end_time >= retry_failed_ai_since,
+                        RepairAnalytics.id.in_(failed_ai),
+                    ),
+                )
             qs = qs.outerjoin(
                 RepairAnalytics,
                 RepairAnalytics.repair_id == Repair.id,
@@ -123,11 +153,7 @@ async def iter_candidate_repairs(  # noqa: PLR0913
                     RepairAnalytics.is_finalized.is_(None),
                     RepairAnalytics.is_finalized.is_(False),
                 ),
-                or_(
-                    Repair.end_time.is_(None),
-                    Repair.end_time >= grace_cutoff,
-                    RepairAnalytics.id.is_(None),
-                ),
+                or_(*window),
             )
         repairs = (await session.execute(qs)).scalars().all()
         if not repairs:

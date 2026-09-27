@@ -32,6 +32,7 @@ from apps.repairs.repositories.ai_results import (
     RepairSPOAIResultRepository,
 )
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
+from apps.repairs.tasks.fill_analytics.inputs import overall_fingerprint
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.models.spo import SPO
 from core import get_logger
@@ -188,15 +189,25 @@ class AICoordinator:
         inputs_fingerprint: str | None = None,
     ) -> RepairAIAnalysis:
         existing = await self.overall_ai_repo.get_by_analytics_id(analytics_id)
+        # Нарушения нужны и для отпечатка: они входят в промпт, и новое
+        # нарушение после первого вердикта должно его пересчитать.
+        violations = await self._fetch_repair_violations(repair)
+        fingerprint = overall_fingerprint(
+            inputs_fingerprint or "",
+            end_time=repair.end_time,
+            violations=[(v.timestamp, v.description) for v in violations],
+            spo_ai_outcomes={
+                r.spo_id: (r.status, r.prompt_version) for r in spo_results
+            },
+        )
         # Вердикт актуален, только если и промпт, и набор входов те же: данные
         # приходят асинхронно, и вердикт по неполным входам должен обновиться.
         if (
             self._is_current(existing, self.overall_processor.prompt_version)
-            and existing.inputs_fingerprint == inputs_fingerprint
+            and existing.inputs_fingerprint == fingerprint
         ):
             return existing
 
-        violations = await self._fetch_repair_violations(repair)
         result = await self.overall_processor.process(
             OverallProcessingInput(
                 repair=repair,
@@ -222,7 +233,7 @@ class AICoordinator:
                     result=result.result,
                     error=result.error,
                     processed_at=result.processed_at,
-                    inputs_fingerprint=inputs_fingerprint,
+                    inputs_fingerprint=fingerprint,
                 ),
             )
         return await self.overall_ai_repo.update_by_analytics_id(
@@ -234,7 +245,7 @@ class AICoordinator:
                 result=result.result,
                 error=result.error,
                 processed_at=result.processed_at,
-                inputs_fingerprint=inputs_fingerprint,
+                inputs_fingerprint=fingerprint,
             ),
         )
 
