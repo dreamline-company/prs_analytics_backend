@@ -152,6 +152,14 @@ celery_app.conf.beat_schedule = {
         "task": "detectors.cits_events.run_incidents",
         "schedule": crontab(hour=6, minute=30),
     },
+    # R10 по сегодняшним неполным суткам — раз в час, после часовых загрузок
+    # замеров (:20) и статусов (:10): сигнал в тот же день. Только открывает и
+    # повышает эпизоды; до утреннего расчёта вчерашних суток пропускается.
+    "detectors-cits-events-intraday": {
+        "task": "detectors.cits_events.run_incidents",
+        "schedule": crontab(minute=40),
+        "kwargs": {"intraday": True},
+    },
     # Суточные ведомости R2/R9 по подключённым НГДУ за вчера: после суточного
     # прогона R9 и ночных загрузок ABAI. Уже собранные даты пропускаются;
     # запрос за произвольную дату идёт через API тем же сборщиком.

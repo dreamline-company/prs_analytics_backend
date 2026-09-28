@@ -77,9 +77,15 @@ Celery `detectors.cits_events.run_incidents`, beat 06:30 местного, за 
 Курсор НГДУ (`detectors_cursor`, `entity_id` = ABAI id НГДУ) — пропущенные
 сутки догоняются по порядку, не больше 7 за прогон.
 
+Ежечасно в :40 тот же таск с `intraday=True` считает сегодняшние неполные
+сутки: сигнал появляется в тот же день. По неполным суткам эпизоды только
+открываются и повышаются — закрытие, срез и курсор остаются утреннему
+расчёту; до него (пока вчерашние сутки не рассчитаны) прогон пропускается.
+
 ```bash
 cd src && python -m apps.detectors.cits_events.tasks.run_incidents.run_incidents
 cd src && python -m apps.detectors.cits_events.tasks.run_incidents.run_incidents --date 2026-09-27
+cd src && python -m apps.detectors.cits_events.tasks.run_incidents.run_incidents --intraday
 ```
 
 API среза: `GET /detectors/v1/findings?section=measure_request|data_quality`
