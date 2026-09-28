@@ -30,6 +30,11 @@ from shared.integrations.abai.repositories.well_expls import (
 from shared.integrations.abai.repositories.well_orgs import (
     ABAIWellOrgRepository,
 )
+from shared.integrations.abai.repositories.well_statuses import (
+    ABAIReasonRepository,
+    ABAIWellStatusRepository,
+    ABAIWellStatusTypeRepository,
+)
 from shared.integrations.abai.repositories.well_workovers import (
     ABAIWellWorkoverRepository,
 )
@@ -42,6 +47,7 @@ __all__ = (
     "ABAIGdisCurrentValueRepository",
     "ABAIMetricRepository",
     "ABAIOrgRepository",
+    "ABAIReasonRepository",
     "ABAIRepairWorkTypeRepository",
     "ABAISpatialObjectRepository",
     "ABAITechModeProdOilRepository",
@@ -49,5 +55,7 @@ __all__ = (
     "ABAIWellExplTypeRepository",
     "ABAIWellOrgRepository",
     "ABAIWellRepository",
+    "ABAIWellStatusRepository",
+    "ABAIWellStatusTypeRepository",
     "ABAIWellWorkoverRepository",
 )

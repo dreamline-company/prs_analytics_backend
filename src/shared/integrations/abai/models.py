@@ -511,6 +511,125 @@ class WellExpl(ABAIBaseModel):
     )
 
 
+class WellStatusType(ABAIBaseModel):
+    __tablename__ = "well_status_type"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        comment="ID",
+    )
+
+    name_ru: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="Наименование на русском языке",
+    )
+
+    code: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Мнемокод статуса (WRK, DWN, PEXP, ...)",
+    )
+
+    name_short_ru: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Краткое наименование на русском языке",
+    )
+
+    tbd_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        comment="Идентификатор в справочнике-источнике",
+    )
+
+
+class Reason(ABAIBaseModel):
+    __tablename__ = "reason"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        comment="ID",
+    )
+
+    reason_type: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        comment="Тип причины",
+    )
+
+    name_ru: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="Наименование на русском языке",
+    )
+
+    code: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Мнемокод причины",
+    )
+
+    parent: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        comment="Родительская причина",
+    )
+
+    name_short_ru: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Краткое наименование на русском языке",
+    )
+
+
+class WellStatus(ABAIBaseModel):
+    """Интервал статуса скважины. Время — UTC, открытый интервал до 3333-12-31."""
+
+    __tablename__ = "well_status"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        comment="ID",
+    )
+
+    well: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("well.id"),
+        nullable=False,
+        comment="Скважина. Ссылка на поле id таблицы well",
+    )
+
+    status: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("well_status_type.id"),
+        nullable=False,
+        comment="Статус. Ссылка на поле id таблицы well_status_type",
+    )
+
+    dbeg: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        comment="Начало действия (UTC)",
+    )
+
+    dend: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        comment="Окончание действия (UTC); 3333-12-31 — не закрыт",
+    )
+
+    reason: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("reason.id"),
+        nullable=True,
+        comment="Причина. Ссылка на поле id таблицы reason",
+    )
+
+
 class Metric(ABAIBaseModel):
     """Справочник метрик ГДИС (emg_integration.metric через FDW)."""
 

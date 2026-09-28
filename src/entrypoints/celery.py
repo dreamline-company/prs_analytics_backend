@@ -80,6 +80,11 @@ from apps.wells.tasks.load_well_expl.load_well_expl import (  # noqa: F401
 from apps.wells.tasks.load_well_orgs.load_well_orgs import (  # noqa: F401
     load_well_orgs_incremental,
 )
+
+# Импорт регистрирует таску инкрементальной загрузки статусов скважин из ABAI.
+from apps.wells.tasks.load_well_status.load_well_status import (  # noqa: F401
+    load_well_status_incremental,
+)
 from core.settings import get_settings
 
 settings = get_settings()
@@ -162,6 +167,13 @@ celery_app.conf.beat_schedule = {
     "wells-well-expl-incremental": {
         "task": "wells.well_expl.incremental_load",
         "schedule": crontab(hour=5, minute=30),
+    },
+    # Статусы скважин из ABAI (в работе / простой с причиной / периодическая)
+    # — раз в час: новые id + правки dend открытых интервалов. Их читает R10,
+    # чтобы не показывать скважины, где простой уже поставили технологи.
+    "wells-well-status-incremental": {
+        "task": "wells.well_status.incremental_load",
+        "schedule": crontab(minute=10),
     },
     # Ежедневная догрузка ГДИС из ABAI: метрики -> исследования -> значения,
     # плюс перечитывание исследований за 90 дней (заключения дописывают позже).
