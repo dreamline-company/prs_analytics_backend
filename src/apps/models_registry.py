@@ -8,6 +8,7 @@ from apps.detectors.models.daily_sheet import (
     DetectorDailySheet,
     DetectorDailySheetDelivery,
 )
+from apps.detectors.models.finding import DetectorFinding
 from apps.detectors.models.incident import (
     Detector,
     DetectorCursor,
@@ -59,6 +60,7 @@ __all__ = (
     "DetectorCursor",
     "DetectorDailySheet",
     "DetectorDailySheetDelivery",
+    "DetectorFinding",
     "DetectorIncident",
     "Dynamogram",
     "File",

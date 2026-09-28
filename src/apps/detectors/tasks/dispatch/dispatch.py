@@ -13,6 +13,9 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 
 from apps.celery_app import celery_app, run_async
+from apps.detectors.cits_events.tasks.run_incidents.run_incidents import (
+    DETECTOR_CODE as CITS_EVENTS_CODE,
+)
 from apps.detectors.conclusion.catalog import CONCLUSION_DETECTOR_CODES
 from apps.detectors.conclusion.notify import CONCLUSION_TASK
 from apps.detectors.load_imbalance.tasks.run_incidents.run_incidents import (
@@ -40,6 +43,7 @@ logger = get_logger(__name__)
 RUNNER_TASKS: dict[str, str] = {
     ROD_BREAK_CODE: "detectors.rod_breaks.run_incidents",
     LOAD_IMBALANCE_CODE: "detectors.load_imbalance.run_incidents",
+    CITS_EVENTS_CODE: "detectors.cits_events.run_incidents",
 }
 
 # Подметальщик считает станцию отставшей, если курсор позади фронта данных

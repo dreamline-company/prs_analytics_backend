@@ -2,7 +2,11 @@ from celery.schedules import crontab
 
 from apps.celery_app import celery_app
 
-# Импорт регистрирует celery-задачи детекторов (диспетчер, подметальщик, R2, R9).
+# Импорт регистрирует celery-задачи детекторов (диспетчер, подметальщик, R2,
+# R9, R10).
+from apps.detectors.cits_events.tasks.run_incidents.run_incidents import (  # noqa: F401
+    run_cits_events_incidents,
+)
 from apps.detectors.load_imbalance.tasks.run_incidents.run_incidents import (  # noqa: F401
     run_load_imbalance_incidents,
 )
@@ -140,6 +144,13 @@ celery_app.conf.beat_schedule = {
     "detectors-load-imbalance-daily": {
         "task": "detectors.load_imbalance.run_incidents",
         "schedule": crontab(hour=4, minute=10),
+    },
+    # R10 — события по замерам ЦИТС относительно техрежима за вчерашние сутки:
+    # после техрежима (05:45) и часовых загрузок замеров WinCC и статусов
+    # ABAI. Пропущенные сутки раннер догоняет сам по курсору НГДУ.
+    "detectors-cits-events-daily": {
+        "task": "detectors.cits_events.run_incidents",
+        "schedule": crontab(hour=6, minute=30),
     },
     # Суточные ведомости R2/R9 по подключённым НГДУ за вчера: после суточного
     # прогона R9 и ночных загрузок ABAI. Уже собранные даты пропускаются;
