@@ -1,4 +1,4 @@
-"""Рассылка суточных ведомостей R2/R9 по НГДУ на почту.
+"""Рассылка суточных ведомостей R2/R9/R10 по НГДУ на почту.
 
     python -m apps.detectors.tasks.mail_daily_sheets.mail_daily_sheets
     python -m apps.detectors.tasks.mail_daily_sheets.mail_daily_sheets \\
@@ -34,7 +34,10 @@ from apps.detectors.repositories.daily_sheet import (
     DetectorDailySheetDeliveryRepository,
 )
 from apps.detectors.services.daily_sheet.builder import local_now
-from apps.detectors.services.daily_sheet.config import SHEET_DETECTOR_CODES
+from apps.detectors.services.daily_sheet.config import (
+    SHEET_DETECTOR_CODES,
+    sheet_applies,
+)
 from apps.detectors.services.daily_sheet.errors import DailySheetDataNotReadyError
 from apps.detectors.services.daily_sheet.mail import (
     LetterInput,
@@ -215,6 +218,8 @@ class MailDailySheets:
         use_case = GetDailySheetUseCase(session, storage=storage)
         files = FileService(session, storage)
         for detector_code in SHEET_DETECTOR_CODES:
+            if not sheet_applies(detector_code, org.abai_id):
+                continue
             query = GetDailySheetQuery(
                 detector_code=detector_code,
                 ngdu_id=org.id,
@@ -241,10 +246,12 @@ class MailDailySheets:
             except DailySheetDataNotReadyError as exc:
                 await session.rollback()
                 coverage = exc.details.get("coverage") or {}
+                by_cits = coverage.get("source") == "cits"
                 reason = (
-                    "за сутки нет телеметрии СДМО "
+                    f"за сутки нет {'замеров ЦИТС' if by_cits else 'телеметрии СДМО'} "
                     f"({coverage.get('stations_reporting', 0)} из "
-                    f"{coverage.get('stations_total', 0)} станций)"
+                    f"{coverage.get('stations_total', 0)} "
+                    f"{'скважин' if by_cits else 'станций'})"
                 )
                 letter.missing.append(MissingSheet(detector_code, reason))
                 sheets_log.append({"detector_code": detector_code, "reason": reason})
@@ -362,7 +369,7 @@ async def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Mail R2/R9 daily sheets.")
+    parser = argparse.ArgumentParser(description="Mail R2/R9/R10 daily sheets.")
     parser.add_argument(
         "--date",
         type=date.fromisoformat,

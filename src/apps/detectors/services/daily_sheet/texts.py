@@ -4,7 +4,7 @@ LLM здесь нет: всё выводится из эпизода, дебит
 шаблонам. Готовое ИИ-заключение эпизода (если есть) цитируется в «Основании».
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from apps.detectors.models.incident import INCIDENT_STATUS_NORMALIZED
 from apps.detectors.services.daily_sheet.config import (
@@ -27,6 +27,8 @@ _WATER_CUT_SHIFT_MIN = 5.0
 _MAX_REPAIRS_IN_TEXT = 2
 _MAX_REASONS_IN_TEXT = 2
 _MAX_WORK_CHARS = 40
+# Правила, эпизод которых считается сутками: в периодах только даты.
+_DAILY_CODES = frozenset({"R9", "R10"})
 
 
 # --- форматирование ----------------------------------------------------------
@@ -88,7 +90,7 @@ def period_text(
     """
     episode = ctx.primary
     incident = episode.incident
-    dates_only = ctx.detector_code == "R9"
+    dates_only = ctx.detector_code in _DAILY_CODES
     sheet_date = (day_end - timedelta(days=1)).date()
     last_seen = min(incident.last_seen_at, day_end)
     seen_day = _end_day(last_seen).date() if dates_only else last_seen.date()
@@ -141,6 +143,8 @@ def deviation_text(
         ratio = payload.get("current_ratio")
         if ratio is not None and ratio <= R2_RATIO_STRONG:
             label += R2_TOTAL_LOSS_SUFFIX
+    if ctx.detector_code == "R10" and payload.get("klass"):
+        label += f" ({payload['klass']})"
     text = (
         f"{label}, {SEVERITY_LABELS[ctx.severity]}, "
         f"{period_text(ctx, day_end=day_end, partial_day=partial_day)}"
@@ -260,7 +264,44 @@ def _rule_sentence(ctx: WellContext) -> str:
         if payload.get("low_confidence"):
             text += ", база слабая"
         return text + " (СДМО)"
+    if ctx.detector_code == "R10":
+        return _r10_rule_sentence(payload)
     return f"сигнал {ctx.primary.incident.reason_code} (СДМО)"
+
+
+def _r10_rule_sentence(payload: dict) -> str:
+    since = payload.get("series_from")
+    since = f" с {date.fromisoformat(since):%d.%m}" if since else ""
+    n = payload.get("n_series")
+    rezhim = fmt_num(payload.get("rezhim"))
+    if payload.get("dev") is None:
+        text = f"нулевых замеров подряд: {n}{since}, техрежим {rezhim}"
+        if payload.get("su"):
+            text += f"; {payload['su']}"
+    else:
+        text = (
+            f"Qж {fmt_num(payload.get('q_last'))} при техрежиме {rezhim} "
+            f"({payload['dev'] * 100:+.0f} %), замеров за порогом подряд: {n}{since}"
+        )
+        if payload.get("prev_dev") is not None:
+            text += f"; до серии {payload['prev_dev'] * 100:+.0f} %"
+    if payload.get("note"):
+        text += f"; {payload['note']}"
+    return text + " (ЦИТС)"
+
+
+def measure_request_text(well_name: str, payload: dict) -> str:
+    """R10, «замер устарел»: когда был последний замер и что с СУ."""
+    last = payload.get("last_day")
+    last = f"{date.fromisoformat(last):%d.%m}" if last else "—"
+    su = payload.get("su") or "нет данных СУ"
+    text = (
+        f"{well_name} — последний замер {last} "
+        f"({payload.get('age_d', '—')} сут назад); {su}"
+    )
+    if "периодическая" in (payload.get("note") or ""):
+        text += "; периодическая эксплуатация"
+    return text
 
 
 def _rates_sentences(ctx: WellContext) -> list[str]:

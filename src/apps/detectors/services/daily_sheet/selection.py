@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Protocol
 
+from apps.detectors.cits_events.rule import EVENT_ZERO
 from apps.detectors.models.incident import (
     INCIDENT_LEVEL_ALARM,
     INCIDENT_LEVEL_WARNING,
@@ -27,6 +28,8 @@ from apps.detectors.services.daily_sheet.config import (
     R2_RATIO_STRONG,
     R9_K_MARKED,
     R9_K_STRONG,
+    R10_DEV_MARKED,
+    R10_DEV_STRONG,
     SEVERITY_MARKED,
     SEVERITY_MODERATE,
     SEVERITY_STRONG,
@@ -147,6 +150,16 @@ def severity_key(detector_code: str, payload: dict | None) -> str:
             payload.get("current_ratio"),
             strong=R2_RATIO_STRONG,
             marked=R2_RATIO_MARKED,
+            lower_is_worse=True,
+        )
+    if detector_code == "R10":
+        # Нулевые замеры — подачи нет совсем; отклонение — по глубине.
+        if payload.get("event") == EVENT_ZERO:
+            return SEVERITY_STRONG
+        return _band(
+            payload.get("dev"),
+            strong=R10_DEV_STRONG,
+            marked=R10_DEV_MARKED,
             lower_is_worse=True,
         )
     return SEVERITY_MODERATE

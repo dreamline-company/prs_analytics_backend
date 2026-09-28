@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import func, or_, select, text, update
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from apps.detectors.dto.internal.repositories.incident import (
@@ -260,6 +260,7 @@ class DetectorIncidentRepository(
 
         Принадлежность НГДУ — через станцию СДМО эпизода (``entity_id``): R2 и
         R9 считаются по её ленте, и НГДУ у неё тот, из чьей базы она пришла.
+        У эпизодов без станции (R10 — по замерам ЦИТС) НГДУ лежит в payload.
         ``well_name_prefixes`` — месторождения как префиксы имени скважины
         (``BLG`` в ``BLG_0177``); код станции для этого не годится, он бывает
         другим (``MLD_2631`` у скважины ``VMB_2631``). Окно широкое — точное
@@ -267,14 +268,21 @@ class DetectorIncidentRepository(
         """
         filters = [
             DetectorIncident.detector_code == detector_code,
-            SdmoStation.abai_ngdu_id == abai_ngdu_id,
+            or_(
+                SdmoStation.abai_ngdu_id == abai_ngdu_id,
+                and_(
+                    DetectorIncident.entity_id.is_(None),
+                    DetectorIncident.payload["abai_ngdu_id"].as_integer()
+                    == abai_ngdu_id,
+                ),
+            ),
             DetectorIncident.opened_at < opened_before,
             or_(
                 DetectorIncident.normalized_at.is_(None),
                 DetectorIncident.normalized_at >= normalized_since,
             ),
         ]
-        stmt = select(DetectorIncident).join(
+        stmt = select(DetectorIncident).outerjoin(
             SdmoStation,
             SdmoStation.id == DetectorIncident.entity_id,
         )

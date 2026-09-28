@@ -135,6 +135,25 @@ class TelemetryRepository(
         )
         return {(well_id, date_time) for well_id, date_time in result.all()}
 
+    async def list_well_ids_with_rows(
+        self,
+        abai_ngdu_id: int,
+        *,
+        since: datetime,
+        until: datetime,
+    ) -> set[int]:
+        """Скважины НГДУ, у которых есть замеры за [since, until)."""
+        result = await self.session.execute(
+            select(Telemetry.well_id)
+            .where(
+                Telemetry.abai_ngdu_id == abai_ngdu_id,
+                Telemetry.date_time >= since,
+                Telemetry.date_time < until,
+            )
+            .distinct(),
+        )
+        return set(result.scalars().all())
+
     async def get_last_by_well_ids_before(
         self,
         well_ids: Sequence[int],

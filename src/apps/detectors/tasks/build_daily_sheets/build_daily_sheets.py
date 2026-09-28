@@ -1,11 +1,11 @@
-"""Утренняя сборка суточных ведомостей R2 / R9 по подключённым НГДУ.
+"""Утренняя сборка суточных ведомостей R2 / R9 / R10 по подключённым НГДУ.
 
     python -m apps.detectors.tasks.build_daily_sheets.build_daily_sheets
     python -m apps.detectors.tasks.build_daily_sheets.build_daily_sheets \\
         --date 2026-08-31 --detector R9 --ngdu-id 5 --rebuild
 
 Celery ``detectors.daily_sheet.build`` в 07:30 местного за вчерашние сутки —
-после суточного прогона R9 (04:10) и ночных загрузок ABAI. Уже собранная
+после суточных прогонов R9 (04:10) и R10 (06:30) и ночных загрузок ABAI. Уже собранная
 ведомость пропускается, «нет телеметрии за дату» пишется в лог, а остальные
 пары НГДУ × правило собираются дальше. Ручной запрос за любую дату — через
 ``GET /detectors/v1/reports/daily-sheet``, он использует тот же сборщик.
@@ -22,7 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.celery_app import celery_app, run_async
 from apps.detectors.dto.queries.daily_sheet import GetDailySheetQuery
 from apps.detectors.services.daily_sheet.builder import local_now
-from apps.detectors.services.daily_sheet.config import SHEET_DETECTOR_CODES
+from apps.detectors.services.daily_sheet.config import (
+    SHEET_DETECTOR_CODES,
+    sheet_applies,
+)
 from apps.detectors.services.daily_sheet.errors import DailySheetDataNotReadyError
 from apps.detectors.services.daily_sheet.targets import list_target_ngdus
 from apps.detectors.use_cases.get_daily_sheet import GetDailySheetUseCase
@@ -84,6 +87,8 @@ class BuildDailySheets:
             use_case = GetDailySheetUseCase(session, storage=storage)
             for org in orgs:
                 for detector_code in self.detector_codes:
+                    if not sheet_applies(detector_code, org.abai_id):
+                        continue
                     await self._build_one(
                         use_case,
                         session,
@@ -166,7 +171,7 @@ async def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Build R2/R9 daily sheets.")
+    parser = argparse.ArgumentParser(description="Build R2/R9/R10 daily sheets.")
     parser.add_argument(
         "--date",
         type=date.fromisoformat,
