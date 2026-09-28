@@ -1,9 +1,26 @@
+"""Инкремент замеров дебитов из WinCC/ЦИТС четырёх НГДУ.
+
+Каждый прогон перечитывает последние ``OVERLAP`` суток источника, а не только
+замеры позже последнего загруженного: ЦИТС дописывает замеры задним числом
+(ГЗУ выгружаются с опозданием), и строгий курсор их терял. Уже загруженные
+строки узнаются по паре (скважина, время замера) и пропускаются.
+
+    python -m apps.telemetry.tasks.load_telemetry.load_wincc
+    python -m apps.telemetry.tasks.load_telemetry.load_wincc \\
+        --ngdu ZHMG --since 2023-11-01
+
+Второй вариант — разовая догрузка истории (например, после правки
+сопоставления месторождений): источник перечитывается с даты, недостающее
+дописывается, дублей не появляется.
+"""
+
+import argparse
 import asyncio
 from collections.abc import AsyncGenerator, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from apps.celery_app import celery_app, run_async
-from apps.models_registry import *  # noqa
+from apps.models_registry import *  # noqa: F403
 from apps.telemetry.dto.internal.repositories import CreateTelemetryDTO
 from apps.telemetry.repositories import TelemetryRepository
 from apps.wells.repositories import WellRepository
@@ -27,9 +44,43 @@ from utils.wells import make_code
 
 logger = get_logger(__name__)
 
+# Месторождения, которые ЦИТС называет не так, как ABAI: код в поле Oil_field
+# источника -> префикс имени скважины у нас. ЖМГ пишет месторождение ZHT как
+# ZNT; без замены его замеры не находили скважину и отбрасывались целиком.
+WINCC_FIELD_ALIASES = {"ZNT": "ZHT"}
+
+NGDU_NAMES = ("KMG", "DMG", "ZHMG", "ZHLMG")
+
+type TelemetryKey = tuple[int, datetime]
+
+
+def wincc_well_name(oil_field: str, well: str) -> str:
+    """Имя скважины (``UZK_0377``) по месторождению и номеру из WinCC.
+
+    Raises:
+        ValueError: Номер цифровой, но код месторождения не собрать в имя.
+    """
+    field = oil_field.strip().upper()
+    field = WINCC_FIELD_ALIASES.get(field, field)
+    if well.strip().isdigit():
+        return make_code(field, well)
+    return field + "_" + well.strip()
+
 
 class WinccLoadTelemetry:
     ITER_BATCH_SIZE = 50_000
+    # Сколько последних суток источника перечитывать на каждом прогоне.
+    OVERLAP = timedelta(days=7)
+
+    def __init__(
+        self,
+        *,
+        ngdus: Sequence[str] = NGDU_NAMES,
+        since: datetime | None = None,
+    ) -> None:
+        self.ngdus = tuple(ngdus)
+        # Явная дата — разовая догрузка истории вместо перечитки окна.
+        self.since = since
 
     async def run(self) -> None:
         async with session_makers["app"]() as app_session:
@@ -38,16 +89,17 @@ class WinccLoadTelemetry:
             app_wells_ids = {well.name: well.id for well in app_wells}
             del app_wells
 
+        loaders = {
+            "KMG": self._load_kainar,
+            "DMG": self._load_dmg,
+            "ZHMG": self._load_zhmg,
+            "ZHLMG": self._load_zhylmg,
+        }
         # Источники независимы: недоступный WinCC одного НГДУ не должен
         # оставлять остальные без свежих замеров до следующего запуска.
-        for name, load in (
-            ("KMG", self._load_kainar),
-            ("DMG", self._load_dmg),
-            ("ZHMG", self._load_zhmg),
-            ("ZHLMG", self._load_zhylmg),
-        ):
+        for name in self.ngdus:
             try:
-                await load(app_wells_ids)
+                await loaders[name](app_wells_ids)
             except Exception:
                 logger.exception("WinCC telemetry load [%s] failed; continuing", name)
 
@@ -112,38 +164,52 @@ class WinccLoadTelemetry:
 
         async with session_makers["app"]() as app_session:
             telemetry_repo = TelemetryRepository(app_session)
-            last_tm = await telemetry_repo.get_last_by_ngdu_id(
-                abai_ngdu_id=ngdu_id,
+            since = self.since
+            if since is None:
+                last_tm = await telemetry_repo.get_last_by_ngdu_id(
+                    abai_ngdu_id=ngdu_id,
+                )
+                since = last_tm.date_time - self.OVERLAP if last_tm else None
+            existing = (
+                await telemetry_repo.list_keys_since(ngdu_id, since)
+                if since is not None
+                else set()
             )
             try:
                 c = 0
                 n = 0
-                async for tms in self._iter_tm(
-                    ngdu_tm_repo,
-                    last_tm_time=last_tm.date_time if last_tm else None,
-                ):
+                added = 0
+                async for tms in self._iter_tm(ngdu_tm_repo, since=since):
                     c += 1
                     n += len(tms)
-                    is_saved = await self._save_tm(
+                    saved = await self._save_tm(
                         tms,
                         app_wells_ids,
                         ngdu_id,
                         telemetry_repo,
+                        existing,
                     )
-                    if is_saved:
+                    if saved:
+                        added += saved
                         await app_session.commit()
                     logger.debug(
-                        "NGDU: %s Number: %s Iterations: %s Is Saved: %s",
+                        "NGDU: %s Number: %s Iterations: %s Saved: %s",
                         ngdu_id,
                         n,
                         c,
-                        is_saved,
+                        saved,
                     )
             except Exception:
                 logger.exception("Error while loading NGDU #%s telemetry.", ngdu_id)
                 await app_session.rollback()
             else:
-                logger.info("NGDU #%s telemetry loaded successfully.", ngdu_id)
+                logger.info(
+                    "NGDU #%s telemetry loaded: read=%s, added=%s, since=%s",
+                    ngdu_id,
+                    n,
+                    added,
+                    since,
+                )
 
     @classmethod
     async def _save_tm(
@@ -152,7 +218,13 @@ class WinccLoadTelemetry:
         app_wells_ids: dict[str, int],
         dmg_ngdu_id: int,
         app_telemetry_repo: TelemetryRepository,
-    ) -> bool:
+        existing: set[TelemetryKey],
+    ) -> int:
+        """Записать новые замеры батча; вернуть, сколько добавлено.
+
+        ``existing`` — уже загруженные пары (скважина, время замера); сюда же
+        дописываются добавленные, чтобы перекрытие батчей не дало дублей.
+        """
         bulk_data = []
         not_found_wells = []
         for tm in tms:
@@ -170,22 +242,23 @@ class WinccLoadTelemetry:
                 )
                 continue
 
-            if tm.Well.strip().isdigit():
-                try:
-                    well_name = make_code(tm.Oil_field, tm.Well)
-                except ValueError:
-                    logger.exception(
-                        "TM skipped. Could form well name %s %s",
-                        tm.Oil_field,
-                        tm.Well,
-                    )
-                    continue
-            else:
-                well_name = tm.Oil_field.strip().upper() + "_" + tm.Well.strip()
+            try:
+                well_name = wincc_well_name(tm.Oil_field, tm.Well)
+            except ValueError:
+                logger.exception(
+                    "TM skipped. Could form well name %s %s",
+                    tm.Oil_field,
+                    tm.Well,
+                )
+                continue
             well_id = app_wells_ids.get(well_name)
             if not well_id:
                 not_found_wells.append(well_name)
                 continue
+            key = (well_id, tm.Meas_date)
+            if key in existing:
+                continue
+            existing.add(key)
             bulk_data.append(
                 CreateTelemetryDTO(
                     well_id=well_id,
@@ -198,24 +271,31 @@ class WinccLoadTelemetry:
                     oil_field=tm.Oil_field,
                 ),
             )
+        if not_found_wells:
+            logger.warning("Not found %s wells in database", len(not_found_wells))
         if bulk_data:
             logger.debug("Bulking: %s", len(bulk_data))
             await app_telemetry_repo.bulk_create(data=bulk_data)
-            return True
-        if not_found_wells:
-            logger.warning("Not found %s wells in database", len(not_found_wells))
-        return False
+        return len(bulk_data)
 
     async def _iter_tm(
         self,
         wincc_tm_repo: NGDUWinccTelemetryRepository,
-        last_tm_time: datetime | None,
+        since: datetime | None,
     ) -> AsyncGenerator[Sequence[NGDUWinccTelemetryModel]]:
-        last_time = last_tm_time
+        """Строки источника с ``Meas_date >= since`` батчами по времени.
+
+        Граница батча включается повторно (``>=``): строки с тем же временем,
+        не влезшие в предыдущий батч, иначе терялись бы. Повторы отсекает
+        проверка по уже загруженным ключам.
+        """
+        last_time = since
+        strict = False
         while True:
             filters = []
             if last_time:
-                filters = [wincc_tm_repo.model.Meas_date > last_time]
+                meas_date = wincc_tm_repo.model.Meas_date
+                filters = [meas_date > last_time if strict else meas_date >= last_time]
             tms = await wincc_tm_repo.get_list(
                 spec=QuerySpec(
                     filters=(*filters, wincc_tm_repo.model.Well.isnot(None)),
@@ -227,20 +307,38 @@ class WinccLoadTelemetry:
                 break
             logger.debug("Selected tms: %s", len(tms))
             yield tms
-            last_time = tms[-1].Meas_date
             if len(tms) < self.ITER_BATCH_SIZE:
                 break
+            # Весь батч с одним временем — дальше строго, иначе цикл встанет.
+            strict = tms[-1].Meas_date == last_time
+            last_time = tms[-1].Meas_date
 
 
-async def main() -> None:
-    await WinccLoadTelemetry().run()
+async def main(
+    ngdus: Sequence[str] = NGDU_NAMES,
+    since: datetime | None = None,
+) -> None:
+    await WinccLoadTelemetry(ngdus=ngdus, since=since).run()
 
 
 @celery_app.task(name="telemetry.wincc.incremental_load")
 def load_wincc_incremental() -> None:
-    """Инкремент замеров дебитов из WinCC всех НГДУ (от последнего замера скважины)."""
+    """Инкремент замеров дебитов из WinCC всех НГДУ (с перечиткой окна)."""
     run_async(main())
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--ngdu",
+        action="append",
+        choices=NGDU_NAMES,
+        help="НГДУ; можно повторять. По умолчанию — все четыре.",
+    )
+    parser.add_argument(
+        "--since",
+        type=datetime.fromisoformat,
+        help="Перечитать источник с этой даты (разовая догрузка истории).",
+    )
+    args = parser.parse_args()
+    asyncio.run(main(ngdus=args.ngdu or NGDU_NAMES, since=args.since))
