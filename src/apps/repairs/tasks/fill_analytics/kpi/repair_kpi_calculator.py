@@ -1,4 +1,3 @@
-# ruff: noqa: RUF001, RUF002
 """Computes and persists the KPI ПРС metrics for one repair.
 
 A deterministic-plus-AI counterpart to :class:`AICoordinator`: it assembles the
@@ -22,7 +21,6 @@ reused across pipeline passes so we don't re-bill the LLM every run.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
@@ -35,6 +33,7 @@ from apps.repairs.dto.internal.repositories.kpi import (
     UpdateRepairKPIDTO,
 )
 from apps.repairs.models.analytics import AI_STATUS_COMPLETED
+from apps.repairs.services.error_screens import list_repair_error_screens
 from core import get_logger
 from core.settings import get_settings
 from shared.database.s3.storage import FileNotExistError
@@ -68,7 +67,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 settings = get_settings()
 
-_BRIGADE_NUMBER_RE = re.compile(r"№\s*(\d+)")
 _TECH_REGIME_UNIT = "м3/сут"
 
 
@@ -337,24 +335,12 @@ class RepairKPICalculator:
     # --- Нарушения ТБ --------------------------------------------------------
 
     async def _count_violations(self, repair: Repair) -> int:
-        link = await self.repair_brigade_repo.get_by_repair_id(repair.id)
-        if link is None:
-            return 0
-        brigade = await self.unique_brigade_repo.get_by_id(link.brigade_id)
-        if brigade is None:
-            return 0
-        match = _BRIGADE_NUMBER_RE.search(brigade.name)
-        if match is None:
-            return 0
-        cm_brigades = await self.cm_brigade_repo.list_by_name(match.group(1))
-        cm_ids = [cm.id for cm in cm_brigades]
-        if not cm_ids:
-            return 0
-        end_time = repair.end_time or datetime.now()  # noqa: DTZ005
-        screens = await self.cm_brigade_error_screen_repo.list_by_brigade_ids_in_range(
-            cm_ids,
-            start_time=repair.start_time,
-            end_time=end_time,
+        screens = await list_repair_error_screens(
+            repair,
+            repair_brigade_repo=self.repair_brigade_repo,
+            unique_brigade_repo=self.unique_brigade_repo,
+            cm_brigade_repo=self.cm_brigade_repo,
+            cm_brigade_error_screen_repo=self.cm_brigade_error_screen_repo,
         )
         return len(screens)
 

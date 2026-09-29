@@ -20,7 +20,6 @@ from apps.repairs.repositories.ai_results import (
     RepairSPOAIResultRepository,
 )
 from apps.repairs.repositories.analytics import (
-    RepairAnalyticsBrigadeErrorScreenRepository,
     RepairAnalyticsDynamogramRepository,
     RepairAnalyticsRepository,
     RepairAnalyticsSPORepository,
@@ -50,6 +49,7 @@ from shared.dto.api import AppResponse
 from shared.integrations.cm.repositories.brigade_error_screens import (
     CMBrigadeErrorScreenRepository,
 )
+from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 settings = get_settings()
@@ -73,9 +73,6 @@ async def get_repair_analytics_view(
         analytics_dynamogram_repository=RepairAnalyticsDynamogramRepository(
             session=app_session,
         ),
-        analytics_brigade_error_screen_repository=(
-            RepairAnalyticsBrigadeErrorScreenRepository(session=app_session)
-        ),
         analytics_spo_repository=RepairAnalyticsSPORepository(session=app_session),
         dynamogram_repository=DynamogramRepository(session=app_session),
         spo_repository=SPORepository(session=app_session),
@@ -90,6 +87,7 @@ async def get_repair_analytics_view(
             bucket_name=settings.S3_BUCKET_NAME,
             client_factory=get_aioboto_client_factory(),
         ),
+        cm_brigade_repository=CMBrigadeRepository(session=cm_session),
         cm_brigade_error_screen_repository=CMBrigadeErrorScreenRepository(
             session=cm_session,
         ),

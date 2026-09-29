@@ -5,9 +5,7 @@ loop so ``FillRepairAnalytics`` stays about orchestration, not persistence.
 """
 
 import mimetypes
-import re
 from dataclasses import dataclass, field
-from datetime import datetime
 
 from apps.files.repositories.file import FileRepository
 from apps.org.repositories import UniqueBrigadeRepository
@@ -32,6 +30,7 @@ from apps.repairs.repositories.ai_results import (
     RepairSPOAIResultRepository,
 )
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
+from apps.repairs.services.error_screens import list_repair_error_screens
 from apps.repairs.tasks.fill_analytics.inputs import overall_fingerprint
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.models.spo import SPO
@@ -50,8 +49,6 @@ from .overall_processor import (
     OverallViolationDTO,
 )
 from .spo_processor import SPOAIProcessor, SPOProcessingInput
-
-_BRIGADE_NUMBER_RE = re.compile(r"№\s*(\d+)")
 
 logger = get_logger(__name__)
 
@@ -302,25 +299,12 @@ class AICoordinator:
         self,
         repair: Repair,
     ) -> list[OverallViolationDTO]:
-        link = await self.repair_brigade_repo.get_by_repair_id(repair.id)
-        if link is None:
-            return []
-        brigade = await self.unique_brigade_repo.get_by_id(link.brigade_id)
-        if brigade is None:
-            return []
-        match = _BRIGADE_NUMBER_RE.search(brigade.name)
-        if match is None:
-            return []
-        number = match.group(1)
-        cm_brigades = await self.cm_brigade_repo.list_by_name(number)
-        cm_ids = [cm.id for cm in cm_brigades]
-        if not cm_ids:
-            return []
-        end_time = repair.end_time or datetime.now()  # noqa: DTZ005
-        screens = await self.cm_brigade_error_screen_repo.list_by_brigade_ids_in_range(
-            cm_ids,
-            start_time=repair.start_time,
-            end_time=end_time,
+        screens = await list_repair_error_screens(
+            repair,
+            repair_brigade_repo=self.repair_brigade_repo,
+            unique_brigade_repo=self.unique_brigade_repo,
+            cm_brigade_repo=self.cm_brigade_repo,
+            cm_brigade_error_screen_repo=self.cm_brigade_error_screen_repo,
         )
         return [
             OverallViolationDTO(
