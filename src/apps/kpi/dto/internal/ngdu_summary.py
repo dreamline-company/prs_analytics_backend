@@ -31,8 +31,9 @@ class NgduSummaryPlanDTO(BaseModel):
 
 
 class NgduSummaryDeviationsDTO(BaseModel):
-    """Скважины, у которых факт ниже плана больше чем на ``threshold_percent``;
-    ``losses`` — суммарный недобор по ним, т/сут."""
+    """``wells`` — скважины с уровнем alarm в матрице инцидентов (худший
+    уровень активных эпизодов детекторов). ``losses`` — суммарный недобор, т/сут,
+    по скважинам, где факт нефти ниже плана больше чем на ``threshold_percent``."""
 
     wells: int
     losses: float

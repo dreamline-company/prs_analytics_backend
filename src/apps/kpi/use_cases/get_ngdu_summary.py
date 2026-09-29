@@ -3,9 +3,14 @@
 Все четыре показателя считаются на одном наборе скважин — всех НГДУ, одного
 НГДУ или одного месторождения (см. ``NGDUWellsService.list_wells``) — и из
 тех же источников, что паспорт матрицы: факт из
-``telemetry_well``, план из техрежима ABAI, статус станции из СДМО. Свёртка
-чисел вынесена в чистую функцию ``summarize`` — правила порогов проверяются
-без базы.
+``telemetry_well``, план из техрежима ABAI, статус станции из СДМО, уровень
+эпизодов детекторов — как ``incident_status.level`` в матрице инцидентов.
+Свёртка чисел вынесена в чистую функцию ``summarize`` — правила порогов
+проверяются без базы.
+
+Скважины Кайнармунайгаза берутся только с месторождения VMB, как в матрице
+инцидентов, — в любой выборке, в том числе по всем НГДУ, чтобы общий итог
+сходился с суммой по НГДУ.
 """
 
 from collections.abc import Sequence
@@ -13,6 +18,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
+from apps.detectors.models.incident import INCIDENT_LEVEL_ALARM
+from apps.detectors.services import WellIncidentStatusService
 from apps.kpi.dto.internal.ngdu_summary import (
     NgduSummaryDeviationsDTO,
     NgduSummaryDTO,
@@ -21,10 +28,14 @@ from apps.kpi.dto.internal.ngdu_summary import (
     NgduSummaryWellsDTO,
 )
 from apps.kpi.dto.queries.ngdu_summary import GetNgduSummaryQuery
+from apps.org.repositories.org import OrgRepository
+from apps.org.services import well_name_prefix
 from apps.telemetry.repositories.sdmo import SdmoFcDataRepository
 from apps.telemetry.repositories.tech_regime import TechRegimeRepository
 from apps.telemetry.repositories.telemetry import TelemetryRepository
+from apps.wells.models.well import Well
 from apps.wells.services import NGDUWellsService
+from shared.constants.ngdu import KMG_ONLY_OIL_FIELD_PREFIX, AbaiNGDUIDsEnum
 
 # Замер дебита идёт не каждый день (в среднем раз в 2–3 суток), поэтому
 # «текущая добыча» — сумма последних замеров не старше этого окна; более
@@ -33,7 +44,7 @@ FRESH_TELEMETRY_DAYS: Final = 7
 # Техрежимы месячные и приезжают с лагом: пока нового нет, план берётся из
 # режима, закончившегося не раньше чем столько дней назад.
 PLAN_GRACE_DAYS: Final = 31
-# Скважина с отклонением — факт ниже плана больше чем на эту долю.
+# Недобор (losses) — по скважинам, где факт ниже плана больше чем на эту долю.
 DEVIATION_THRESHOLD: Final = 0.10
 # Регистр 1999 «Статус (VLT SALT)»: 1 — станция онлайн.
 VLT_ONLINE: Final = 1
@@ -47,15 +58,18 @@ class WellSummaryInput:
     oil_fact: float | None  # свежий замер, т/сут
     oil_plan: float | None  # действующий техрежим, т/сут
     is_active: bool  # станция СДМО онлайн
+    # Худший уровень активных эпизодов детекторов — alarm (как в матрице).
+    is_alarm: bool = False
 
 
 def summarize(rows: Sequence[WellSummaryInput], *, as_of: datetime) -> NgduSummaryDTO:
     """Свернуть скважины в четыре показателя.
 
-    Добыча — по всем скважинам со свежим замером. План/факт и отклонения —
+    Добыча — по всем скважинам со свежим замером. План/факт и недобор —
     только по скважинам, где есть и свежий замер, и план больше нуля:
     скважина без замера не считается ни выполняющей план, ни отклонившейся,
-    её состояние неизвестно.
+    её состояние неизвестно. Скважины с отклонениями — те, у которых в
+    матрице инцидентов уровень alarm.
     """
     measured = [row for row in rows if row.oil_fact is not None]
     comparable = [
@@ -88,7 +102,7 @@ def summarize(rows: Sequence[WellSummaryInput], *, as_of: datetime) -> NgduSumma
             wells=len(comparable),
         ),
         deviations=NgduSummaryDeviationsDTO(
-            wells=len(deviating),
+            wells=sum(1 for row in rows if row.is_alarm),
             losses=round(losses, 1),
             threshold_percent=DEVIATION_THRESHOLD * 100,
         ),
@@ -96,18 +110,22 @@ def summarize(rows: Sequence[WellSummaryInput], *, as_of: datetime) -> NgduSumma
 
 
 class GetNgduSummaryUseCase:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         ngdu_wells_service: NGDUWellsService,
+        org_repository: OrgRepository,
         telemetry_repository: TelemetryRepository,
         tech_regime_repository: TechRegimeRepository,
         sdmo_fc_data_repository: SdmoFcDataRepository,
+        well_incident_status_service: WellIncidentStatusService,
     ) -> None:
         self.ngdu_wells_service = ngdu_wells_service
+        self.org_repository = org_repository
         self.telemetry_repository = telemetry_repository
         self.tech_regime_repository = tech_regime_repository
         self.sdmo_fc_data_repository = sdmo_fc_data_repository
+        self.well_incident_status_service = well_incident_status_service
 
     async def execute(
         self,
@@ -122,6 +140,7 @@ class GetNgduSummaryUseCase:
             query.ngdu_id,
             oil_field_id=query.oil_field_id,
         )
+        wells = await self._drop_kmg_outside_vmb(wells)
         if not wells:
             return summarize([], as_of=now)
 
@@ -137,6 +156,9 @@ class GetNgduSummaryUseCase:
                 well_ids,
             )
         )
+        incident_statuses = await self.well_incident_status_service.get_for_wells(
+            well_ids,
+        )
 
         fresh_since = now - timedelta(days=FRESH_TELEMETRY_DAYS)
         rows = []
@@ -150,6 +172,22 @@ class GetNgduSummaryUseCase:
                     oil_fact=last.qm_oil if fresh and last.qm_oil is not None else None,
                     oil_plan=regime.oil if regime is not None else None,
                     is_active=vlt_statuses.get(well.id) == VLT_ONLINE,
+                    is_alarm=incident_statuses[well.id].level == INCIDENT_LEVEL_ALARM,
                 ),
             )
         return summarize(rows, as_of=now)
+
+    async def _drop_kmg_outside_vmb(self, wells: list[Well]) -> list[Well]:
+        """Убрать скважины Кайнармунайгаза вне месторождения VMB."""
+        kmg = await self.org_repository.list_by_abai_ids([AbaiNGDUIDsEnum.KMG])
+        if not kmg:
+            return wells
+        kmg_well_ids = {
+            well.id for well in await self.ngdu_wells_service.list_wells(kmg[0].id)
+        }
+        return [
+            well
+            for well in wells
+            if well.id not in kmg_well_ids
+            or well_name_prefix(well.name) == KMG_ONLY_OIL_FIELD_PREFIX
+        ]
