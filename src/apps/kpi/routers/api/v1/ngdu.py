@@ -55,6 +55,7 @@ async def get_ngdu_summary(
             well_org_repository=WellOrgRepository(session=app_session),
             oil_field_repository=OilFieldRepository(session=app_session),
         ),
+        org_repository=OrgRepository(session=app_session),
         telemetry_repository=TelemetryRepository(session=app_session),
         tech_regime_repository=TechRegimeRepository(session=app_session),
         sdmo_fc_data_repository=SdmoFcDataRepository(session=app_session),

@@ -7,6 +7,10 @@
 эпизодов детекторов — как ``incident_status.level`` в матрице инцидентов.
 Свёртка чисел вынесена в чистую функцию ``summarize`` — правила порогов
 проверяются без базы.
+
+Скважины Кайнармунайгаза берутся только с месторождения VMB, как в матрице
+инцидентов, — в любой выборке, в том числе по всем НГДУ, чтобы общий итог
+сходился с суммой по НГДУ.
 """
 
 from collections.abc import Sequence
@@ -24,10 +28,14 @@ from apps.kpi.dto.internal.ngdu_summary import (
     NgduSummaryWellsDTO,
 )
 from apps.kpi.dto.queries.ngdu_summary import GetNgduSummaryQuery
+from apps.org.repositories.org import OrgRepository
+from apps.org.services import well_name_prefix
 from apps.telemetry.repositories.sdmo import SdmoFcDataRepository
 from apps.telemetry.repositories.tech_regime import TechRegimeRepository
 from apps.telemetry.repositories.telemetry import TelemetryRepository
+from apps.wells.models.well import Well
 from apps.wells.services import NGDUWellsService
+from shared.constants.ngdu import KMG_ONLY_OIL_FIELD_PREFIX, AbaiNGDUIDsEnum
 
 # Замер дебита идёт не каждый день (в среднем раз в 2–3 суток), поэтому
 # «текущая добыча» — сумма последних замеров не старше этого окна; более
@@ -102,16 +110,18 @@ def summarize(rows: Sequence[WellSummaryInput], *, as_of: datetime) -> NgduSumma
 
 
 class GetNgduSummaryUseCase:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         ngdu_wells_service: NGDUWellsService,
+        org_repository: OrgRepository,
         telemetry_repository: TelemetryRepository,
         tech_regime_repository: TechRegimeRepository,
         sdmo_fc_data_repository: SdmoFcDataRepository,
         well_incident_status_service: WellIncidentStatusService,
     ) -> None:
         self.ngdu_wells_service = ngdu_wells_service
+        self.org_repository = org_repository
         self.telemetry_repository = telemetry_repository
         self.tech_regime_repository = tech_regime_repository
         self.sdmo_fc_data_repository = sdmo_fc_data_repository
@@ -130,6 +140,7 @@ class GetNgduSummaryUseCase:
             query.ngdu_id,
             oil_field_id=query.oil_field_id,
         )
+        wells = await self._drop_kmg_outside_vmb(wells)
         if not wells:
             return summarize([], as_of=now)
 
@@ -165,3 +176,18 @@ class GetNgduSummaryUseCase:
                 ),
             )
         return summarize(rows, as_of=now)
+
+    async def _drop_kmg_outside_vmb(self, wells: list[Well]) -> list[Well]:
+        """Убрать скважины Кайнармунайгаза вне месторождения VMB."""
+        kmg = await self.org_repository.list_by_abai_ids([AbaiNGDUIDsEnum.KMG])
+        if not kmg:
+            return wells
+        kmg_well_ids = {
+            well.id for well in await self.ngdu_wells_service.list_wells(kmg[0].id)
+        }
+        return [
+            well
+            for well in wells
+            if well.id not in kmg_well_ids
+            or well_name_prefix(well.name) == KMG_ONLY_OIL_FIELD_PREFIX
+        ]

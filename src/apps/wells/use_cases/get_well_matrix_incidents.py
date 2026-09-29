@@ -24,10 +24,7 @@ from apps.wells.dto.internal.well_matrix_incidents import (
 from apps.wells.dto.queries.well import GetWellMatrixIncidentsQuery
 from apps.wells.repositories.well_expl import WellExplRepository
 from apps.wells.services import NGDUWellsService
-from shared.constants.ngdu import AbaiNGDUIDsEnum
-
-# Кайнармунайгаз в матрице — только скважины этого месторождения.
-KMG_OIL_FIELD_PREFIX = "VMB"
+from shared.constants.ngdu import KMG_ONLY_OIL_FIELD_PREFIX, AbaiNGDUIDsEnum
 
 
 class GetWellMatrixIncidentsUseCase:
@@ -60,7 +57,7 @@ class GetWellMatrixIncidentsUseCase:
         )
         ngdu = await self.org_repository.get_by_id(query.ngdu_id)
         if ngdu is not None and ngdu.abai_id == AbaiNGDUIDsEnum.KMG:
-            wells = wells_with_prefix(wells, KMG_OIL_FIELD_PREFIX)
+            wells = wells_with_prefix(wells, KMG_ONLY_OIL_FIELD_PREFIX)
         if not wells:
             return []
 
