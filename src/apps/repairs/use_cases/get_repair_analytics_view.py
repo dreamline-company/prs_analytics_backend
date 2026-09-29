@@ -27,13 +27,13 @@ from apps.repairs.dto.internal.analytics_view import (
     SPOWithAIResultDTO,
 )
 from apps.repairs.dto.queries.analytics_view import GetRepairAnalyticsViewQuery
+from apps.repairs.models.repair import Repair
 from apps.repairs.repositories.ai_results import (
     RepairAIAnalysisRepository,
     RepairDynamogramAIResultRepository,
     RepairSPOAIResultRepository,
 )
 from apps.repairs.repositories.analytics import (
-    RepairAnalyticsBrigadeErrorScreenRepository,
     RepairAnalyticsDynamogramRepository,
     RepairAnalyticsRepository,
     RepairAnalyticsSPORepository,
@@ -41,6 +41,7 @@ from apps.repairs.repositories.analytics import (
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.repair import RepairRepository
 from apps.repairs.repositories.transport import RepairTransportRepository
+from apps.repairs.services.error_screens import list_repair_error_screens
 from apps.wells.dto.internal.well import WellShortDTO
 from apps.wells.repositories import WellRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
@@ -51,6 +52,7 @@ from shared.errors import HttpError
 from shared.integrations.cm.repositories.brigade_error_screens import (
     CMBrigadeErrorScreenRepository,
 )
+from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
 
 logger = get_logger(__name__)
 
@@ -71,9 +73,6 @@ class GetRepairAnalyticsViewUseCase:
         unique_brigade_repository: UniqueBrigadeRepository,
         analytics_repository: RepairAnalyticsRepository,
         analytics_dynamogram_repository: RepairAnalyticsDynamogramRepository,
-        analytics_brigade_error_screen_repository: (
-            RepairAnalyticsBrigadeErrorScreenRepository
-        ),
         analytics_spo_repository: RepairAnalyticsSPORepository,
         dynamogram_repository: DynamogramRepository,
         spo_repository: SPORepository,
@@ -83,6 +82,7 @@ class GetRepairAnalyticsViewUseCase:
         transport_repository: RepairTransportRepository,
         file_repository: FileRepository,
         storage: AiobotoFileStorage,
+        cm_brigade_repository: CMBrigadeRepository,
         cm_brigade_error_screen_repository: CMBrigadeErrorScreenRepository,
         cm_media_url_header: str,
     ) -> None:
@@ -92,9 +92,6 @@ class GetRepairAnalyticsViewUseCase:
         self.unique_brigade_repository = unique_brigade_repository
         self.analytics_repository = analytics_repository
         self.analytics_dynamogram_repository = analytics_dynamogram_repository
-        self.analytics_brigade_error_screen_repository = (
-            analytics_brigade_error_screen_repository
-        )
         self.analytics_spo_repository = analytics_spo_repository
         self.dynamogram_repository = dynamogram_repository
         self.spo_repository = spo_repository
@@ -104,6 +101,7 @@ class GetRepairAnalyticsViewUseCase:
         self.transport_repository = transport_repository
         self.file_repository = file_repository
         self.storage = storage
+        self.cm_brigade_repository = cm_brigade_repository
         self.cm_brigade_error_screen_repository = cm_brigade_error_screen_repository
         self.cm_media_url_header = cm_media_url_header
 
@@ -112,11 +110,11 @@ class GetRepairAnalyticsViewUseCase:
         query: GetRepairAnalyticsViewQuery,
     ) -> RepairAnalyticsViewDTO:
         repair = await self.repair_repository.get_by_id(query.repair_id)
-        well = await self.wells_repository.get_by_abai_id(abai_id=repair.abai_well_id)
         if repair is None:
             raise RepairAnalyticsNotFoundError(
                 details={"repair_id": query.repair_id},
             )
+        well = await self.wells_repository.get_by_abai_id(abai_id=repair.abai_well_id)
         if well is None:
             raise RepairAnalyticsNotFoundError(
                 details={"well_no_exists": repair.abai_well_id},
@@ -145,7 +143,7 @@ class GetRepairAnalyticsViewUseCase:
         dynamograms = await self._build_dynamograms(analytics.id)
         spos = await self._build_spos(analytics.id)
 
-        error_screens = await self._build_error_screens(analytics.id)
+        error_screens = await self._build_error_screens(repair)
         overall = await self.overall_ai_repository.get_by_analytics_id(analytics.id)
         transports = await self._build_transports(repair.id)
 
@@ -305,17 +303,15 @@ class GetRepairAnalyticsViewUseCase:
 
     async def _build_error_screens(
         self,
-        _analytics_id: int,
+        repair: Repair,
     ) -> list[BrigadeErrorScreenDTO]:
-        # links = (
-        #     await self.analytics_brigade_error_screen_repository.list_by_analytics_id(
-        #         _analytics_id,
-        #     )
-        # )
-        # cm_screen_ids = [link.cm_screen_id for link in links]
-        cm_screen_ids = [55364, 55362, 55358]
-        screens = await self.cm_brigade_error_screen_repository.list_by_ids(
-            cm_screen_ids,
+        """Экраны бригады за время ремонта — те же, что в KPI и ИИ-вердикте."""
+        screens = await list_repair_error_screens(
+            repair,
+            repair_brigade_repo=self.repair_brigade_repository,
+            unique_brigade_repo=self.unique_brigade_repository,
+            cm_brigade_repo=self.cm_brigade_repository,
+            cm_brigade_error_screen_repo=self.cm_brigade_error_screen_repository,
         )
         return [
             BrigadeErrorScreenDTO.model_validate(screen).model_copy(
