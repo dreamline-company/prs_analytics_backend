@@ -13,12 +13,14 @@ def _row(
     plan: float | None,
     *,
     active: bool = False,
+    alarm: bool = False,
 ) -> WellSummaryInput:
     return WellSummaryInput(
         well_id=well_id,
         oil_fact=fact,
         oil_plan=plan,
         is_active=active,
+        is_alarm=alarm,
     )
 
 
@@ -51,17 +53,29 @@ def test_production_counts_every_fresh_measurement_but_plan_needs_both() -> None
     assert summary.plan_fulfillment.percent == 100.0
 
 
-def test_deviation_threshold_and_losses() -> None:
+def test_losses_by_plan_threshold() -> None:
     rows = [
-        _row(1, fact=9.0, plan=10.0),  # -10% ровно на пороге -> не отклонение
-        _row(2, fact=8.9, plan=10.0),  # ниже порога -> отклонение, потери 1.1
-        _row(3, fact=5.0, plan=20.0),  # отклонение, потери 15
+        _row(1, fact=9.0, plan=10.0),  # -10% ровно на пороге -> не недобор
+        _row(2, fact=8.9, plan=10.0),  # ниже порога -> потери 1.1
+        _row(3, fact=5.0, plan=20.0),  # потери 15
         _row(4, fact=30.0, plan=20.0),  # перевыполнение не считается
     ]
 
     summary = summarize(rows, as_of=AS_OF)
 
-    assert summary.deviations.wells == 2
     assert summary.deviations.losses == 16.1
     assert summary.deviations.threshold_percent == 10.0
     assert summary.plan_fulfillment.percent == round((9 + 8.9 + 5 + 30) / 60 * 100, 1)
+
+
+def test_deviation_wells_are_alarm_wells() -> None:
+    rows = [
+        _row(1, fact=None, plan=None, alarm=True),  # без замера, но alarm
+        _row(2, fact=5.0, plan=20.0),  # недобор, но не alarm
+        _row(3, fact=10.0, plan=10.0, alarm=True),
+    ]
+
+    summary = summarize(rows, as_of=AS_OF)
+
+    assert summary.deviations.wells == 2
+    assert summary.deviations.losses == 15.0

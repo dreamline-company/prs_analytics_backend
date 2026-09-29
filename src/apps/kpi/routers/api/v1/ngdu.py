@@ -3,6 +3,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.detectors.repositories import (
+    DetectorIncidentRepository,
+    DetectorRepository,
+)
+from apps.detectors.services import WellIncidentStatusService
 from apps.kpi.dto.internal.ngdu_summary import NgduSummaryDTO
 from apps.kpi.dto.queries.ngdu_summary import GetNgduSummaryQuery
 from apps.kpi.dto.responses.ngdu_summary import NgduSummaryResponseDTO
@@ -53,6 +58,10 @@ async def get_ngdu_summary(
         telemetry_repository=TelemetryRepository(session=app_session),
         tech_regime_repository=TechRegimeRepository(session=app_session),
         sdmo_fc_data_repository=SdmoFcDataRepository(session=app_session),
+        well_incident_status_service=WellIncidentStatusService(
+            incident_repository=DetectorIncidentRepository(session=app_session),
+            detector_repository=DetectorRepository(session=app_session),
+        ),
     )
     summary = await use_case.execute(
         GetNgduSummaryQuery(ngdu_id=ngdu_id, oil_field_id=oil_field_id),

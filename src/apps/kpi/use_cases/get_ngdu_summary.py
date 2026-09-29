@@ -3,9 +3,10 @@
 Все четыре показателя считаются на одном наборе скважин — всех НГДУ, одного
 НГДУ или одного месторождения (см. ``NGDUWellsService.list_wells``) — и из
 тех же источников, что паспорт матрицы: факт из
-``telemetry_well``, план из техрежима ABAI, статус станции из СДМО. Свёртка
-чисел вынесена в чистую функцию ``summarize`` — правила порогов проверяются
-без базы.
+``telemetry_well``, план из техрежима ABAI, статус станции из СДМО, уровень
+эпизодов детекторов — как ``incident_status.level`` в матрице инцидентов.
+Свёртка чисел вынесена в чистую функцию ``summarize`` — правила порогов
+проверяются без базы.
 """
 
 from collections.abc import Sequence
@@ -13,6 +14,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
+from apps.detectors.models.incident import INCIDENT_LEVEL_ALARM
+from apps.detectors.services import WellIncidentStatusService
 from apps.kpi.dto.internal.ngdu_summary import (
     NgduSummaryDeviationsDTO,
     NgduSummaryDTO,
@@ -33,7 +36,7 @@ FRESH_TELEMETRY_DAYS: Final = 7
 # Техрежимы месячные и приезжают с лагом: пока нового нет, план берётся из
 # режима, закончившегося не раньше чем столько дней назад.
 PLAN_GRACE_DAYS: Final = 31
-# Скважина с отклонением — факт ниже плана больше чем на эту долю.
+# Недобор (losses) — по скважинам, где факт ниже плана больше чем на эту долю.
 DEVIATION_THRESHOLD: Final = 0.10
 # Регистр 1999 «Статус (VLT SALT)»: 1 — станция онлайн.
 VLT_ONLINE: Final = 1
@@ -47,15 +50,18 @@ class WellSummaryInput:
     oil_fact: float | None  # свежий замер, т/сут
     oil_plan: float | None  # действующий техрежим, т/сут
     is_active: bool  # станция СДМО онлайн
+    # Худший уровень активных эпизодов детекторов — alarm (как в матрице).
+    is_alarm: bool = False
 
 
 def summarize(rows: Sequence[WellSummaryInput], *, as_of: datetime) -> NgduSummaryDTO:
     """Свернуть скважины в четыре показателя.
 
-    Добыча — по всем скважинам со свежим замером. План/факт и отклонения —
+    Добыча — по всем скважинам со свежим замером. План/факт и недобор —
     только по скважинам, где есть и свежий замер, и план больше нуля:
     скважина без замера не считается ни выполняющей план, ни отклонившейся,
-    её состояние неизвестно.
+    её состояние неизвестно. Скважины с отклонениями — те, у которых в
+    матрице инцидентов уровень alarm.
     """
     measured = [row for row in rows if row.oil_fact is not None]
     comparable = [
@@ -88,7 +94,7 @@ def summarize(rows: Sequence[WellSummaryInput], *, as_of: datetime) -> NgduSumma
             wells=len(comparable),
         ),
         deviations=NgduSummaryDeviationsDTO(
-            wells=len(deviating),
+            wells=sum(1 for row in rows if row.is_alarm),
             losses=round(losses, 1),
             threshold_percent=DEVIATION_THRESHOLD * 100,
         ),
@@ -103,11 +109,13 @@ class GetNgduSummaryUseCase:
         telemetry_repository: TelemetryRepository,
         tech_regime_repository: TechRegimeRepository,
         sdmo_fc_data_repository: SdmoFcDataRepository,
+        well_incident_status_service: WellIncidentStatusService,
     ) -> None:
         self.ngdu_wells_service = ngdu_wells_service
         self.telemetry_repository = telemetry_repository
         self.tech_regime_repository = tech_regime_repository
         self.sdmo_fc_data_repository = sdmo_fc_data_repository
+        self.well_incident_status_service = well_incident_status_service
 
     async def execute(
         self,
@@ -137,6 +145,9 @@ class GetNgduSummaryUseCase:
                 well_ids,
             )
         )
+        incident_statuses = await self.well_incident_status_service.get_for_wells(
+            well_ids,
+        )
 
         fresh_since = now - timedelta(days=FRESH_TELEMETRY_DAYS)
         rows = []
@@ -150,6 +161,7 @@ class GetNgduSummaryUseCase:
                     oil_fact=last.qm_oil if fresh and last.qm_oil is not None else None,
                     oil_plan=regime.oil if regime is not None else None,
                     is_active=vlt_statuses.get(well.id) == VLT_ONLINE,
+                    is_alarm=incident_statuses[well.id].level == INCIDENT_LEVEL_ALARM,
                 ),
             )
         return summarize(rows, as_of=now)
