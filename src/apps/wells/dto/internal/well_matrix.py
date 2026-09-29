@@ -3,9 +3,10 @@ from pydantic import BaseModel
 from apps.org.dto.internal.brigade import BrigadeDangerDTO, BrigadeShortDTO
 from apps.repairs.dto.internal.repair import RepairDTO
 
-# Текущий статус скважины в матрице: идёт спуско-подъёмная операция (живой
-# замер КБРС), идёт подземный ремонт (незавершённый ремонт ABAI), иначе пусто.
-WELL_STATUS_SPO = "СПО"
+# Текущий статус скважины в матрице при незавершённом ремонте ABAI: код
+# последней работы из событий КБРС за этот ремонт, а пока кодов нет — «ПРС».
+# Без ремонта статуса нет.
+WELL_STATUS_WORK = "Работа [{code}]"
 WELL_STATUS_PRS = "ПРС"
 
 

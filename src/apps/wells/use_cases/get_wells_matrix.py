@@ -95,8 +95,12 @@ class GetWellsMatrixUseCase:
         frequent_repair_abai_well_ids = await self._frequent_repair_abai_well_ids(
             [w.abai_id for w in wells],
         )
-        live_spo_well_ids = await self.well_status_service.live_spo_well_ids(
-            w.id for w in wells
+        work_codes = await self.well_status_service.work_codes(
+            {
+                w.id: active_repair_by_abai_well[w.abai_id]
+                for w in wells
+                if w.abai_id in active_repair_by_abai_well
+            },
         )
 
         return [
@@ -106,7 +110,7 @@ class GetWellsMatrixUseCase:
                 brigade_by_repair_id=brigade_by_repair_id,
                 dangers_by_brigade_id=dangers_by_brigade_id,
                 is_frequent_repair=w.abai_id in frequent_repair_abai_well_ids,
-                is_spo_live=w.id in live_spo_well_ids,
+                work_code=work_codes.get(w.id),
             )
             for w in sorted(wells, key=lambda w: w.name)
         ]
@@ -133,11 +137,11 @@ class GetWellsMatrixUseCase:
         brigade_by_repair_id: dict[int, UniqueBrigade],
         dangers_by_brigade_id: dict[int, list[BrigadeErrorScreen]],
         is_frequent_repair: bool,
-        is_spo_live: bool,
+        work_code: int | None,
     ) -> WellMatrixItemDTO:
         status = WellStatusService.status(
-            is_spo_live=is_spo_live,
             active_repair=active_repair,
+            work_code=work_code,
         )
         if active_repair is None:
             return WellMatrixItemDTO(

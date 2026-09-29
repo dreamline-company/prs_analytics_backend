@@ -27,7 +27,7 @@ from .dtos import (
     RawDatasetDto,
     WorkTypeDto,
 )
-from .exceptions import ToucanDecodeError
+from .exceptions import ToucanDecodeError, ToucanProtocolError
 
 
 class MidasStringCodec:
@@ -680,9 +680,37 @@ class MeasurementDetailsParser:
         )
 
 
+def unwrap_measure_payload(data: bytes) -> bytes:
+    """Блок 0x55AA замера — и завершённого, и ещё пишущегося.
+
+    Завершённый замер ``TNOMeasureLoadView`` отдаёт голым блоком 0x55AA.
+    Пока замер пишется, приходит RPC-ответ: ``Measure`` → ``DataBinary``
+    (int32 длины + тот же блок). Непохожее на обёртку возвращается как есть —
+    парсер ниже сам скажет, что это не замер.
+    """
+    if data[:2] == b"\x55\xaa":
+        return data
+    try:
+        measure = TlvCodec.parse_rpc_response(data).result.get("Measure")
+        off = 0
+        # Поля идут до DataBinary; следующее за ним DataCompressed пишется с
+        # флагом в старшем бите длины, которого TlvCodec не понимает.
+        while measure is not None and off < len(measure.raw):
+            field, off = TlvCodec.parse_one_field(measure.raw, off)
+            if field is None:
+                break
+            if field.name == "DataBinary":
+                size = struct.unpack_from("<i", field.raw, 0)[0]
+                return field.raw[4:4 + size]
+    except (ToucanProtocolError, struct.error):
+        pass
+    return data
+
+
 class MeasurementFullParser:
     @staticmethod
     def parse(data: bytes) -> MeasurementFullDto:
+        data = unwrap_measure_payload(data)
         return MeasurementFullDto(
             chart=MeasurementBinaryParser.parse(data),
             details=MeasurementDetailsParser.parse(data),
@@ -704,6 +732,7 @@ class MeasurementPassportPeeker:
 
     @classmethod
     def read_well(cls, data: bytes) -> int | None:
+        data = unwrap_measure_payload(data)
         end = cls._WELL_OFFSET + cls._WELL_SIZE
         if len(data) < end or data[:2] != cls._MAGIC:
             return None

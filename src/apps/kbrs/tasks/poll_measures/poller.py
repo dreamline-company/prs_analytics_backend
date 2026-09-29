@@ -327,8 +327,13 @@ class KbrsMeasurePoller:
             lambda client: client.measurement_service.load_raw_measurement(request),
         )
 
-        if existing is not None and len(raw) == existing.raw_size:
+        if (
+            existing is not None
+            and existing.status == MEASURE_STATUS_OK
+            and len(raw) == existing.raw_size
+        ):
             # Не вырос с прошлого фетча — только отметить факт опроса.
+            # Непарсившийся разбирается заново: парсер мог научиться.
             await measure_repo.update_by_id(
                 existing.id,
                 UpdateKbrsMeasureDTO(fetched_at=_local_now()),

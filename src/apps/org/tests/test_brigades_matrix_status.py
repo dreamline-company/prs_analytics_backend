@@ -1,19 +1,15 @@
-"""Статус бригады в матрице: СПО при живом замере на скважине ремонта,
-ПРС при открытом ремонте, иначе пусто.
+"""Статус бригады в матрице: «Работа [n]» по коду работы на скважине ремонта,
+«ПРС» при открытом ремонте без кодов, иначе пусто.
 """
 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
 
 from apps.org.use_cases.list_brigades_by_ngdu_id import ListBrigadesByNGDUIdUseCase
-from apps.wells.dto.internal.well_matrix import WELL_STATUS_PRS, WELL_STATUS_SPO
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
+from apps.wells.dto.internal.well_matrix import WELL_STATUS_PRS
 
 BRIGADES = [SimpleNamespace(id=i, name=f"Бригада №{i}", ngdu_id=5) for i in (1, 2, 3)]
 WELLS = {
@@ -37,7 +33,7 @@ def _repair(rid: int, abai_well_id: int, end: datetime | None) -> SimpleNamespac
 
 
 REPAIRS = {
-    501: _repair(501, 1001, None),  # бригада 1: открытый ремонт, на скважине идёт СПО
+    501: _repair(501, 1001, None),  # бригада 1: открытый ремонт, есть код работы
     502: _repair(502, 1002, None),  # бригада 2: открытый ремонт без СПО
     503: _repair(
         503,
@@ -81,15 +77,11 @@ class _Wells:
 
 
 class _Spo:
-    async def list_well_ids_with_live_measures(
+    async def map_last_work_codes(
         self,
-        well_ids: Sequence[int],
-        *,
-        now: datetime,
-        grace: timedelta,
-    ) -> set[int]:
-        del now, grace
-        return {11} & set(well_ids)
+        since_by_well_id: dict[int, datetime],
+    ) -> dict[int, int]:
+        return {well_id: 3 for well_id in since_by_well_id if well_id == 11}
 
 
 class _UseCase(ListBrigadesByNGDUIdUseCase):
@@ -97,7 +89,7 @@ class _UseCase(ListBrigadesByNGDUIdUseCase):
         return {}, {}  # CM здесь не при чём
 
 
-def test_brigade_status_spo_prs_none() -> None:
+def test_brigade_status_work_code_prs_none() -> None:
     use_case = _UseCase(
         unique_brigade_repository=_UniqueBrigades(),  # type: ignore[arg-type]
         repair_brigade_repository=_RepairBrigades(),  # type: ignore[arg-type]
@@ -111,9 +103,9 @@ def test_brigade_status_spo_prs_none() -> None:
     items = asyncio.run(use_case.execute(SimpleNamespace(ngdu_id=5)))  # type: ignore[arg-type]
 
     by_id = {i.id: i for i in items}
-    assert by_id[1].status == WELL_STATUS_SPO
+    assert by_id[1].status == "Работа [3]"
     assert by_id[1].legend is not None
-    assert by_id[1].legend.status == WELL_STATUS_SPO
+    assert by_id[1].legend.status == "Работа [3]"
     assert by_id[2].status == WELL_STATUS_PRS
     assert by_id[2].is_in_repair is True
     assert by_id[3].status is None
