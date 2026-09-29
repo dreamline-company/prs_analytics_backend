@@ -1,11 +1,11 @@
-"""Утренняя сборка суточных ведомостей R2 / R9 / R10 по подключённым НГДУ.
+"""Утренняя сборка суточных ведомостей R2 / R9 по подключённым НГДУ.
 
     python -m apps.detectors.tasks.build_daily_sheets.build_daily_sheets
     python -m apps.detectors.tasks.build_daily_sheets.build_daily_sheets \\
         --date 2026-08-31 --detector R9 --ngdu-id 5 --rebuild
 
 Celery ``detectors.daily_sheet.build`` в 07:30 местного за вчерашние сутки —
-после суточных прогонов R9 (04:10) и R10 (06:30) и ночных загрузок ABAI. Уже собранная
+после суточного прогона R9 (04:10) и ночных загрузок ABAI. Уже собранная
 ведомость пропускается, «нет телеметрии за дату» пишется в лог, а остальные
 пары НГДУ × правило собираются дальше. Ручной запрос за любую дату — через
 ``GET /detectors/v1/reports/daily-sheet``, он использует тот же сборщик.
@@ -171,7 +171,7 @@ async def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Build R2/R9/R10 daily sheets.")
+    parser = argparse.ArgumentParser(description="Build R2/R9 daily sheets.")
     parser.add_argument(
         "--date",
         type=date.fromisoformat,

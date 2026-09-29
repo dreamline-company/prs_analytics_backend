@@ -24,19 +24,18 @@ settings = get_settings()
 @router.get(
     "/daily-sheet",
     response_model=AppResponse[DailySheetDTO],
-    summary="Суточная ведомость отклонений по правилу R2 / R9 / R10 на НГДУ",
+    summary="Суточная ведомость отклонений по правилу R2 / R9 на НГДУ",
     description=(
         "Ведомость за дату — сохранённый артефакт: первый запрос собирает её "
         "из записанных эпизодов (правило не перезапускается) и кладёт docx в S3, "
-        "повторные отдают готовое. 409 — за дату нет телеметрии СДМО по НГДУ "
-        "(у R10 — замеров ЦИТС), ведомость не собирается, чтобы пустая таблица "
-        "не читалась как «отклонений нет». 404 — правило по этому НГДУ не "
-        "считается (R10 — только ЖМГ)."
+        "повторные отдают готовое. 409 — за дату нет телеметрии СДМО по НГДУ, "
+        "ведомость не собирается, чтобы пустая таблица не читалась как "
+        "«отклонений нет»."
     ),
 )
 async def get_daily_sheet(  # noqa: PLR0913
     session: Annotated[AsyncSession, Depends(get_app_session)],
-    detector_code: Annotated[SheetDetectorCode, Query(description="R2 | R9 | R10")],
+    detector_code: Annotated[SheetDetectorCode, Query(description="R2 | R9")],
     ngdu_id: Annotated[
         int,
         Query(ge=1, description="НГДУ — org.id из /org/v1/ngdus"),

@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 # Правила, по которым есть ведомость (см. services.daily_sheet.config).
-SheetDetectorCode = Literal["R2", "R9", "R10"]
+SheetDetectorCode = Literal["R2", "R9"]
 
 
 class GetDailySheetQuery(BaseModel):

@@ -1,4 +1,4 @@
-"""Письмо с суточными ведомостями R2/R9/R10 по НГДУ — чистая логика.
+"""Письмо с суточными ведомостями R2/R9 по НГДУ — чистая логика.
 
 Получатели берутся из настроек: общий список и переопределение по НГДУ.
 Письмо одно на НГДУ и дату, внутри вложения по каждому правилу; правило без
@@ -111,7 +111,8 @@ def letter_codes(letter: LetterInput) -> tuple[str, ...]:
     """Правила письма (вложенные и несформированные) в порядке ведомостей."""
     codes = {item.sheet.detector_code for item in letter.attachments}
     codes |= {item.detector_code for item in letter.missing}
-    return tuple(code for code in SHEET_DETECTOR_CODES if code in codes)
+    order = {code: index for index, code in enumerate(SHEET_DETECTOR_CODES)}
+    return tuple(sorted(codes, key=lambda code: (order.get(code, len(order)), code)))
 
 
 def body_for(letter: LetterInput) -> str:

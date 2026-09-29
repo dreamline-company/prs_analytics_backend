@@ -14,7 +14,7 @@ from apps.detectors.rod_breaks.tasks.run_incidents.run_incidents import (  # noq
     run_rod_break_incidents,
 )
 
-# Импорт регистрирует утреннюю сборку суточных ведомостей R2/R9/R10 по НГДУ.
+# Импорт регистрирует утреннюю сборку суточных ведомостей R2/R9 по НГДУ.
 from apps.detectors.tasks.build_daily_sheets.build_daily_sheets import (  # noqa: F401
     build_daily_sheets,
 )
@@ -28,7 +28,7 @@ from apps.detectors.tasks.generate_conclusion.generate_conclusion import (  # no
     generate_conclusion,
 )
 
-# Импорт регистрирует утреннюю рассылку суточных ведомостей R2/R9/R10 на почту.
+# Импорт регистрирует утреннюю рассылку суточных ведомостей R2/R9 на почту.
 from apps.detectors.tasks.mail_daily_sheets.mail_daily_sheets import (  # noqa: F401
     mail_daily_sheets,
 )
@@ -160,8 +160,8 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(minute=40),
         "kwargs": {"intraday": True},
     },
-    # Суточные ведомости R2/R9/R10 по подключённым НГДУ за вчера: после суточных
-    # прогонов R9/R10 и ночных загрузок ABAI. Уже собранные даты пропускаются;
+    # Суточные ведомости R2/R9 по подключённым НГДУ за вчера: после суточного
+    # прогона R9 и ночных загрузок ABAI. Уже собранные даты пропускаются;
     # запрос за произвольную дату идёт через API тем же сборщиком.
     "detectors-daily-sheets": {
         "task": "detectors.daily_sheet.build",

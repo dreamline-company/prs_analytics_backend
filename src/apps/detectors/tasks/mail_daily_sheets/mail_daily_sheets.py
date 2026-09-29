@@ -1,4 +1,4 @@
-"""Рассылка суточных ведомостей R2/R9/R10 по НГДУ на почту.
+"""Рассылка суточных ведомостей R2/R9 по НГДУ на почту.
 
     python -m apps.detectors.tasks.mail_daily_sheets.mail_daily_sheets
     python -m apps.detectors.tasks.mail_daily_sheets.mail_daily_sheets \\
@@ -369,7 +369,7 @@ async def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Mail R2/R9/R10 daily sheets.")
+    parser = argparse.ArgumentParser(description="Mail R2/R9 daily sheets.")
     parser.add_argument(
         "--date",
         type=date.fromisoformat,
