@@ -321,7 +321,19 @@ class SdmoFcDataRepository(
         self,
         well_ids: Sequence[int],
     ) -> dict[int, int]:
-        """Актуальное значение регистра 1999 «Статус (VLT SALT)» на скважину.
+        """Статус станции на скважину, без времени отсчёта.
+
+        См. ``get_last_vlt_status_with_time_by_well_ids``.
+        """
+        statuses = await self.get_last_vlt_status_with_time_by_well_ids(well_ids)
+        return {well_id: status for well_id, (status, _) in statuses.items()}
+
+    async def get_last_vlt_status_with_time_by_well_ids(
+        self,
+        well_ids: Sequence[int],
+    ) -> dict[int, tuple[int, datetime]]:
+        """Актуальное значение регистра 1999 «Статус (VLT SALT)» на скважину
+        и время отсчёта (``savetime``), из которого оно взято.
 
         Регистр приходит не в каждом отсчёте (примерно каждая десятая строка
         без него), поэтому берётся последняя заполненная строка среди
@@ -339,7 +351,8 @@ class SdmoFcDataRepository(
         не попадают.
 
         Значение отдаётся как есть (в источнике регистр Int32/Uint32):
-        1 — станция онлайн, 0 — не онлайн.
+        1 — станция онлайн, 0 — не онлайн. Время — не последний отсчёт станции,
+        а та строка, где регистр был заполнен.
         """
         if not well_ids:
             return {}
@@ -361,14 +374,18 @@ class SdmoFcDataRepository(
             .lateral("last_status")
         )
         stmt = (
-            select(SdmoStation.well_id, last_status.c.vlt_status)
+            select(
+                SdmoStation.well_id,
+                last_status.c.vlt_status,
+                last_status.c.savetime,
+            )
             .join(last_status, true())
             .where(SdmoStation.well_id.in_(well_ids))
             .distinct(SdmoStation.well_id)
             .order_by(SdmoStation.well_id, last_status.c.savetime.desc())
         )
         result = await self.session.execute(stmt)
-        return {row[0]: int(row[1]) for row in result.all()}
+        return {row[0]: (int(row[1]), row[2]) for row in result.all()}
 
     async def get_last_pump_parameters_by_stations(
         self,
