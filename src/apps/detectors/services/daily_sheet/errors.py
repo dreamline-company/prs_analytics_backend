@@ -36,3 +36,12 @@ class DailySheetDataNotReadyError(HttpError):
     message = "No SDMO telemetry for the NGDU on this date; sheet not built."
     code = "daily_sheet_data_not_ready"
     status_code = status.HTTP_409_CONFLICT
+
+
+class DailySheetNotApplicableError(HttpError):
+    """Правило по этому НГДУ не считается (R10 — только ЖМГ): пустая ведомость
+    читалась бы как «отклонений нет»."""
+
+    message = "The rule is not evaluated for this NGDU; sheet not built."
+    code = "daily_sheet_not_applicable"
+    status_code = status.HTTP_404_NOT_FOUND

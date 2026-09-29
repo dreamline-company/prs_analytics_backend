@@ -163,5 +163,6 @@ class GetDailySheetUseCase:
             top=content.get("top", []),
             attention=content.get("attention", []),
             rows=content.get("rows", []),
+            measure_requests=content.get("measure_requests", []),
             notes=content.get("notes", []),
         )

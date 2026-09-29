@@ -1,4 +1,4 @@
-"""Сборка суточной ведомости R2 / R9 по НГДУ на дату.
+"""Сборка суточной ведомости R2 / R9 / R10 по НГДУ на дату.
 
 Правило не перезапускается: читаются записанные эпизоды, состояние «на дату»
 восстанавливается по меткам времени, обогащение (дебиты, техрежим, ремонты,
@@ -13,6 +13,8 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.detectors.cits_events.config import WINDOW_D as CITS_WINDOW_D
+from apps.detectors.cits_events.incident_config import FINDING_STALE
 from apps.detectors.conclusion import catalog
 from apps.detectors.dto.internal.daily_sheet import (
     DailySheetCoverageDTO,
@@ -34,6 +36,7 @@ from apps.detectors.models.incident import DetectorIncident
 from apps.detectors.repositories import (
     DetectorConclusionRepository,
     DetectorCursorRepository,
+    DetectorFindingRepository,
     DetectorIncidentRepository,
     DetectorRepository,
 )
@@ -54,6 +57,7 @@ from apps.detectors.services.daily_sheet.config import (
     STATUS_LOOKBACK_DAYS,
     TELEMETRY_FRESH_DAYS,
     TOP_SIZE,
+    sheet_applies,
 )
 from apps.detectors.services.daily_sheet.context import (
     LevelInfo,
@@ -66,6 +70,7 @@ from apps.detectors.services.daily_sheet.errors import (
     DailySheetDataNotReadyError,
     DailySheetDateInFutureError,
     DailySheetDetectorNotFoundError,
+    DailySheetNotApplicableError,
 )
 from apps.detectors.services.daily_sheet.metrics import edge_means, window_medians
 from apps.detectors.services.daily_sheet.oil_fields import (
@@ -166,6 +171,7 @@ class DailySheetBuilder:
         self.incident_repo = DetectorIncidentRepository(session)
         self.cursor_repo = DetectorCursorRepository(session)
         self.conclusion_repo = DetectorConclusionRepository(session)
+        self.finding_repo = DetectorFindingRepository(session)
         self.sheet_repo = DetectorDailySheetRepository(session)
         self.station_repo = SdmoStationRepository(session)
         self.fc_data_repo = SdmoFcDataRepository(session)
@@ -192,13 +198,30 @@ class DailySheetBuilder:
             raise DailySheetDetectorNotFoundError(
                 details={"detector_code": target.detector_code},
             )
+        if not sheet_applies(target.detector_code, target.abai_ngdu_id):
+            raise DailySheetNotApplicableError(
+                details={
+                    "detector_code": target.detector_code,
+                    "ngdu_id": target.ngdu_id,
+                },
+            )
 
         day_start, day_end = day_bounds(target.sheet_date)
-        coverage = await self._coverage(
-            target,
-            day_end=day_end,
-            partial_day=target.sheet_date == today,
-        )
+        # R10 считается по замерам ЦИТС (source=wincc), а не по станциям СДМО.
+        by_cits = detector.source == "wincc"
+        if by_cits:
+            coverage = await self._cits_coverage(
+                target,
+                day_start=day_start,
+                day_end=day_end,
+                partial_day=target.sheet_date == today,
+            )
+        else:
+            coverage = await self._coverage(
+                target,
+                day_end=day_end,
+                partial_day=target.sheet_date == today,
+            )
         if coverage.stations_reporting == 0:
             raise DailySheetDataNotReadyError(
                 details={
@@ -230,6 +253,8 @@ class DailySheetBuilder:
             coverage,
             day_end=day_end,
         )
+        if by_cits:
+            sheet.measure_requests = await self._measure_requests(target)
         await self._store(sheet)
         logger.info(
             "Daily sheet %s ngdu=%s fields=%r date=%s: rows=%s file_id=%s",
@@ -286,6 +311,69 @@ class DailySheetBuilder:
             stations_processed=processed,
             partial_day=partial_day,
         )
+
+    async def _cits_coverage(
+        self,
+        target: SheetTarget,
+        *,
+        day_start: datetime,
+        day_end: datetime,
+        partial_day: bool,
+    ) -> DailySheetCoverageDTO:
+        """Охват по замерам ЦИТС: фонд правила — скважины НГДУ с замерами за его
+        окно, из них с замером за сутки; курсор правила — один на НГДУ."""
+        fund = await self.telemetry_repo.list_well_ids_with_rows(
+            target.abai_ngdu_id,
+            since=day_end - timedelta(days=CITS_WINDOW_D),
+            until=day_end,
+        )
+        if target.prefixes:
+            wells = await self.well_repo.list_by_ids(list(fund))
+            fund = {
+                well.id for well in wells if well_matches(well.name, target.prefixes)
+            }
+        reporting = fund & await self.telemetry_repo.list_well_ids_with_rows(
+            target.abai_ngdu_id,
+            since=day_start,
+            until=day_end,
+        )
+        cursors = await self.cursor_repo.get_map(
+            target.detector_code,
+            [target.abai_ngdu_id],
+        )
+        cursor = cursors.get(target.abai_ngdu_id)
+        processed = (
+            None
+            if cursor is None
+            else (len(fund) if cursor.last_event_at >= day_end else 0)
+        )
+        return DailySheetCoverageDTO(
+            source="cits",
+            stations_total=len(fund),
+            stations_reporting=len(reporting),
+            stations_processed=processed,
+            partial_day=partial_day,
+        )
+
+    async def _measure_requests(self, target: SheetTarget) -> list[str]:
+        """R10: «замер устарел» за дату — по строке на скважину, давние сверху."""
+        findings = await self.finding_repo.list_for_date(
+            detector_code=target.detector_code,
+            fix_date=target.sheet_date,
+            kinds=[FINDING_STALE],
+        )
+        if not findings:
+            return []
+        wells = await self.well_repo.list_by_ids([f.well_id for f in findings])
+        names = {well.id: well.name for well in wells}
+        items = [
+            (names.get(f.well_id, f"id:{f.well_id}"), f.payload or {})
+            for f in findings
+            if not target.prefixes
+            or well_matches(names.get(f.well_id, ""), target.prefixes)
+        ]
+        items.sort(key=lambda item: -(item[1].get("age_d") or 0))
+        return [texts.measure_request_text(name, payload) for name, payload in items]
 
     # --- обогащение ----------------------------------------------------------
 
@@ -651,7 +739,14 @@ class DailySheetBuilder:
                     file_id=db_file.id,
                     content=sheet.model_dump(
                         mode="json",
-                        include={"oil_fields", "top", "attention", "rows", "notes"},
+                        include={
+                            "oil_fields",
+                            "top",
+                            "attention",
+                            "rows",
+                            "measure_requests",
+                            "notes",
+                        },
                     ),
                 ),
             )

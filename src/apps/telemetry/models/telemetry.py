@@ -8,9 +8,15 @@ from shared.database.sql.models import AppBaseModel, IntPkMixin
 
 class Telemetry(AppBaseModel, IntPkMixin):
     __tablename__ = "telemetry_well"
-    # Последний замер скважины (LATERAL по скважине) и ряды за период.
+    # Последний замер скважины (LATERAL по скважине) и ряды за период;
+    # окно НГДУ по времени — перечитка источника загрузчиком WinCC и R10.
     __table_args__ = (
         Index("ix_telemetry_well_well_id_date_time", "well_id", "date_time"),
+        Index(
+            "ix_telemetry_well_abai_ngdu_id_date_time",
+            "abai_ngdu_id",
+            "date_time",
+        ),
     )
 
     well_id: Mapped[int] = mapped_column(

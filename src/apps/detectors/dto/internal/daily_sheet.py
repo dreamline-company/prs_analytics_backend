@@ -1,4 +1,4 @@
-"""Суточная ведомость отклонений R2/R9 для чтения наружу и хранения в JSONB."""
+"""Суточная ведомость отклонений R2/R9/R10 для чтения наружу и хранения в JSONB."""
 
 from datetime import date, datetime
 
@@ -6,9 +6,16 @@ from pydantic import BaseModel, ConfigDict
 
 
 class DailySheetCoverageDTO(BaseModel):
-    """Охват суток: без него пустая таблица неотличима от «данные не обработаны»."""
+    """Охват суток: без него пустая таблица неотличима от «данные не обработаны».
 
-    # Станции НГДУ, привязанные к скважинам.
+    Для СДМО (R2, R9) счёт — по станциям, для ЦИТС (R10) — по скважинам с
+    замерами: ``stations_*`` тогда означают скважины.
+    """
+
+    # Откуда охват: sdmo — станции управления, cits — замеры дебита ЦИТС.
+    source: str = "sdmo"
+    # Станции НГДУ, привязанные к скважинам (cits — скважины с замерами за
+    # окно правила).
     stations_total: int
     # Из них дали хотя бы один отсчёт за сутки ведомости.
     stations_reporting: int
@@ -77,4 +84,6 @@ class DailySheetDTO(BaseModel):
     top: list[DailySheetTopItemDTO] = []
     attention: list[str] = []
     rows: list[DailySheetRowDTO] = []
+    # R10: «замер устарел, запросить замер» — по строке на скважину.
+    measure_requests: list[str] = []
     notes: list[str] = []

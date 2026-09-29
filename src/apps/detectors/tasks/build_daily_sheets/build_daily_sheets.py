@@ -22,7 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.celery_app import celery_app, run_async
 from apps.detectors.dto.queries.daily_sheet import GetDailySheetQuery
 from apps.detectors.services.daily_sheet.builder import local_now
-from apps.detectors.services.daily_sheet.config import SHEET_DETECTOR_CODES
+from apps.detectors.services.daily_sheet.config import (
+    SHEET_DETECTOR_CODES,
+    sheet_applies,
+)
 from apps.detectors.services.daily_sheet.errors import DailySheetDataNotReadyError
 from apps.detectors.services.daily_sheet.targets import list_target_ngdus
 from apps.detectors.use_cases.get_daily_sheet import GetDailySheetUseCase
@@ -84,6 +87,8 @@ class BuildDailySheets:
             use_case = GetDailySheetUseCase(session, storage=storage)
             for org in orgs:
                 for detector_code in self.detector_codes:
+                    if not sheet_applies(detector_code, org.abai_id):
+                        continue
                     await self._build_one(
                         use_case,
                         session,

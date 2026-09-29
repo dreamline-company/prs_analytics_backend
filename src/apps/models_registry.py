@@ -8,6 +8,7 @@ from apps.detectors.models.daily_sheet import (
     DetectorDailySheet,
     DetectorDailySheetDelivery,
 )
+from apps.detectors.models.finding import DetectorFinding
 from apps.detectors.models.incident import (
     Detector,
     DetectorCursor,
@@ -46,6 +47,7 @@ from apps.wells.models.status_history import WellStatusHistory
 from apps.wells.models.well import Well
 from apps.wells.models.well_expl import WellExpl, WellExplType
 from apps.wells.models.well_org import WellOrg
+from apps.wells.models.well_status import WellStatus, WellStatusReason, WellStatusType
 
 __all__ = (
     "NGDU",
@@ -58,6 +60,7 @@ __all__ = (
     "DetectorCursor",
     "DetectorDailySheet",
     "DetectorDailySheetDelivery",
+    "DetectorFinding",
     "DetectorIncident",
     "Dynamogram",
     "File",
@@ -94,7 +97,10 @@ __all__ = (
     "WellExpl",
     "WellExplType",
     "WellOrg",
+    "WellStatus",
     "WellStatusHistory",
+    "WellStatusReason",
+    "WellStatusType",
 )
 
 from shared.database.sql.models import AppBaseModel

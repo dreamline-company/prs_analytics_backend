@@ -21,6 +21,7 @@ from apps.detectors.services.daily_sheet.config import (
     FOOTER_NOTES,
     FOOTER_SIGNATURE,
     SHEET_SUBTITLE,
+    SHEET_SUBTITLES,
     SHEET_TITLE,
     TABLE_HEADERS,
     TABLE_WIDTHS_CM,
@@ -42,7 +43,11 @@ def render_docx(sheet: DailySheetDTO) -> BytesIO:
     _setup_page(document)
 
     _paragraph(document, SHEET_TITLE, bold=True, size=14, center=True)
-    _paragraph(document, SHEET_SUBTITLE, center=True)
+    _paragraph(
+        document,
+        SHEET_SUBTITLES.get(sheet.detector_code, SHEET_SUBTITLE),
+        center=True,
+    )
     rule = sheet.detector_code
     if sheet.detector_name_ru:
         rule += f" «{sheet.detector_name_ru}»"
@@ -74,6 +79,11 @@ def render_docx(sheet: DailySheetDTO) -> BytesIO:
             bold=True,
         )
 
+    if sheet.measure_requests:
+        _paragraph(document, "Запросить замер (замер устарел)", bold=True)
+        for line in sheet.measure_requests:
+            _paragraph(document, line, size=9)
+
     for note in (*sheet.notes, *FOOTER_NOTES):
         _paragraph(document, note, size=8)
     _paragraph(document, FOOTER_SIGNATURE, size=9)
@@ -88,6 +98,8 @@ def _coverage_line(sheet: DailySheetDTO) -> str:
     coverage = sheet.coverage
     if coverage is None:
         return "Охват: нет данных."
+    if coverage.source == "cits":
+        return _cits_coverage_line(sheet)
     scope = "станций выбранных месторождений" if sheet.oil_fields else "станций НГДУ"
     text = (
         f"Охват: телеметрию за сутки дали {coverage.stations_reporting} из "
@@ -95,6 +107,25 @@ def _coverage_line(sheet: DailySheetDTO) -> str:
     )
     if coverage.stations_processed is not None:
         text += f"; правило обработало {coverage.stations_processed}"
+    text += "."
+    if coverage.partial_day:
+        text += " Сутки не завершены — данные неполные, ведомость предварительная."
+    return text
+
+
+def _cits_coverage_line(sheet: DailySheetDTO) -> str:
+    coverage = sheet.coverage
+    scope = "выбранных месторождений" if sheet.oil_fields else "НГДУ"
+    text = (
+        f"Охват: замеры ЦИТС за сутки есть у {coverage.stations_reporting} из "
+        f"{coverage.stations_total} скважин {scope} с замерами за окно правила"
+    )
+    if coverage.stations_processed is not None:
+        text += (
+            "; сутки правилом обработаны"
+            if coverage.stations_processed
+            else "; сутки правилом ещё не обработаны"
+        )
     text += "."
     if coverage.partial_day:
         text += " Сутки не завершены — данные неполные, ведомость предварительная."

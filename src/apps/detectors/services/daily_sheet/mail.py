@@ -14,6 +14,7 @@ from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 
 from apps.detectors.dto.internal.daily_sheet import DailySheetDTO
+from apps.detectors.services.daily_sheet.config import SHEET_DETECTOR_CODES
 from shared.constants.ngdu import AbaiNGDUIDsEnum
 
 _SPLIT_RE = re.compile(r"[,\s;]+")
@@ -95,11 +96,23 @@ class LetterInput:
     missing: list[MissingSheet] = field(default_factory=list)
 
 
-def subject_for(sheet_date: date, ngdu_name: str) -> str:
+def subject_for(
+    sheet_date: date,
+    ngdu_name: str,
+    codes: tuple[str, ...] = ("R2", "R9"),
+) -> str:
     return (
-        f"Суточная ведомость отклонений R2/R9 за {sheet_date:%d.%m.%Y} — "
-        f"НГДУ «{ngdu_name}»"
+        f"Суточная ведомость отклонений {'/'.join(codes)} за "
+        f"{sheet_date:%d.%m.%Y} — НГДУ «{ngdu_name}»"
     )
+
+
+def letter_codes(letter: LetterInput) -> tuple[str, ...]:
+    """Правила письма (вложенные и несформированные) в порядке ведомостей."""
+    codes = {item.sheet.detector_code for item in letter.attachments}
+    codes |= {item.detector_code for item in letter.missing}
+    order = {code: index for index, code in enumerate(SHEET_DETECTOR_CODES)}
+    return tuple(sorted(codes, key=lambda code: (order.get(code, len(order)), code)))
 
 
 def body_for(letter: LetterInput) -> str:
@@ -115,7 +128,12 @@ def body_for(letter: LetterInput) -> str:
             rule += f" «{sheet.detector_name_ru}»"
         lines.append(f"{rule}: строк {sheet.rows_count}, файл {item.filename}.")
         coverage = sheet.coverage
-        if coverage is not None:
+        if coverage is not None and coverage.source == "cits":
+            lines.append(
+                f"  Охват: замеры ЦИТС за сутки есть у {coverage.stations_reporting} "
+                f"из {coverage.stations_total} скважин.",
+            )
+        elif coverage is not None:
             lines.append(
                 f"  Охват: телеметрию дали {coverage.stations_reporting} из "
                 f"{coverage.stations_total} станций.",
@@ -143,7 +161,12 @@ def build_message(
     sender: str | None = None,
 ) -> EmailMessage:
     message = EmailMessage()
-    message["Subject"] = subject_for(letter.sheet_date, letter.ngdu_name)
+    codes = letter_codes(letter)
+    message["Subject"] = (
+        subject_for(letter.sheet_date, letter.ngdu_name, codes)
+        if codes
+        else subject_for(letter.sheet_date, letter.ngdu_name)
+    )
     message["To"] = ", ".join(recipients)
     if sender:
         message["From"] = sender

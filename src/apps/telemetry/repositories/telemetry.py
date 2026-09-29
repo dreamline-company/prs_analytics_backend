@@ -117,6 +117,43 @@ class TelemetryRepository(
         )
         return tms[0] if tms else None
 
+    async def list_keys_since(
+        self,
+        abai_ngdu_id: int,
+        since: datetime,
+    ) -> set[tuple[int, datetime]]:
+        """Пары (скважина, время замера) НГДУ начиная с ``since``.
+
+        Загрузчик WinCC перечитывает окно источника и по этим ключам
+        отсекает уже загруженные замеры.
+        """
+        result = await self.session.execute(
+            select(Telemetry.well_id, Telemetry.date_time).where(
+                Telemetry.abai_ngdu_id == abai_ngdu_id,
+                Telemetry.date_time >= since,
+            ),
+        )
+        return {(well_id, date_time) for well_id, date_time in result.all()}
+
+    async def list_well_ids_with_rows(
+        self,
+        abai_ngdu_id: int,
+        *,
+        since: datetime,
+        until: datetime,
+    ) -> set[int]:
+        """Скважины НГДУ, у которых есть замеры за [since, until)."""
+        result = await self.session.execute(
+            select(Telemetry.well_id)
+            .where(
+                Telemetry.abai_ngdu_id == abai_ngdu_id,
+                Telemetry.date_time >= since,
+                Telemetry.date_time < until,
+            )
+            .distinct(),
+        )
+        return set(result.scalars().all())
+
     async def get_last_by_well_ids_before(
         self,
         well_ids: Sequence[int],

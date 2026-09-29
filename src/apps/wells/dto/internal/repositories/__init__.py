@@ -24,6 +24,14 @@ from apps.wells.dto.internal.repositories.well_org import (
     CreateWellOrgDTO,
     UpdateWellOrgDTO,
 )
+from apps.wells.dto.internal.repositories.well_status import (
+    CreateWellStatusDTO,
+    CreateWellStatusReasonDTO,
+    CreateWellStatusTypeDTO,
+    UpdateWellStatusDTO,
+    UpdateWellStatusReasonDTO,
+    UpdateWellStatusTypeDTO,
+)
 
 __all__ = (
     "CreateCoordDTO",
@@ -34,7 +42,10 @@ __all__ = (
     "CreateWellExplDTO",
     "CreateWellExplTypeDTO",
     "CreateWellOrgDTO",
+    "CreateWellStatusDTO",
     "CreateWellStatusHistoryDTO",
+    "CreateWellStatusReasonDTO",
+    "CreateWellStatusTypeDTO",
     "UpdateCoordDTO",
     "UpdateDynamogramDTO",
     "UpdateSPODTO",
@@ -43,5 +54,8 @@ __all__ = (
     "UpdateWellExplDTO",
     "UpdateWellExplTypeDTO",
     "UpdateWellOrgDTO",
+    "UpdateWellStatusDTO",
     "UpdateWellStatusHistoryDTO",
+    "UpdateWellStatusReasonDTO",
+    "UpdateWellStatusTypeDTO",
 )

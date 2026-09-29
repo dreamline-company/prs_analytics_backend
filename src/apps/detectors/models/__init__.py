@@ -1,3 +1,4 @@
+from apps.detectors.models.finding import DetectorFinding
 from apps.detectors.models.incident import (
     Detector,
     DetectorCursor,
@@ -7,5 +8,6 @@ from apps.detectors.models.incident import (
 __all__ = (
     "Detector",
     "DetectorCursor",
+    "DetectorFinding",
     "DetectorIncident",
 )

@@ -21,6 +21,7 @@ from apps.detectors.services.daily_sheet.config import (
     SEVERITY_MARKED,
     SEVERITY_MODERATE,
     SEVERITY_STRONG,
+    sheet_applies,
 )
 from apps.detectors.services.daily_sheet.context import (
     LevelInfo,
@@ -430,3 +431,113 @@ def test_resolve_oil_fields_by_name_or_prefix_case_insensitive() -> None:
     assert oil_fields_label(found) == "месторождения BLG, Гран (GRN)"
     assert oil_fields_label(found[:1]) == "месторождение BLG"
     assert oil_fields_label([]) == ""
+
+
+# --- R10: замеры ЦИТС ------------------------------------------------------------
+
+
+def _r10_incident(**payload) -> SimpleNamespace:  # noqa: ANN003
+    base = {
+        "abai_ngdu_id": 11,
+        "event": 1,
+        "klass": "отклонение от техрежима, свежее",
+        "q_last": 12.0,
+        "rezhim": 30.0,
+        "dev": -0.6,
+        "n_series": 3,
+        "series_from": "2026-08-29",
+        "prev_dev": 0.0,
+        "su": None,
+        "note": "",
+    }
+    return _incident(
+        detector_code="R10",
+        reason_code="liquid_loss",
+        entity_id=None,
+        level="warning",
+        escalated_at=None,
+        opened_at=datetime(2026, 8, 29),
+        last_seen_at=datetime(2026, 9, 1),
+        payload={**base, **payload},
+    )
+
+
+def test_r10_sheet_only_for_its_ngdu() -> None:
+    assert sheet_applies("R10", 11)
+    assert not sheet_applies("R10", 12)
+    assert sheet_applies("R9", 12)
+
+
+def test_r10_severity_by_deviation_and_zeros() -> None:
+    assert severity_key("R10", {"event": 2, "dev": None}) == SEVERITY_STRONG
+    assert severity_key("R10", {"event": 1, "dev": -0.8}) == SEVERITY_STRONG
+    assert severity_key("R10", {"event": 1, "dev": -0.55}) == SEVERITY_MARKED
+    assert severity_key("R10", {"event": 1, "dev": -0.35}) == SEVERITY_MODERATE
+
+
+def test_r10_deviation_and_basis_texts() -> None:
+    drop = _context(_r10_incident(), cause="Снижение дебита (R10)")
+
+    assert texts.deviation_text(drop, day_end=_DAY_END, partial_day=False) == (
+        "снижение дебита жидкости по замерам ЦИТС (отклонение от техрежима, "
+        "свежее), выраженная, период 29.08 – 31.08, 3 сут, продолжается"
+    )
+    assert texts.basis_sentences(drop)[0] == (
+        "Qж 12 при техрежиме 30 (-60 %), замеров за порогом подряд: 3 с 29.08; "
+        "до серии +0 % (ЦИТС)"
+    )
+
+    zeros = _context(
+        _r10_incident(
+            event=2,
+            klass="нулевые замеры, СУ работает",
+            dev=None,
+            q_last=0.0,
+            n_series=2,
+            series_from="2026-08-30",
+            su="СУ работает",
+            note="доля работы СУ в дни нулей: 100%, 100%",
+        ),
+    )
+    assert texts.basis_sentences(zeros)[0] == (
+        "нулевых замеров подряд: 2 с 30.08, техрежим 30; СУ работает; "
+        "доля работы СУ в дни нулей: 100%, 100% (ЦИТС)"
+    )
+
+
+def test_r10_measure_request_text() -> None:
+    payload = {
+        "last_day": "2026-08-03",
+        "age_d": 28,
+        "su": "СУ стоит, статуса простоя нет",
+        "note": "периодическая эксплуатация",
+    }
+
+    assert texts.measure_request_text("UVK_0424", payload) == (
+        "UVK_0424 — последний замер 03.08 (28 сут назад); "
+        "СУ стоит, статуса простоя нет; периодическая эксплуатация"
+    )
+
+
+def test_render_r10_sheet_with_cits_coverage_and_measure_requests() -> None:
+    sheet = _sheet([]).model_copy(
+        update={
+            "detector_code": "R10",
+            "detector_name_ru": "Снижение дебита по замерам ЦИТС",
+            "coverage": DailySheetCoverageDTO(
+                source="cits",
+                stations_total=630,
+                stations_reporting=400,
+                stations_processed=630,
+            ),
+            "measure_requests": ["UVK_0424 — последний замер 03.08 (56 сут назад)"],
+        },
+    )
+
+    xml = _document_xml(render_docx(sheet))
+
+    assert "по замерам ЦИТС относительно техрежима" in xml
+    assert "замеры ЦИТС за сутки есть у 400 из 630 скважин" in xml
+    assert "сутки правилом обработаны" in xml
+    assert "Запросить замер" in xml
+    assert "UVK_0424" in xml

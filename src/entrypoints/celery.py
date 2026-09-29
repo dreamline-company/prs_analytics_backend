@@ -2,7 +2,11 @@ from celery.schedules import crontab
 
 from apps.celery_app import celery_app
 
-# Импорт регистрирует celery-задачи детекторов (диспетчер, подметальщик, R2, R9).
+# Импорт регистрирует celery-задачи детекторов (диспетчер, подметальщик, R2,
+# R9, R10).
+from apps.detectors.cits_events.tasks.run_incidents.run_incidents import (  # noqa: F401
+    run_cits_events_incidents,
+)
 from apps.detectors.load_imbalance.tasks.run_incidents.run_incidents import (  # noqa: F401
     run_load_imbalance_incidents,
 )
@@ -80,6 +84,11 @@ from apps.wells.tasks.load_well_expl.load_well_expl import (  # noqa: F401
 from apps.wells.tasks.load_well_orgs.load_well_orgs import (  # noqa: F401
     load_well_orgs_incremental,
 )
+
+# Импорт регистрирует таску инкрементальной загрузки статусов скважин из ABAI.
+from apps.wells.tasks.load_well_status.load_well_status import (  # noqa: F401
+    load_well_status_incremental,
+)
 from core.settings import get_settings
 
 settings = get_settings()
@@ -136,6 +145,21 @@ celery_app.conf.beat_schedule = {
         "task": "detectors.load_imbalance.run_incidents",
         "schedule": crontab(hour=4, minute=10),
     },
+    # R10 — события по замерам ЦИТС относительно техрежима за вчерашние сутки:
+    # после техрежима (05:45) и часовых загрузок замеров WinCC и статусов
+    # ABAI. Пропущенные сутки раннер догоняет сам по курсору НГДУ.
+    "detectors-cits-events-daily": {
+        "task": "detectors.cits_events.run_incidents",
+        "schedule": crontab(hour=6, minute=30),
+    },
+    # R10 по сегодняшним неполным суткам — раз в час, после часовых загрузок
+    # замеров (:20) и статусов (:10): сигнал в тот же день. Только открывает и
+    # повышает эпизоды; до утреннего расчёта вчерашних суток пропускается.
+    "detectors-cits-events-intraday": {
+        "task": "detectors.cits_events.run_incidents",
+        "schedule": crontab(minute=40),
+        "kwargs": {"intraday": True},
+    },
     # Суточные ведомости R2/R9 по подключённым НГДУ за вчера: после суточного
     # прогона R9 и ночных загрузок ABAI. Уже собранные даты пропускаются;
     # запрос за произвольную дату идёт через API тем же сборщиком.
@@ -162,6 +186,13 @@ celery_app.conf.beat_schedule = {
     "wells-well-expl-incremental": {
         "task": "wells.well_expl.incremental_load",
         "schedule": crontab(hour=5, minute=30),
+    },
+    # Статусы скважин из ABAI (в работе / простой с причиной / периодическая)
+    # — раз в час: новые id + правки dend открытых интервалов. Их читает R10,
+    # чтобы не показывать скважины, где простой уже поставили технологи.
+    "wells-well-status-incremental": {
+        "task": "wells.well_status.incremental_load",
+        "schedule": crontab(minute=10),
     },
     # Ежедневная догрузка ГДИС из ABAI: метрики -> исследования -> значения,
     # плюс перечитывание исследований за 90 дней (заключения дописывают позже).

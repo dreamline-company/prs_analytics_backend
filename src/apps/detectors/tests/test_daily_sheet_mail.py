@@ -118,3 +118,36 @@ def test_build_message_has_attachments_and_mentions_missing_sheet() -> None:
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
     assert attachments[0].get_payload(decode=True) == b"PK\x03\x04docx"
+
+
+def test_letter_with_r10_names_all_rules_and_cits_coverage() -> None:
+    r10 = _sheet("R10", 2).model_copy(
+        update={
+            "detector_name_ru": "Снижение дебита по замерам ЦИТС",
+            "coverage": DailySheetCoverageDTO(
+                source="cits",
+                stations_total=630,
+                stations_reporting=400,
+            ),
+        },
+    )
+    letter = LetterInput(
+        sheet_date=date(2026, 9, 20),
+        ngdu_name="Жайыкмунайгаз",
+        attachments=[
+            SheetAttachment(sheet=_sheet("R9", 1), filename="r9.docx", payload=b"1"),
+            SheetAttachment(sheet=r10, filename="r10.docx", payload=b"2"),
+        ],
+        missing=[MissingSheet("R2", "за сутки нет телеметрии СДМО")],
+    )
+
+    message = build_message(letter, recipients=["a@x.kz"])
+
+    assert message["Subject"] == subject_for(
+        date(2026, 9, 20),
+        "Жайыкмунайгаз",
+        ("R2", "R9", "R10"),
+    )
+    assert "R2/R9/R10" in message["Subject"]
+    body = message.get_body(preferencelist=("plain",)).get_content()
+    assert "замеры ЦИТС за сутки есть у 400 из 630 скважин" in body

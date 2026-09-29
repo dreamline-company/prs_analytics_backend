@@ -22,6 +22,8 @@ CAUSES: dict[tuple[str, str], str] = {
     ("R9", "load_imbalance"): (
         "Потеря полезной нагрузки на ходе — утечка / перекос (R9 / load_imbalance)"
     ),
+    # Для ведомости: заключения по R10 не генерятся (нет в CONCLUSION_DETECTOR_CODES).
+    ("R10", "liquid_loss"): "Снижение дебита жидкости по замерам (R10 / liquid_loss)",
 }
 
 # Приоритеты шагов: машинный код + подпись для UI.
