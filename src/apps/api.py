@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from core.settings import get_settings
 
+from .compensation.routers.api import router as compensation_router_api
 from .detectors.routers.api import router as detectors_router_api
 from .files.routers.api import router as files_router_api
 from .kpi.routers.api import router as kpi_router_api
@@ -19,3 +20,4 @@ server_router.include_router(org_router_api)
 server_router.include_router(files_router_api)
 server_router.include_router(detectors_router_api)
 server_router.include_router(kpi_router_api)
+server_router.include_router(compensation_router_api)
