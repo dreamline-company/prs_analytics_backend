@@ -160,6 +160,7 @@ async def get_well_matrix_incidents(
             well_org_repository=WellOrgRepository(session=app_session),
             oil_field_repository=OilFieldRepository(session=app_session),
         ),
+        org_repository=OrgRepository(session=app_session),
         well_expl_repository=WellExplRepository(session=app_session),
         well_incident_status_service=WellIncidentStatusService(
             incident_repository=DetectorIncidentRepository(session=app_session),

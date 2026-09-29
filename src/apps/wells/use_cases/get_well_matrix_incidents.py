@@ -4,9 +4,14 @@
 идёт ли ремонт. Всё считается батчами — на НГДУ приходятся сотни скважин, и
 запрос на скважину превратил бы матрицу в сотни round-trip'ов. Необязательный
 фильтр по месторождению применяется в ``NGDUWellsService`` до начала батчей.
+
+Для Кайнармунайгаза матрица жёстко ограничена месторождением VMB — решение
+владельца; остальные эндпоинты по скважинам НГДУ это не затрагивает.
 """
 
 from apps.detectors.services import WellIncidentStatusService
+from apps.org.repositories.org import OrgRepository
+from apps.org.services import wells_with_prefix
 from apps.repairs.services import CurrentRepairService
 from apps.telemetry.repositories.sdmo import SdmoFcDataRepository
 from apps.telemetry.services import WellRatesService
@@ -19,6 +24,10 @@ from apps.wells.dto.internal.well_matrix_incidents import (
 from apps.wells.dto.queries.well import GetWellMatrixIncidentsQuery
 from apps.wells.repositories.well_expl import WellExplRepository
 from apps.wells.services import NGDUWellsService
+from shared.constants.ngdu import AbaiNGDUIDsEnum
+
+# Кайнармунайгаз в матрице — только скважины этого месторождения.
+KMG_OIL_FIELD_PREFIX = "VMB"
 
 
 class GetWellMatrixIncidentsUseCase:
@@ -26,6 +35,7 @@ class GetWellMatrixIncidentsUseCase:
         self,
         *,
         ngdu_wells_service: NGDUWellsService,
+        org_repository: OrgRepository,
         well_expl_repository: WellExplRepository,
         well_incident_status_service: WellIncidentStatusService,
         current_repair_service: CurrentRepairService,
@@ -33,6 +43,7 @@ class GetWellMatrixIncidentsUseCase:
         sdmo_fc_data_repository: SdmoFcDataRepository,
     ) -> None:
         self.ngdu_wells_service = ngdu_wells_service
+        self.org_repository = org_repository
         self.well_expl_repository = well_expl_repository
         self.well_incident_status_service = well_incident_status_service
         self.current_repair_service = current_repair_service
@@ -47,6 +58,9 @@ class GetWellMatrixIncidentsUseCase:
             query.ngdu_id,
             oil_field_id=query.oil_field_id,
         )
+        ngdu = await self.org_repository.get_by_id(query.ngdu_id)
+        if ngdu is not None and ngdu.abai_id == AbaiNGDUIDsEnum.KMG:
+            wells = wells_with_prefix(wells, KMG_OIL_FIELD_PREFIX)
         if not wells:
             return []
 
