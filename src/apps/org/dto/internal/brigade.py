@@ -16,7 +16,7 @@ class BrigadeLegendDTO(BaseModel):
     well: WellShortDTO
     repair: RepairDTO
     dangers: list[BrigadeDangerDTO]
-    # то же, что BrigadeDTO.status — «СПО» / «ПРС» по скважине текущего ремонта
+    # то же, что BrigadeDTO.status — «Работа [n]» / «ПРС» по скважине текущего ремонта
     status: str | None = None
 
 
@@ -42,8 +42,9 @@ class BrigadeDTO(BaseModel):
     is_in_repair: bool = False
     repair_id: int | None = None
     is_frequent_repair: bool = False
-    # «СПО» — на скважине текущего ремонта идёт живой замер КБРС, «ПРС» — бригада
-    # на незавершённом ремонте без СПО, None — бригада не в ремонте.
+    # «Работа [n]» — код последней работы из замеров КБРС на скважине текущего
+    # ремонта, «ПРС» — бригада на незавершённом ремонте, кодов ещё нет,
+    # None — бригада не в ремонте.
     status: str | None = None
     legend: BrigadeLegendDTO | None = None
 

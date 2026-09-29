@@ -1,20 +1,18 @@
-"""Статус скважины в матрице: СПО при живом замере, ПРС при ремонте, иначе пусто."""
+"""Статус скважины в матрице: «Работа [n]» по коду работы за ремонт, «ПРС» при
+ремонте без кодов, иначе пусто.
+"""
 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
 
-from apps.wells.dto.internal.well_matrix import WELL_STATUS_PRS, WELL_STATUS_SPO
+from apps.wells.dto.internal.well_matrix import WELL_STATUS_PRS
 from apps.wells.use_cases.get_wells_matrix import GetWellsMatrixUseCase
 
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
 WELLS = [
-    SimpleNamespace(id=1, abai_id=1001, name="BLG_0001"),  # ремонт + живая СПО
+    SimpleNamespace(id=1, abai_id=1001, name="BLG_0001"),  # ремонт + код работы
     SimpleNamespace(id=2, abai_id=1002, name="BLG_0002"),  # только ремонт
     SimpleNamespace(id=3, abai_id=1003, name="BLG_0003"),  # ничего
 ]
@@ -60,17 +58,14 @@ class _RepairBrigades:
 
 class _Spo:
     def __init__(self) -> None:
-        self.calls: list[tuple[list[int], datetime, timedelta]] = []
+        self.calls: list[dict[int, datetime]] = []
 
-    async def list_well_ids_with_live_measures(
+    async def map_last_work_codes(
         self,
-        well_ids: Sequence[int],
-        *,
-        now: datetime,
-        grace: timedelta,
-    ) -> set[int]:
-        self.calls.append((sorted(well_ids), now, grace))
-        return {1}
+        since_by_well_id: dict[int, datetime],
+    ) -> dict[int, int]:
+        self.calls.append(dict(since_by_well_id))
+        return {1: 31}
 
 
 def _use_case(spo: _Spo) -> GetWellsMatrixUseCase:
@@ -85,18 +80,18 @@ def _use_case(spo: _Spo) -> GetWellsMatrixUseCase:
     )
 
 
-def test_status_spo_over_prs_over_nothing() -> None:
+def test_status_work_code_over_prs_over_nothing() -> None:
     spo = _Spo()
     query = SimpleNamespace(ngdu_id=4)
 
     items = asyncio.run(_use_case(spo).execute(query))  # type: ignore[arg-type]
 
     by_name = {i.name: i for i in items}
-    assert by_name["BLG_0001"].status == WELL_STATUS_SPO
+    assert by_name["BLG_0001"].status == "Работа [31]"
     assert by_name["BLG_0001"].is_on_repair is True
     assert by_name["BLG_0002"].status == WELL_STATUS_PRS
     assert by_name["BLG_0003"].status is None
     assert by_name["BLG_0003"].is_on_repair is False
-    # репозиторий СПО спрашивают по локальным id всех скважин НГДУ
-    assert spo.calls
-    assert spo.calls[0][0] == [1, 2, 3]
+    # коды спрашивают только по скважинам в ремонте — с начала их ремонта
+    start = datetime(2026, 9, 20, 8, 0)  # noqa: DTZ001
+    assert spo.calls == [{1: start, 2: start}]

@@ -95,8 +95,12 @@ class ListBrigadesByNGDUIdUseCase:
         frequent_repair_abai_well_ids = await self._frequent_repair_abai_well_ids(
             active_repair_by_brigade,
         )
-        live_spo_well_ids = await self.well_status_service.live_spo_well_ids(
-            w.id for w in wells_by_repair_id.values()
+        work_codes = await self.well_status_service.work_codes(
+            {
+                wells_by_repair_id[repair.id].id: repair
+                for repair in active_repair_by_brigade.values()
+                if repair.id in wells_by_repair_id
+            },
         )
 
         result: list[BrigadeDTO] = []
@@ -112,8 +116,8 @@ class ListBrigadesByNGDUIdUseCase:
                 )
                 well = wells_by_repair_id.get(active_repair.id)
                 dto.status = WellStatusService.status(
-                    is_spo_live=well is not None and well.id in live_spo_well_ids,
                     active_repair=active_repair,
+                    work_code=work_codes.get(well.id) if well is not None else None,
                 )
                 if well is not None:
                     screens = active_dangers_by_brigade.get(brigade.id, [])

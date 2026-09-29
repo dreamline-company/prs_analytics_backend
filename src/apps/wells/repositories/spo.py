@@ -1,11 +1,12 @@
-from collections.abc import Sequence
-from datetime import datetime, timedelta
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import BigInteger, DateTime, column, func, select, values
 
 from apps.kbrs.models.measure import KbrsMeasure
 from apps.wells.dto.internal.repositories.spo import CreateSPODTO, UpdateSPODTO
 from apps.wells.models.spo import SPO
+from apps.wells.models.spo_event import SPOEvent
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
 
@@ -22,34 +23,37 @@ class SPORepository(
             ),
         )
 
-    async def list_well_ids_with_live_measures(
+    async def map_last_work_codes(
         self,
-        well_ids: Sequence[int],
-        *,
-        now: datetime,
-        grace: timedelta,
-    ) -> set[int]:
-        """Скважины, у которых СПО ещё идёт.
+        since_by_well_id: Mapping[int, datetime],
+    ) -> dict[int, int]:
+        """Код последней работы по скважине — из СПО не раньше её момента.
 
-        Живым считается замер КБРС, чья последняя точка графика (``end_time``)
-        не старше ``grace`` от ``now`` — тот же критерий, по которому опросчик
-        продолжает перечитывать замер. Замеры со сбитыми часами прибора
-        (``start_time`` в будущем) не учитываются.
+        СПО учитывается, если её замер шёл после ``since`` (у СПО без замера
+        опросчика — начался). События СПО пишутся по порядку времени, поэтому
+        последнее — с наибольшим ``id``.
         """
-        if not well_ids:
-            return set()
+        if not since_by_well_id:
+            return {}
+        since = values(
+            column("well_id", BigInteger),
+            column("since", DateTime),
+            name="since_by_well",
+        ).data(list(since_by_well_id.items()))
         stmt = (
-            select(SPO.well_id)
-            .join(KbrsMeasure, KbrsMeasure.measure_id == SPO.kbrs_measure_id)
+            select(SPO.well_id, SPOEvent.code)
+            .distinct(SPO.well_id)
+            .join(since, since.c.well_id == SPO.well_id)
+            .join(SPOEvent, SPOEvent.spo_id == SPO.id)
+            .outerjoin(KbrsMeasure, KbrsMeasure.measure_id == SPO.kbrs_measure_id)
             .where(
-                SPO.well_id.in_(list(well_ids)),
-                KbrsMeasure.end_time >= now - grace,
-                KbrsMeasure.start_time <= now,
+                SPOEvent.code.is_not(None),
+                func.coalesce(KbrsMeasure.end_time, SPO.snapshot_time) >= since.c.since,
             )
-            .distinct()
+            .order_by(SPO.well_id, SPO.snapshot_time.desc(), SPOEvent.id.desc())
         )
         rows = await self.session.execute(stmt)
-        return {row[0] for row in rows}
+        return dict(rows.tuples().all())
 
     async def get_in_window(
         self,
