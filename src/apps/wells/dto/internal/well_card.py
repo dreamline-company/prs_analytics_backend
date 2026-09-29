@@ -40,6 +40,9 @@ class WellCardPassportDTO(WellRatesDTO):
     # Статус станции (1 — онлайн, 0 — не онлайн) — регистр 1999 «Статус
     # (VLT SALT)», последнее заполненное значение по станциям скважины.
     sdmo_vlt_status: int | None
+    # Время отсчёта, из которого взят sdmo_vlt_status (SdmoFcData.savetime).
+    # Регистр приходит не в каждом отсчёте, поэтому может быть раньше sdmo_time.
+    sdmo_vlt_status_time: datetime | None = None
     # ГДИС: динамический уровень, м, по последнему исследованию с этой
     # метрикой («H дин, м» / «Динамический уровень, м») и дата исследования.
     h_din_m: float | None

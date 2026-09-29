@@ -80,6 +80,7 @@ class GetWellCardUseCase:
         pump_scaled = False
         speed_units = None
         vlt_status = None
+        vlt_status_time = None
         if stations:
             fc_data_repository = self.sdmo_fc_data_repository
             pump = await fc_data_repository.get_last_pump_parameters_by_stations(
@@ -102,10 +103,13 @@ class GetWellCardUseCase:
                 )
             # Тем же запросом, что и матрица: строка матрицы и карточка должны
             # показывать один и тот же статус станции.
-            vlt_statuses = await fc_data_repository.get_last_vlt_status_by_well_ids(
-                [well.id],
+            vlt_statuses = (
+                await fc_data_repository.get_last_vlt_status_with_time_by_well_ids(
+                    [well.id],
+                )
             )
-            vlt_status = vlt_statuses.get(well.id)
+            if well.id in vlt_statuses:
+                vlt_status, vlt_status_time = vlt_statuses[well.id]
         last_status = await self.well_status_history_repository.get_last_by_well_id(
             well_id=well.id,
         )
@@ -135,6 +139,7 @@ class GetWellCardUseCase:
                 sdmo_time=pump["savetime"] if pump else None,
                 sdmo_scaled=pump_scaled,
                 sdmo_vlt_status=vlt_status,
+                sdmo_vlt_status_time=vlt_status_time,
                 h_din_m=dynamic_level.h_din_m if dynamic_level else None,
                 h_din_date=dynamic_level.meas_date if dynamic_level else None,
                 zero_rate_days=ZERO_RATE_DAYS_STUB,
