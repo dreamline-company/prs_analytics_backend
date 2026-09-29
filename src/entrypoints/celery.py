@@ -2,6 +2,11 @@ from celery.schedules import crontab
 
 from apps.celery_app import celery_app
 
+# Импорт регистрирует почасовой подбор доноров контура компенсации.
+from apps.compensation.tasks.assign_donors.assign_donors import (  # noqa: F401
+    assign_compensation_donors,
+)
+
 # Импорт регистрирует celery-задачи детекторов (диспетчер, подметальщик, R2,
 # R9, R10).
 from apps.detectors.cits_events.tasks.run_incidents.run_incidents import (  # noqa: F401
@@ -193,6 +198,12 @@ celery_app.conf.beat_schedule = {
     "wells-well-status-incremental": {
         "task": "wells.well_status.incremental_load",
         "schedule": crontab(minute=10),
+    },
+    # Контур компенсации: доноры под стоящие скважины — раз в час, после
+    # статусов ABAI (:10). Открытые пары не перетасовываются.
+    "compensation-assign-donors": {
+        "task": "compensation.assign_donors",
+        "schedule": crontab(minute=15),
     },
     # Ежедневная догрузка ГДИС из ABAI: метрики -> исследования -> значения,
     # плюс перечитывание исследований за 90 дней (заключения дописывают позже).

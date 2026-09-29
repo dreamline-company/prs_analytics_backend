@@ -1,5 +1,9 @@
 import inspect
 
+from apps.compensation.models.compensation import (
+    CompensationDonor,
+    CompensationRecommendation,
+)
 from apps.detectors.models.conclusion import (
     DetectorConclusion,
     DetectorConclusionFeedback,
@@ -53,6 +57,8 @@ __all__ = (
     "NGDU",
     "SPO",
     "Brigade",
+    "CompensationDonor",
+    "CompensationRecommendation",
     "Coord",
     "Detector",
     "DetectorConclusion",
