@@ -9,7 +9,7 @@
 """
 
 import asyncio
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,6 +47,7 @@ from apps.models_registry import *  # noqa: F403
 from apps.telemetry.models.sdmo import SdmoStation
 from apps.telemetry.repositories.sdmo import SdmoStationRepository
 from core import get_logger
+from core.settings import get_settings
 from shared.database.sql.setup import session_makers
 from shared.repository.sqlalchemy import QuerySpec
 
@@ -151,7 +152,9 @@ class LoadImbalanceIncidentRunner:
         *,
         cursor_ts: datetime | None,
     ) -> tuple[int, int, int]:
-        now = datetime.now(UTC).replace(tzinfo=None)
+        # Местное время: сутки СДМО (savetime) и расписание — по Атырау; по
+        # UTC в 04:10 «сегодня» ещё вчера, и вчерашние сутки не оценивались.
+        now = datetime.now(get_settings().ZONE_INFO).replace(tzinfo=None)
         as_of = now.date()
         # Курсор хранит правую границу обработанного (полночь следующих суток),
         # поэтому последние оценённые сутки — на день раньше.
