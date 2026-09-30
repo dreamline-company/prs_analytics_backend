@@ -128,15 +128,16 @@ class CompensationStateService:
                     to_local(dbeg),
                 )
         # Ремонт важнее простоя: вид работ говорит больше, чем «ПРС» в статусе.
+        # Время ремонтов ABAI, в отличие от статусов, уже местное.
         repairs = await self.repair_repository.list_current_by_abai_well_ids(
             abai_ids,
-            now=now,
+            now=to_local(now),
         )
         for abai_well_id, repair in repairs.items():
             state.stops[well_by_abai[abai_well_id]] = Stop(
                 STOP_REPAIR,
                 repair.repair_type_name_ru,
-                to_local(repair.start_time),
+                repair.start_time,
             )
 
         regimes = await self.regime_repository.get_current_by_abai_well_ids(
