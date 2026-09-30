@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
-from apps.org.repositories import UniqueBrigadeRepository
+from apps.org.repositories import OrgRepository, UniqueBrigadeRepository
+from apps.org.use_cases.get_ngdu_for_well import GetNGDUForWellUseCase
 from apps.repairs.dto.internal.summary import (
     RepairSummaryDTO,
     UploadParsedSummariesResultDTO,
@@ -22,6 +23,7 @@ from apps.repairs.use_cases.upload_parsed_summaries import (
     UploadParsedSummariesUseCase,
 )
 from apps.wells.repositories import WellRepository
+from apps.wells.repositories.well_org import WellOrgRepository
 from shared.dependencies.db import get_app_session
 from shared.dto.api import AppResponse
 
@@ -54,5 +56,9 @@ async def upload_parsed_xlsx_summary(
         repair_repository=RepairRepository(session=session),
         repair_brigade_repository=RepairBrigadeRepository(session=session),
         unique_brigade_repository=UniqueBrigadeRepository(session=session),
+        get_ngdu_for_well=GetNGDUForWellUseCase(
+            well_org_repository=WellOrgRepository(session=session),
+            org_repository=OrgRepository(session=session),
+        ),
     )
     return await use_case.execute(summaries)

@@ -20,6 +20,7 @@ from starlette import status
 
 from apps.org.models.brigade import UniqueBrigade
 from apps.org.repositories import UniqueBrigadeRepository
+from apps.org.use_cases.get_ngdu_for_well import GetNGDUForWellUseCase
 from apps.repairs.dto.internal.repositories.brigade import CreateRepairBrigadeDTO
 from apps.repairs.dto.internal.repositories.reports import CreateRepairSummaryDTO
 from apps.repairs.dto.internal.summary import UploadParsedSummariesResultDTO
@@ -61,6 +62,7 @@ class UploadParsedSummariesUseCase:
         repair_repository: RepairRepository,
         repair_brigade_repository: RepairBrigadeRepository,
         unique_brigade_repository: UniqueBrigadeRepository,
+        get_ngdu_for_well: GetNGDUForWellUseCase,
     ) -> None:
         self.session = session
         self.well_repository = well_repository
@@ -68,6 +70,7 @@ class UploadParsedSummariesUseCase:
         self.repair_repository = repair_repository
         self.repair_brigade_repository = repair_brigade_repository
         self.unique_brigade_repository = unique_brigade_repository
+        self.get_ngdu_for_well = get_ngdu_for_well
 
     async def execute(
         self,
@@ -271,6 +274,7 @@ class UploadParsedSummariesUseCase:
     ) -> int:
         """Привязать бригаду к ремонту, покрывающему сутки сводки.
 
+        Бригада ищется в НГДУ скважины: «Бригада №3» есть в каждом НГДУ.
         Данные тянутся батчевыми запросами (существующие связки, бригады;
         ремонты уже загружены) — на батче в тысячи сводок построчный поиск
         давал N+1.
@@ -283,7 +287,9 @@ class UploadParsedSummariesUseCase:
         if not pairs:
             return 0
 
-        matched: dict[int, int] = {}  # repair_id -> brigade_number
+        wells_by_id = {well.id: well for well in wells_by_name.values()}
+        # repair_id -> (brigade_number, well_id)
+        matched: dict[int, tuple[int, int]] = {}
         for well_id, summary_date, brigade_number in sorted(pairs):
             repair = self._pick_repair(repairs_by_well.get(well_id, ()), summary_date)
             if repair is None:
@@ -293,7 +299,7 @@ class UploadParsedSummariesUseCase:
                     summary_date,
                 )
                 continue
-            matched.setdefault(repair.id, brigade_number)
+            matched.setdefault(repair.id, (brigade_number, well_id))
 
         if not matched:
             return 0
@@ -305,18 +311,29 @@ class UploadParsedSummariesUseCase:
             )
         }
         pending = {
-            repair_id: brigade_number
-            for repair_id, brigade_number in matched.items()
+            repair_id: value
+            for repair_id, value in matched.items()
             if repair_id not in already_linked
         }
         if not pending:
             return 0
 
-        brigades_by_name = await self._resolve_brigades(set(pending.values()))
+        ngdu_by_well: dict[int, int | None] = {}
+        for _, well_id in pending.values():
+            if well_id not in ngdu_by_well:
+                ngdu = await self.get_ngdu_for_well.execute(
+                    wells_by_id[well_id].abai_id,
+                )
+                ngdu_by_well[well_id] = ngdu.id if ngdu is not None else None
+        brigades = await self._resolve_brigades(
+            {number for number, _ in pending.values()},
+        )
 
         created = 0
-        for repair_id, brigade_number in pending.items():
-            brigade = brigades_by_name.get(f"Бригада №{brigade_number}")
+        for repair_id, (brigade_number, well_id) in pending.items():
+            brigade = brigades.get(
+                (f"Бригада №{brigade_number}", ngdu_by_well[well_id]),
+            )
             if brigade is None:
                 continue
             await self.repair_brigade_repository.create(
@@ -328,18 +345,19 @@ class UploadParsedSummariesUseCase:
     async def _resolve_brigades(
         self,
         brigade_numbers: set[int],
-    ) -> dict[str, UniqueBrigade]:
+    ) -> dict[tuple[str, int], UniqueBrigade]:
+        """Бригады с этими номерами во всех НГДУ, по ключу (имя, НГДУ)."""
         names = [f"Бригада №{number}" for number in sorted(brigade_numbers)]
         brigades = await self.unique_brigade_repository.list_by_names(names)
-        brigades_by_name = {brigade.name: brigade for brigade in brigades}
+        by_key = {(brigade.name, brigade.ngdu_id): brigade for brigade in brigades}
 
-        missing = set(names) - brigades_by_name.keys()
+        missing = set(names) - {name for name, _ in by_key}
         if missing:
             logger.warning(
                 "UniqueBrigade rows not found, links skipped: %s",
                 sorted(missing),
             )
-        return brigades_by_name
+        return by_key
 
     async def _schedule_transport_fetch(
         self,
