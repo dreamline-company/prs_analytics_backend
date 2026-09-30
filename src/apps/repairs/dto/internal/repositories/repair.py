@@ -30,3 +30,4 @@ class UpdateRepairDTO(RepositoryDTO):
     repair_type_id: int | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
+    abai_deleted_at: datetime | None = None

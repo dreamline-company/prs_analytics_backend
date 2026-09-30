@@ -103,7 +103,7 @@ class ListBrigadesInDangerZoneUseCase:
             return {}
         repair_ids = list({link.repair_id for link in links})
         repairs = await self.repair_repository.list_by_ids(repair_ids)
-        repairs_by_id = {r.id: r for r in repairs if r.end_time is None}
+        repairs_by_id = {r.id: r for r in repairs if r.is_open}
 
         result: dict[int, Repair] = {}
         for link in links:

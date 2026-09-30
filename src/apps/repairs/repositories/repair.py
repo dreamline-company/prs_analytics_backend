@@ -104,7 +104,7 @@ class RepairRepository(
             .join(RepairType, RepairType.abai_id == Repair.repair_type_id, isouter=True)
             .where(
                 Repair.abai_well_id.in_(abai_well_ids),
-                Repair.end_time.is_(None),
+                Repair.is_open,
                 Repair.start_time <= now,
             )
             .distinct(Repair.abai_well_id)
@@ -141,6 +141,7 @@ class RepairRepository(
             QuerySpec(
                 filters=(
                     Repair.well_id == well_id,
+                    Repair.abai_deleted_at.is_(None),
                     Repair.start_time <= day_end,
                     or_(Repair.end_time.is_(None), Repair.end_time >= day_start),
                 ),
@@ -176,6 +177,7 @@ class RepairRepository(
                         Repair.well_id.in_(well_ids),
                         Repair.abai_well_id.in_(abai_well_ids),
                     ),
+                    Repair.abai_deleted_at.is_(None),
                     Repair.start_time <= range_end,
                     or_(Repair.end_time.is_(None), Repair.end_time >= range_start),
                 ),
@@ -212,7 +214,7 @@ class RepairRepository(
             QuerySpec(
                 filters=(
                     Repair.abai_well_id.in_(abai_well_ids),
-                    Repair.end_time.is_(None),
+                    Repair.is_open,
                 ),
                 order_by=(Repair.start_time.desc(),),
             ),

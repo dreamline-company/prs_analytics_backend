@@ -1,10 +1,11 @@
 """Идущий ремонт скважины — один ответ для карточки и для матрицы."""
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 
 from apps.repairs.dto.internal.repair import CurrentRepairDTO
 from apps.repairs.repositories.repair import RepairRepository
+from core.settings import get_settings
 
 
 class CurrentRepairService:
@@ -23,6 +24,7 @@ class CurrentRepairService:
         не попадают."""
         return await self.repair_repository.list_current_by_abai_well_ids(
             abai_well_ids,
-            # Наивный UTC — как во всех колонках времени в app-базе.
-            now=datetime.now(UTC).replace(tzinfo=None),
+            # Время ремонтов ABAI — местное: по UTC ремонт, начатый меньше
+            # 5 часов назад, ещё не считался идущим.
+            now=datetime.now(get_settings().ZONE_INFO).replace(tzinfo=None),
         )

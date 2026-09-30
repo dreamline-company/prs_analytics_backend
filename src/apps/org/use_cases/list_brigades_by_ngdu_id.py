@@ -76,7 +76,7 @@ class ListBrigadesByNGDUIdUseCase:
         # more than one exists concurrently, the latest start wins.
         active_repair_by_brigade: dict[int, Repair] = {}
         for bid, repairs in brigade_repairs.items():
-            active = [r for r in repairs if r.end_time is None]
+            active = [r for r in repairs if r.is_open]
             if not active:
                 continue
             active.sort(key=lambda r: r.start_time, reverse=True)

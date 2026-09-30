@@ -243,7 +243,7 @@ async def list_recent_repairs(config: RunnableConfig) -> list[dict[str, Any]]:
                 "repair_id": repair.id,
                 "start_time": _iso(repair.start_time),
                 "end_time": _iso(repair.end_time),
-                "is_active": repair.end_time is None,
+                "is_active": repair.is_open,
                 "work_plan": repair.work_plan,
                 "work_list": repair.work_list,
             }

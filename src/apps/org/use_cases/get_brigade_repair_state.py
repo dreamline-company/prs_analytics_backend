@@ -113,7 +113,7 @@ class GetBrigadeRepairStateUseCase:
             return None
         repair_ids = [link.repair_id for link in links]
         repairs = await self.repair_repository.list_by_ids(repair_ids)
-        active = [r for r in repairs if r.end_time is None]
+        active = [r for r in repairs if r.is_open]
         if not active:
             return None
         return max(active, key=lambda r: r.start_time)

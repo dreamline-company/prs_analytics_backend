@@ -15,6 +15,8 @@ class RepairDTO(BaseModel):
     work_plan: str | None
     start_time: datetime
     end_time: datetime | None
+    # Ремонт удалён в ABAI — идущим не считается.
+    abai_deleted_at: datetime | None = None
 
 
 class CurrentRepairDTO(RepairDTO):
