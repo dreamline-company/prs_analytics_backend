@@ -17,6 +17,8 @@ class RepairDTO(BaseModel):
     end_time: datetime | None
     # Ремонт удалён в ABAI — идущим не считается.
     abai_deleted_at: datetime | None = None
+    # Закрыт нами по телеметрии, в ABAI ещё открыт.
+    closed_by_telemetry_at: datetime | None = None
 
 
 class CurrentRepairDTO(RepairDTO):

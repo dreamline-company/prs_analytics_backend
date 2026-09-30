@@ -84,6 +84,8 @@ def test_closed_in_abai_and_gone_from_abai(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
     assert updates[5880941]["end_time"] == CLOSED  # VMB_1145: закрыт в ABAI
+    # закрытый нами по телеметрии получает дату ABAI и теряет пометку
+    assert updates[5880941]["closed_by_telemetry_at"] is None
     assert 7506638 not in updates  # VMB_2507: идёт и в ABAI
     assert set(updates[5719639]) == {"abai_deleted_at"}  # UZV_5555: удалён в ABAI
 
