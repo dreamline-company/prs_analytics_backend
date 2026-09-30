@@ -13,12 +13,12 @@ Resolution chain:
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from apps.org.dto.internal.brigade import BrigadeDangerDTO, BrigadeShortDTO
+from apps.org.services.cm_brigades import match_cm_brigades
 from apps.repairs.dto.internal.repair import RepairDTO
 from apps.wells.dto.internal.well_matrix import WellLegendDTO, WellMatrixItemDTO
 from apps.wells.services.well_status import WellStatusService
@@ -43,8 +43,6 @@ if TYPE_CHECKING:
     from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
 
 DANGER_TYPE_VIOLATION = "violation"
-
-_BRIGADE_NUMBER_RE = re.compile(r"№\s*(\d+)")
 
 
 class GetWellsMatrixUseCase:
@@ -213,37 +211,31 @@ class GetWellsMatrixUseCase:
             brigade_by_repair_id,
             active_repair_by_abai_well,
         )
-        number_by_brigade_id = {
-            b.id: number
-            for b in brigade_by_repair_id.values()
-            if (number := self._extract_brigade_number(b.name)) is not None
-        }
-        if not number_by_brigade_id:
-            return {}
-
-        cm_ids_by_number = await self._load_cm_ids_by_number(
-            set(number_by_brigade_id.values()),
+        cm_ids_by_brigade = await match_cm_brigades(
+            brigade_by_repair_id.values(),
+            unique_brigade_repo=self.unique_brigade_repository,
+            cm_brigade_repo=self.cm_brigade_repository,
         )
-        if not cm_ids_by_number:
+        if not cm_ids_by_brigade:
             return {}
 
         overall_start = min(r.start_time for r in repair_by_brigade_id.values())
         overall_end = datetime.now()  # noqa: DTZ005
         screens_by_cm_id = await self._load_screens_by_cm_id(
-            cm_ids_by_number,
+            cm_ids_by_brigade,
             overall_start=overall_start,
             overall_end=overall_end,
         )
 
         result: dict[int, list[BrigadeErrorScreen]] = {}
-        for brigade_id, number in number_by_brigade_id.items():
+        for brigade_id, cm_ids in cm_ids_by_brigade.items():
             repair = repair_by_brigade_id.get(brigade_id)
             if repair is None:
                 continue
             end = repair.end_time or overall_end
             hits = [
                 s
-                for cm_id in cm_ids_by_number.get(number, [])
+                for cm_id in cm_ids
                 for s in screens_by_cm_id.get(cm_id, [])
                 if repair.start_time <= s.timestamp <= end
             ]
@@ -264,24 +256,14 @@ class GetWellsMatrixUseCase:
                 result[brigade.id] = repair
         return result
 
-    async def _load_cm_ids_by_number(
-        self,
-        numbers: set[str],
-    ) -> dict[str, list[int]]:
-        cm_brigades = await self.cm_brigade_repository.list_by_names(list(numbers))
-        result: dict[str, list[int]] = defaultdict(list)
-        for cm in cm_brigades:
-            result[cm.name].append(cm.id)
-        return result
-
     async def _load_screens_by_cm_id(
         self,
-        cm_ids_by_number: dict[str, list[int]],
+        cm_ids_by_brigade: dict[int, list[int]],
         *,
         overall_start: datetime,
         overall_end: datetime,
     ) -> dict[int, list[BrigadeErrorScreen]]:
-        all_cm_ids = list({cid for ids in cm_ids_by_number.values() for cid in ids})
+        all_cm_ids = list({cid for ids in cm_ids_by_brigade.values() for cid in ids})
         screens = await (
             self.cm_brigade_error_screen_repository.list_by_brigade_ids_in_range(
                 all_cm_ids,
@@ -293,8 +275,3 @@ class GetWellsMatrixUseCase:
         for s in screens:
             result[s.brigade_id].append(s)
         return result
-
-    @staticmethod
-    def _extract_brigade_number(name: str) -> str | None:
-        match = _BRIGADE_NUMBER_RE.search(name)
-        return match.group(1) if match else None

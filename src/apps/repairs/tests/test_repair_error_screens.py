@@ -1,4 +1,5 @@
-"""Экраны ошибок бригады за время ремонта и 404 страницы аналитики ремонта."""
+"""Экраны ошибок бригады за время ремонта (бригада CM — тот же номер в том же
+НГДУ) и 404 страницы аналитики ремонта."""
 
 import asyncio
 from datetime import datetime
@@ -27,21 +28,31 @@ class _Links:
         return SimpleNamespace(brigade_id=self.brigade_id)
 
 
+KMG_ABAI, ZHMG_ABAI = 12, 11  # в CM это НГДУ 1 и 4
+
+
 class _Brigades:
     def __init__(self, name: str) -> None:
         self.name = name
 
-    async def get_by_id(self, _brigade_id: int) -> SimpleNamespace:
-        return SimpleNamespace(name=self.name)
+    async def get_by_id(self, brigade_id: int) -> SimpleNamespace:
+        return SimpleNamespace(id=brigade_id, name=self.name)
+
+    async def map_ngdu_abai_ids(self, ids: list[int]) -> dict[int, int]:
+        return dict.fromkeys(ids, KMG_ABAI)
 
 
 class _CMBrigades:
     def __init__(self) -> None:
-        self.asked: list[str] = []
+        self.asked: list[list[str]] = []
 
-    async def list_by_name(self, number: str) -> list[SimpleNamespace]:
-        self.asked.append(number)
-        return [SimpleNamespace(id=7), SimpleNamespace(id=9)]
+    async def list_by_names(self, numbers: list[str]) -> list[SimpleNamespace]:
+        self.asked.append(numbers)
+        return [
+            SimpleNamespace(id=7, name="12", ngdu_id=1),  # Кайнар
+            SimpleNamespace(id=9, name="12", ngdu_id=1),  # Кайнар
+            SimpleNamespace(id=31, name="12", ngdu_id=4),  # Жайык — не наша
+        ]
 
 
 class _Screens:
@@ -82,8 +93,8 @@ def test_screens_of_brigade_number_within_repair() -> None:
     result, cm, screens = _run()
 
     assert result == ["screen"]
-    assert cm.asked == ["12"]
-    assert screens.calls == [([7, 9], START, END)]
+    assert cm.asked == [["12"]]
+    assert screens.calls == [([7, 9], START, END)]  # без бригады №12 Жайыка
 
 
 def test_open_repair_is_searched_until_now() -> None:

@@ -1,6 +1,6 @@
 """Brigades in the danger zone: currently on an active repair with at
 least one associated danger (currently only CM ``BrigadeErrorScreen``
-matched to the brigade's ``№<n>`` name).
+matched to the brigade's ``№<n>`` in its NGDU).
 
 Only brigades that (a) are linked to an active ``Repair`` (``end_time IS
 NULL``) via ``repairs_repair_brigade`` and (b) accumulated at least one
@@ -9,7 +9,6 @@ danger within that repair's interval are returned.
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -19,6 +18,7 @@ from apps.org.dto.internal.brigade import (
     BrigadeDangerZoneItemDTO,
     BrigadeShortDTO,
 )
+from apps.org.services.cm_brigades import match_cm_brigades
 
 if TYPE_CHECKING:
     from apps.org.dto.queries.brigade import ListBrigadesInDangerZoneQuery
@@ -34,8 +34,6 @@ if TYPE_CHECKING:
     from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
 
 DANGER_TYPE_VIOLATION = "violation"
-
-_BRIGADE_NUMBER_RE = re.compile(r"№\s*(\d+)")
 
 
 class ListBrigadesInDangerZoneUseCase:
@@ -120,25 +118,16 @@ class ListBrigadesInDangerZoneUseCase:
         brigades: list[UniqueBrigade],
         active_by_brigade: dict[int, Repair],
     ) -> dict[int, list[BrigadeErrorScreen]]:
-        number_by_brigade_id = {
-            b.id: number
-            for b in brigades
-            if (number := self._extract_brigade_number(b.name)) is not None
-        }
-        if not number_by_brigade_id:
-            return {}
-
-        cm_brigades = await self.cm_brigade_repository.list_by_names(
-            list(set(number_by_brigade_id.values())),
+        cm_ids_by_brigade = await match_cm_brigades(
+            brigades,
+            unique_brigade_repo=self.unique_brigade_repository,
+            cm_brigade_repo=self.cm_brigade_repository,
         )
-        cm_ids_by_number: dict[str, list[int]] = defaultdict(list)
-        for cm in cm_brigades:
-            cm_ids_by_number[cm.name].append(cm.id)
-        if not cm_ids_by_number:
+        if not cm_ids_by_brigade:
             return {}
 
-        all_cm_ids = list({cid for ids in cm_ids_by_number.values() for cid in ids})
-        starts = [active_by_brigade[bid].start_time for bid in number_by_brigade_id]
+        all_cm_ids = list({cid for ids in cm_ids_by_brigade.values() for cid in ids})
+        starts = [active_by_brigade[bid].start_time for bid in cm_ids_by_brigade]
         if not starts:
             return {}
         overall_start = min(starts)
@@ -155,12 +144,11 @@ class ListBrigadesInDangerZoneUseCase:
             screens_by_cm_id[screen.brigade_id].append(screen)
 
         result: dict[int, list[BrigadeErrorScreen]] = {}
-        for brigade_id, number in number_by_brigade_id.items():
+        for brigade_id, cm_ids in cm_ids_by_brigade.items():
             repair = active_by_brigade.get(brigade_id)
             if repair is None:
                 continue
             end = repair.end_time or overall_end
-            cm_ids = cm_ids_by_number.get(number, [])
             hits = [
                 s
                 for cm_id in cm_ids
@@ -170,8 +158,3 @@ class ListBrigadesInDangerZoneUseCase:
             if hits:
                 result[brigade_id] = hits
         return result
-
-    @staticmethod
-    def _extract_brigade_number(name: str) -> str | None:
-        match = _BRIGADE_NUMBER_RE.search(name)
-        return match.group(1) if match else None

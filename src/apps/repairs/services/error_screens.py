@@ -1,16 +1,16 @@
 """Экраны ошибок бригады за время ремонта — нарушения ТБ из CM.
 
 Одна цепочка для KPI ремонта, общего ИИ-вердикта и страницы аналитики, чтобы
-везде были одни и те же экраны: бригада ремонта (привязка из сводок) -> номер
-бригады из названия -> бригады CM с этим номером -> их экраны за время ремонта
-(незакрытый ремонт — до текущего момента). Нет данных на любом шаге — пусто.
+везде были одни и те же экраны: бригада ремонта (привязка из сводок) -> бригады
+CM с её номером в её НГДУ -> их экраны за время ремонта (незакрытый ремонт — до
+текущего момента). Нет данных на любом шаге — пусто.
 """
 
-import re
 from collections.abc import Sequence
 from datetime import datetime
 
 from apps.org.repositories.brigade import UniqueBrigadeRepository
+from apps.org.services.cm_brigades import match_cm_brigades
 from apps.repairs.models.repair import Repair
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from shared.integrations.cm.models import BrigadeErrorScreen
@@ -18,8 +18,6 @@ from shared.integrations.cm.repositories.brigade_error_screens import (
     CMBrigadeErrorScreenRepository,
 )
 from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
-
-_BRIGADE_NUMBER_RE = re.compile(r"№\s*(\d+)")
 
 
 async def list_repair_error_screens(
@@ -36,11 +34,12 @@ async def list_repair_error_screens(
     brigade = await unique_brigade_repo.get_by_id(link.brigade_id)
     if brigade is None:
         return ()
-    match = _BRIGADE_NUMBER_RE.search(brigade.name)
-    if match is None:
-        return ()
-    cm_brigades = await cm_brigade_repo.list_by_name(match.group(1))
-    cm_ids = [cm.id for cm in cm_brigades]
+    matched = await match_cm_brigades(
+        [brigade],
+        unique_brigade_repo=unique_brigade_repo,
+        cm_brigade_repo=cm_brigade_repo,
+    )
+    cm_ids = matched.get(brigade.id)
     if not cm_ids:
         return ()
     end_time = repair.end_time or datetime.now()  # noqa: DTZ005
