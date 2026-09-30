@@ -1,5 +1,6 @@
 """LangGraph processor for a single SPO measurement."""
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,7 +22,71 @@ class SPOProcessingInput:
     notes_text: str | None = None
 
 
+# Модель с контекстом 16 384 токена считает примерно токен на символ, строка
+# сжатого графика — ~35 токенов: длинный замер целиком не влезал, и разбор
+# падал с 400. 200 строк — ~7 тыс. токенов, остальное — на ответ.
+MAX_CHART_ROWS = 200
+COMPACT_HEADER = (
+    "datetime,hook_weight_t_min,hook_weight_t_max,h2s_mg_m3_max,ch4_percent_max"
+)
+# Колонки chart.csv из spo_persist._render_csv.
+_CHART_COLUMNS = {"datetime", "hook_weight_t", "h2s_mg_m3", "ch4_percent"}
+
+
+def _number(value: str) -> float | None:
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def _fmt(value: float | None) -> str:
+    return "" if value is None else f"{value:g}"
+
+
+def compact_chart_csv(text: str, *, max_rows: int = MAX_CHART_ROWS) -> str:
+    """График СПО не длиннее ``max_rows`` строк.
+
+    Короткий возвращается как есть. Длинный режется на подряд идущие
+    интервалы: время начала, min/max веса на крюке (пики и провалы нагрузки)
+    и max газов — усреднение их бы сгладило.
+    """
+    lines = text.strip().splitlines()
+    if len(lines) - 1 <= max_rows:
+        return text
+    columns = {name: i for i, name in enumerate(lines[0].split(","))}
+    if not columns.keys() >= _CHART_COLUMNS:
+        return text
+    rows = [row for line in lines[1:] if len(row := line.split(",")) == len(columns)]
+    step = max(1, math.ceil(len(rows) / max_rows))
+
+    def values(chunk: list[list[str]], name: str) -> list[float]:
+        i = columns[name]
+        return [v for row in chunk if (v := _number(row[i])) is not None]
+
+    out = [COMPACT_HEADER]
+    for start in range(0, len(rows), step):
+        chunk = rows[start : start + step]
+        weight = values(chunk, "hook_weight_t")
+        h2s = values(chunk, "h2s_mg_m3")
+        ch4 = values(chunk, "ch4_percent")
+        out.append(
+            ",".join(
+                [
+                    chunk[0][columns["datetime"]],
+                    _fmt(min(weight, default=None)),
+                    _fmt(max(weight, default=None)),
+                    _fmt(max(h2s, default=None)),
+                    _fmt(max(ch4, default=None)),
+                ],
+            ),
+        )
+    return "\n".join(out)
+
+
 class SPOAIProcessor(BaseAIProcessor[SPOProcessingInput]):
+    # Не поднята при сжатии графика: короткие замеры идут в модель как раньше,
+    # а длинные раньше не доходили до ответа — пересчитывать готовые незачем.
     prompt_version: str = "v1"
 
     def _build_state(self, item: SPOProcessingInput) -> dict[str, Any]:
@@ -31,7 +96,13 @@ class SPOAIProcessor(BaseAIProcessor[SPOProcessingInput]):
             "Chart CSV and notes JSON are attached below. Return findings as JSON.",
         ]
         if item.chart_text is not None:
-            parts.append(f"chart.csv:\n```csv\n{item.chart_text}\n```")
+            chart = compact_chart_csv(item.chart_text)
+            if chart is not item.chart_text:
+                parts.append(
+                    "chart.csv is compacted to fit the model: consecutive points "
+                    "are grouped into intervals (min/max hook weight, max gas).",
+                )
+            parts.append(f"chart.csv:\n```csv\n{chart}\n```")
         if item.notes_text is not None:
             parts.append(f"notes.json:\n```json\n{item.notes_text}\n```")
         return {"messages": [HumanMessage(content="\n\n".join(parts))]}

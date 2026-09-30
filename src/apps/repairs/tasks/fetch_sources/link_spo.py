@@ -134,7 +134,11 @@ class LinkRepairSpo:
             repairs = await self._target_repairs(ctx, now=now)
             for repair in repairs:
                 try:
-                    changed = await self._link_repair(ctx, repair, now=now)
+                    changed, created = await self._link_repair(
+                        ctx,
+                        repair,
+                        now=now,
+                    )
                     await session.commit()
                 except Exception:
                     logger.exception(
@@ -147,6 +151,10 @@ class LinkRepairSpo:
                 stats.processed += 1
                 if changed:
                     stats.changed += 1
+                # Живой замер растёт каждую минуту — аналитика на каждый рост
+                # гоняла ИИ по кругу. Её ставит только новая СПО; дописанную и
+                # закрывшуюся подхватывает часовой обход аналитики.
+                if created:
                     await schedule_repair_analytics(repair.id)
         logger.info(
             "SPO link done: processed=%s changed=%s failed=%s.",
@@ -208,11 +216,12 @@ class LinkRepairSpo:
         repair: Repair,
         *,
         now: datetime,
-    ) -> bool:
+    ) -> tuple[bool, bool]:
+        """(что-то изменилось, появилась новая СПО)."""
         well = await resolve_repair_well(repair, ctx.well_repo)
         if well is None:
             logger.warning("Repair id=%s has no local well; SPO skipped.", repair.id)
-            return False
+            return False, False
         owner_id = await self._owner_id(ctx, well)
         well_number = extract_well_number(well.name)
         if owner_id is None or well_number is None:
@@ -223,7 +232,7 @@ class LinkRepairSpo:
                 owner_id,
                 well_number,
             )
-            return False
+            return False, False
 
         window = repair_window(repair, now=now)
         measures = await ctx.measure_repo.list_matching(
@@ -232,7 +241,7 @@ class LinkRepairSpo:
             start=window[0],
             end=window[1],
         )
-        changed = False
+        changed = created = False
         for measure in measures:
             existing = await ctx.spo_repo.get_by_kbrs_measure_id(
                 measure.measure_id,
@@ -242,13 +251,14 @@ class LinkRepairSpo:
                 continue
             if await self._link_measure(ctx, repair, well, measure, existing):
                 changed = True
+                created = created or existing is None
         logger.info(
             "Repair id=%s: %s matching measures, changed=%s.",
             repair.id,
             len(measures),
             changed,
         )
-        return changed
+        return changed, created
 
     @staticmethod
     async def _owner_id(ctx: _Context, well: Well) -> int | None:
