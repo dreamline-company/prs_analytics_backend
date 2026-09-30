@@ -6,8 +6,8 @@ Fields:
      NULL`` via ``repairs_repair_brigade``.
   3. ``with_violations`` — brigades that had at least one
      ``BrigadeErrorScreen`` (in CM) during the interval of any of their
-     repairs. Mapping local UniqueBrigade → CM Brigade is by
-     the number after ``№`` in the name.
+     repairs. Mapping local UniqueBrigade → CM Brigade is by the number
+     after ``№`` in the name within the brigade's NGDU (``match_cm_brigades``).
   4. ``without_violations`` — ``total_brigades - with_violations``.
   5. ``avg_repair_hours`` — mean of ``end_time - start_time`` across all
      finished repairs of these brigades, in hours (``None`` if no
@@ -18,12 +18,12 @@ Fields:
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from datetime import datetime
 from typing import TYPE_CHECKING
 
 from apps.org.dto.internal.brigade import BrigadesKPIDTO, FrequentRepairBrigadeDTO
+from apps.org.services.cm_brigades import match_cm_brigades
 from core import get_logger
 
 if TYPE_CHECKING:
@@ -42,7 +42,6 @@ logger = get_logger(__name__)
 
 FREQUENT_REPAIRS_THRESHOLD = 5
 
-_BRIGADE_NUMBER_RE = re.compile(r"№\s*(\d+)")
 
 
 class GetBrigadesKPIUseCase:
@@ -118,33 +117,15 @@ class GetBrigadesKPIUseCase:
         brigades: list[UniqueBrigade],
         brigade_repairs: dict[int, list[Repair]],
     ) -> int:
-        number_by_brigade_id: dict[int, str] = {}
-        for brigade in brigades:
-            number = self._extract_brigade_number(brigade.name)
-            if number is not None:
-                number_by_brigade_id[brigade.id] = number
-
-        needed_numbers = {
-            number_by_brigade_id[bid]
-            for bid in brigade_repairs
-            if bid in number_by_brigade_id
-        }
-        if not needed_numbers:
-            return 0
-
-        cm_brigades = await self.cm_brigade_repository.list_by_names(
-            list(needed_numbers),
+        cm_ids_by_brigade = await match_cm_brigades(
+            [b for b in brigades if b.id in brigade_repairs],
+            unique_brigade_repo=self.unique_brigade_repository,
+            cm_brigade_repo=self.cm_brigade_repository,
         )
-        cm_ids_by_number: dict[str, list[int]] = defaultdict(list)
-        for cm in cm_brigades:
-            cm_ids_by_number[cm.name].append(cm.id)
 
         with_violations = 0
         for brigade_id, repairs_of in brigade_repairs.items():
-            number = number_by_brigade_id.get(brigade_id)
-            if number is None:
-                continue
-            cm_ids = cm_ids_by_number.get(number, [])
+            cm_ids = cm_ids_by_brigade.get(brigade_id)
             if not cm_ids:
                 continue
             if await self._has_violation(cm_ids, repairs_of):
@@ -212,7 +193,3 @@ class GetBrigadesKPIUseCase:
         result.sort(key=lambda b: b.name)
         return result
 
-    @staticmethod
-    def _extract_brigade_number(name: str) -> str | None:
-        match = _BRIGADE_NUMBER_RE.search(name)
-        return match.group(1) if match else None

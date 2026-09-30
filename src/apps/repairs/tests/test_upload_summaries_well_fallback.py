@@ -32,6 +32,7 @@ def _use_case() -> UploadParsedSummariesUseCase:
         repair_repository=None,  # type: ignore[arg-type]
         repair_brigade_repository=None,  # type: ignore[arg-type]
         unique_brigade_repository=None,  # type: ignore[arg-type]
+        get_ngdu_for_well=None,  # type: ignore[arg-type]
     )
 
 

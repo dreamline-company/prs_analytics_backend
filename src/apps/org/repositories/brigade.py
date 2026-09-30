@@ -1,5 +1,7 @@
 from collections.abc import Sequence
 
+from sqlalchemy import select
+
 from apps.org.dto.internal.repositories.brigade import (
     CreateBrigadeDTO,
     CreateUniqueBrigadeDTO,
@@ -7,6 +9,7 @@ from apps.org.dto.internal.repositories.brigade import (
     UpdateUniqueBrigadeDTO,
 )
 from apps.org.models.brigade import Brigade, UniqueBrigade
+from apps.org.models.org import Org
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
 
@@ -82,6 +85,17 @@ class UniqueBrigadeRepository(
 
     async def list_all(self) -> Sequence[UniqueBrigade]:
         return await self.get_list(QuerySpec(order_by=(UniqueBrigade.name,)))
+
+    async def map_ngdu_abai_ids(self, brigade_ids: Sequence[int]) -> dict[int, int]:
+        """id бригады -> ABAI-id её НГДУ (``ngdu_id`` — локальный id органа)."""
+        if not brigade_ids:
+            return {}
+        rows = await self.session.execute(
+            select(UniqueBrigade.id, Org.abai_id)
+            .join(Org, Org.id == UniqueBrigade.ngdu_id)
+            .where(UniqueBrigade.id.in_(list(brigade_ids))),
+        )
+        return dict(rows.tuples().all())
 
     async def list_by_ngdu_id(self, ngdu_id: int) -> Sequence[UniqueBrigade]:
         return await self.get_list(

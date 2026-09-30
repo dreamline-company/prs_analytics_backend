@@ -5,8 +5,8 @@ Resolution:
      Active (``end_time IS NULL``) wins over finished; among equals — the
      one with the latest ``start_time``.
   2. Load ``Well`` by ``Repair.well_id``.
-  3. Count violations: extract the digit after ``№`` in the brigade name,
-     find matching CM ``Brigade``(s) by that name, count
+  3. Count violations: CM ``Brigade``(s) with the brigade's number in the
+     brigade's NGDU (``match_cm_brigades``), count
      ``BrigadeErrorScreen`` rows within the repair interval.
   4. Last event: newest ``BrigadeErrorScreen`` in the repair interval
      (nullable — brigade may have zero events).
@@ -17,7 +17,6 @@ placeholders (``0``) until the underlying metrics are implemented.
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -27,10 +26,12 @@ from apps.org.dto.internal.brigade import (
     RepairShortDTO,
     RepairStateEventDTO,
 )
+from apps.org.services.cm_brigades import match_cm_brigades
 from apps.wells.dto.internal.well import WellShortDTO
 
 if TYPE_CHECKING:
     from apps.org.dto.queries.brigade import GetBrigadeRepairStateQuery
+    from apps.org.models.brigade import UniqueBrigade
     from apps.org.repositories import UniqueBrigadeRepository
     from apps.repairs.models.brigade import RepairBrigade
     from apps.repairs.models.repair import Repair
@@ -41,8 +42,6 @@ if TYPE_CHECKING:
         CMBrigadeErrorScreenRepository,
     )
     from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
-
-_BRIGADE_NUMBER_RE = re.compile(r"№\s*(\d+)")
 
 
 class GetBrigadeRepairStateUseCase:
@@ -86,7 +85,7 @@ class GetBrigadeRepairStateUseCase:
         if well is None:
             return self._empty()
 
-        cm_brigade_ids = await self._resolve_cm_brigade_ids(brigade.name)
+        cm_brigade_ids = await self._resolve_cm_brigade_ids(brigade)
         violations_count, last_event = await self._violations_and_last_event(
             cm_brigade_ids,
             repair,
@@ -118,12 +117,13 @@ class GetBrigadeRepairStateUseCase:
             return None
         return max(active, key=lambda r: r.start_time)
 
-    async def _resolve_cm_brigade_ids(self, name: str) -> list[int]:
-        number = self._extract_brigade_number(name)
-        if number is None:
-            return []
-        cm_brigades = await self.cm_brigade_repository.list_by_name(number)
-        return [cm.id for cm in cm_brigades]
+    async def _resolve_cm_brigade_ids(self, brigade: UniqueBrigade) -> list[int]:
+        matched = await match_cm_brigades(
+            [brigade],
+            unique_brigade_repo=self.unique_brigade_repository,
+            cm_brigade_repo=self.cm_brigade_repository,
+        )
+        return matched.get(brigade.id, [])
 
     async def _violations_and_last_event(
         self,
@@ -147,11 +147,6 @@ class GetBrigadeRepairStateUseCase:
             description=latest.description or "",
         )
         return len(screens), last_event
-
-    @staticmethod
-    def _extract_brigade_number(name: str) -> str | None:
-        match = _BRIGADE_NUMBER_RE.search(name)
-        return match.group(1) if match else None
 
     @staticmethod
     def _empty() -> BrigadeRepairStateDTO:

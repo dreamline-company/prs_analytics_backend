@@ -5,7 +5,6 @@ metrics — ``is_in_repair`` and ``violations_count`` — computed against
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
@@ -15,6 +14,7 @@ from apps.org.dto.internal.brigade import (
     BrigadeDTO,
     BrigadeLegendDTO,
 )
+from apps.org.services.cm_brigades import match_cm_brigades
 from apps.repairs.dto.internal.repair import RepairDTO
 from apps.wells.dto.internal.well import WellShortDTO
 from apps.wells.services.well_status import WellStatusService
@@ -39,8 +39,6 @@ if TYPE_CHECKING:
     from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
 
 DANGER_TYPE_VIOLATION = "violation"
-
-_BRIGADE_NUMBER_RE = re.compile(r"№\s*(\d+)")
 
 
 class ListBrigadesByNGDUIdUseCase:
@@ -188,23 +186,16 @@ class ListBrigadesByNGDUIdUseCase:
         brigade_repairs: dict[int, list[Repair]],
         active_repair_by_brigade: dict[int, Repair],
     ) -> tuple[dict[int, int], dict[int, list[BrigadeErrorScreen]]]:
-        number_by_brigade_id = {
-            b.id: number
-            for b in brigades
-            if b.id in brigade_repairs
-            and (number := self._extract_brigade_number(b.name)) is not None
-        }
-        if not number_by_brigade_id:
-            return {}, {}
-
-        cm_ids_by_number = await self._load_cm_ids_by_number(
-            set(number_by_brigade_id.values()),
+        cm_ids_by_brigade = await match_cm_brigades(
+            [b for b in brigades if b.id in brigade_repairs],
+            unique_brigade_repo=self.unique_brigade_repository,
+            cm_brigade_repo=self.cm_brigade_repository,
         )
-        if not cm_ids_by_number:
+        if not cm_ids_by_brigade:
             return {}, {}
 
         screens_by_cm_id = await self._load_screens_by_cm_id(
-            cm_ids_by_number,
+            cm_ids_by_brigade,
             brigade_repairs,
         )
         if not screens_by_cm_id:
@@ -213,10 +204,9 @@ class ListBrigadesByNGDUIdUseCase:
         counts: dict[int, int] = {}
         active_dangers: dict[int, list[BrigadeErrorScreen]] = {}
         for brigade_id, repairs in brigade_repairs.items():
-            number = number_by_brigade_id.get(brigade_id)
-            if number is None:
+            cm_ids = cm_ids_by_brigade.get(brigade_id)
+            if not cm_ids:
                 continue
-            cm_ids = cm_ids_by_number.get(number, [])
             candidate_screens = [
                 s for cm_id in cm_ids for s in screens_by_cm_id.get(cm_id, [])
             ]
@@ -268,22 +258,12 @@ class ListBrigadesByNGDUIdUseCase:
                 result[repair.id] = well
         return result
 
-    async def _load_cm_ids_by_number(
-        self,
-        numbers: set[str],
-    ) -> dict[str, list[int]]:
-        cm_brigades = await self.cm_brigade_repository.list_by_names(list(numbers))
-        result: dict[str, list[int]] = defaultdict(list)
-        for cm in cm_brigades:
-            result[cm.name].append(cm.id)
-        return result
-
     async def _load_screens_by_cm_id(
         self,
-        cm_ids_by_number: dict[str, list[int]],
+        cm_ids_by_brigade: dict[int, list[int]],
         brigade_repairs: dict[int, list[Repair]],
     ) -> dict[int, list]:
-        all_cm_ids = list({cid for ids in cm_ids_by_number.values() for cid in ids})
+        all_cm_ids = list({cid for ids in cm_ids_by_brigade.values() for cid in ids})
         overall_start, overall_end = self._overall_range(brigade_repairs)
         if overall_start is None:
             return {}
@@ -326,8 +306,3 @@ class ListBrigadesByNGDUIdUseCase:
             if repair.start_time <= timestamp <= end:
                 return True
         return False
-
-    @staticmethod
-    def _extract_brigade_number(name: str) -> str | None:
-        match = _BRIGADE_NUMBER_RE.search(name)
-        return match.group(1) if match else None
