@@ -90,7 +90,7 @@ class GetBrigadesKPIUseCase:
         in_repair_now = sum(
             1
             for repairs_of in brigade_repairs.values()
-            if any(r.end_time is None for r in repairs_of)
+            if any(r.is_open for r in repairs_of)
         )
 
         with_violations = await self._count_with_violations(

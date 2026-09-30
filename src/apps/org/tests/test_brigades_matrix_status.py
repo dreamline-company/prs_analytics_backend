@@ -29,6 +29,7 @@ def _repair(rid: int, abai_well_id: int, end: datetime | None) -> SimpleNamespac
         work_plan=None,
         start_time=datetime(2026, 9, 20, 8, 0),  # noqa: DTZ001
         end_time=end,
+        is_open=end is None,
     )
 
 

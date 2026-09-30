@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Text
+from sqlalchemy import BigInteger, ColumnElement, DateTime, ForeignKey, Text, and_
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.database.sql.models import AbaiIdMixin, AppBaseModel, IntPkMixin
@@ -46,3 +47,20 @@ class Repair(AppBaseModel, IntPkMixin, AbaiIdMixin):
         index=True,
         nullable=True,
     )
+    # Ремонт пропал из ABAI (well_workover) — когда синхронизация это
+    # заметила. Запись остаётся ради привязанной аналитики, СПО и сводок, но
+    # идущим ремонтом не считается.
+    abai_deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+    @hybrid_property
+    def is_open(self) -> bool:
+        """Ремонт идёт: не закрыт и не удалён в ABAI."""
+        return self.end_time is None and self.abai_deleted_at is None
+
+    @is_open.inplace.expression
+    @classmethod
+    def _is_open_expression(cls) -> ColumnElement[bool]:
+        return and_(cls.end_time.is_(None), cls.abai_deleted_at.is_(None))

@@ -136,7 +136,7 @@ async def get_repair_overview(config: RunnableConfig) -> dict[str, Any]:
             "work_plan": repair.work_plan,
             "start_time": _iso(repair.start_time),
             "end_time": _iso(repair.end_time),
-            "is_active": repair.end_time is None,
+            "is_active": repair.is_open,
         }
 
 

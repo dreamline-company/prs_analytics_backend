@@ -131,7 +131,7 @@ async def iter_candidate_repairs(  # noqa: PLR0913
             )
         else:
             window = [
-                Repair.end_time.is_(None),
+                Repair.is_open,
                 Repair.end_time >= grace_cutoff,
                 RepairAnalytics.id.is_(None),
             ]
@@ -149,6 +149,8 @@ async def iter_candidate_repairs(  # noqa: PLR0913
                 RepairAnalytics,
                 RepairAnalytics.repair_id == Repair.id,
             ).where(
+                # Удалённый в ABAI ремонт не собирается и не анализируется.
+                Repair.abai_deleted_at.is_(None),
                 or_(
                     RepairAnalytics.is_finalized.is_(None),
                     RepairAnalytics.is_finalized.is_(False),

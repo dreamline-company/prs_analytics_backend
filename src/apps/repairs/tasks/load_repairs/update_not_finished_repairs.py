@@ -1,6 +1,14 @@
+"""Актуализация незавершённых ремонтов по ABAI.
+
+Проверяются все идущие ремонты, без ограничения по давности: их десятки, а
+ремонт, закрытый в ABAI спустя полгода, иначе висел бы у нас открытым вечно.
+Ремонт, которого в ABAI больше нет, помечается ``abai_deleted_at`` и перестаёт
+считаться идущим; запись остаётся ради привязанной аналитики, СПО и сводок.
+"""
+
 import asyncio
 from collections.abc import AsyncIterator, Sequence
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from apps.models_registry import *  # noqa
 from apps.repairs.dto.internal.repositories.repair import UpdateRepairDTO
@@ -18,16 +26,13 @@ settings = get_settings()
 
 class UpdateNotFinishedRepairs:
     ITER_SIZE = 1000
-    MAX_OLD_NF_REPAIR = timedelta(weeks=4 * 6)  # 6 months ago
 
     async def run(self) -> None:
-        logger.info(
-            "UpdateNotFinishedRepairs task started (looking back %s).",
-            self.MAX_OLD_NF_REPAIR,
-        )
+        logger.info("UpdateNotFinishedRepairs task started.")
+        now = datetime.now(tz=settings.ZONE_INFO).replace(tzinfo=None)
         async with session_makers["abai"]() as abai_session:
             abai_repairs_repo = ABAIWellWorkoverRepository(abai_session)
-            updated = 0
+            updated = deleted = 0
             async with session_makers["app"]() as app_session:
                 app_repairs_repo = RepairRepository(app_session)
                 try:
@@ -44,8 +49,22 @@ class UpdateNotFinishedRepairs:
                             "Matched %s repairs in ABAI for this batch.",
                             len(abai_repairs),
                         )
+                        # Пустой ответ на весь батч — скорее сбой ABAI, чем
+                        # удаление всех ремонтов разом: ничего не помечаем.
                         if not abai_repairs:
                             continue
+                        found_ids = {ar.id for ar in abai_repairs}
+                        for abai_id in nf_repairs_abai_ids:
+                            if abai_id not in found_ids:
+                                logger.info(
+                                    "Repair abai_id=%s is gone from ABAI; marked.",
+                                    abai_id,
+                                )
+                                await app_repairs_repo.update_by_abai_id(
+                                    abai_id=abai_id,
+                                    data=UpdateRepairDTO(abai_deleted_at=now),
+                                )
+                                deleted += 1
                         for ar in abai_repairs:
                             if ar.dend is not None and isinstance(ar.dend, datetime):
                                 logger.debug(
@@ -62,10 +81,15 @@ class UpdateNotFinishedRepairs:
                                     ),
                                 )
                                 updated += 1
-                    if updated > 0:
+                    if updated or deleted:
                         await app_session.commit()
 
-                        logger.info("Updated %s repairs and set as finished.", updated)
+                        logger.info(
+                            "Updated %s repairs and set as finished; "
+                            "%s marked as deleted in ABAI.",
+                            updated,
+                            deleted,
+                        )
                     logger.info(
                         "UPdating of non finished repairs is done successfully.",
                     )
@@ -78,21 +102,13 @@ class UpdateNotFinishedRepairs:
         repairs_repo: RepairRepository,
     ) -> AsyncIterator[Sequence[Repair]]:
         last_r_abai_id = None
-        # start_time хранится как naive в локальной зоне — сравнивать нужно
-        # с naive-значением, иначе asyncpg падает на TIMESTAMP WITHOUT TIME ZONE.
-        now = datetime.now(tz=settings.ZONE_INFO).replace(tzinfo=None)
-        start_time_greater = now - self.MAX_OLD_NF_REPAIR
         while True:
             filters = []
             if last_r_abai_id is not None:
                 filters.append(repairs_repo.model.abai_id > last_r_abai_id)
             nf_repairs = await repairs_repo.get_list(
                 spec=QuerySpec(
-                    filters=(
-                        *filters,
-                        repairs_repo.model.end_time.is_(None),
-                        repairs_repo.model.start_time > start_time_greater,
-                    ),
+                    filters=(*filters, repairs_repo.model.is_open),
                     order_by=(repairs_repo.model.abai_id.asc(),),
                     limit=self.ITER_SIZE,
                 ),
