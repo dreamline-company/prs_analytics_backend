@@ -31,3 +31,4 @@ class UpdateRepairDTO(RepositoryDTO):
     start_time: datetime | None = None
     end_time: datetime | None = None
     abai_deleted_at: datetime | None = None
+    closed_by_telemetry_at: datetime | None = None

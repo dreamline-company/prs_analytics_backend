@@ -468,6 +468,51 @@ class SdmoFcDataRepository(
             ),
         )
 
+    async def get_rotor_running_stats(
+        self,
+        station_id: int,
+        *,
+        since: datetime,
+    ) -> tuple[int, int, datetime | None]:
+        """(отсчётов, из них с оборотами ротора > 0, последний savetime) с ``since``.
+
+        Работу привода видно по скорости ротора (регистр 1998): статус 1999
+        говорит только, что станция на связи.
+        """
+        speed = getattr(SdmoFcData, f"r_{ROTOR_SPEED_REGISTER}")
+        row = (
+            await self.session.execute(
+                select(
+                    func.count(),
+                    func.count().filter(speed > 0),
+                    func.max(SdmoFcData.savetime),
+                ).where(
+                    SdmoFcData.station_id == station_id,
+                    SdmoFcData.savetime >= since,
+                ),
+            )
+        ).one()
+        return int(row[0]), int(row[1]), row[2]
+
+    async def get_first_rotor_running(
+        self,
+        station_id: int,
+        *,
+        since: datetime,
+    ) -> datetime | None:
+        """Первый отсчёт с оборотами ротора > 0 не раньше ``since``."""
+        speed = getattr(SdmoFcData, f"r_{ROTOR_SPEED_REGISTER}")
+        return await self.session.scalar(
+            select(SdmoFcData.savetime)
+            .where(
+                SdmoFcData.station_id == station_id,
+                SdmoFcData.savetime >= since,
+                speed > 0,
+            )
+            .order_by(SdmoFcData.savetime)
+            .limit(1),
+        )
+
     async def list_reporting_station_ids(
         self,
         station_ids: Sequence[int],

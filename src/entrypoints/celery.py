@@ -41,6 +41,11 @@ from apps.detectors.tasks.mail_daily_sheets.mail_daily_sheets import (  # noqa: 
 # Импорт регистрирует таску последовательной синхронизации оргструктуры.
 from apps.org.tasks.sync_org.sync_org import sync_org  # noqa: F401
 
+# Импорт регистрирует закрытие ремонтов по телеметрии (скважина уже работает).
+from apps.repairs.tasks.close_by_telemetry.close_by_telemetry import (  # noqa: F401
+    close_repairs_by_telemetry,
+)
+
 # Импорт регистрирует добытчики источников ремонтов (ABAI, КБРС, УТО) и
 # аналитику ремонтов (по событию и страховочный проход).
 from apps.repairs.tasks.fetch_sources.fetch_docs import fetch_repair_docs  # noqa: F401
@@ -242,6 +247,12 @@ celery_app.conf.beat_schedule = {
     "repairs-link-spo-sweep": {
         "task": "repairs.link_spo",
         "schedule": crontab(minute="*/30"),
+    },
+    # Ремонты, у которых скважина уже работает по ЦИТС/СДМО, а ABAI их ещё не
+    # закрыл, — закрываются на нашей стороне. Раз в час, после загрузок.
+    "repairs-close-by-telemetry": {
+        "task": "repairs.close_by_telemetry",
+        "schedule": crontab(minute=20),
     },
     "repairs-fetch-spo-toucan": {
         "task": "repairs.fetch.spo_toucan",

@@ -4,11 +4,15 @@
 ремонт, закрытый в ABAI спустя полгода, иначе висел бы у нас открытым вечно.
 Ремонт, которого в ABAI больше нет, помечается ``abai_deleted_at`` и перестаёт
 считаться идущим; запись остаётся ради привязанной аналитики, СПО и сводок.
+Ремонты, закрытые нами по телеметрии (``closed_by_telemetry_at``), тоже
+сверяются: дата окончания из ABAI заменяет нашу, пометка снимается.
 """
 
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 from datetime import datetime
+
+from sqlalchemy import or_
 
 from apps.models_registry import *  # noqa
 from apps.repairs.dto.internal.repositories.repair import UpdateRepairDTO
@@ -75,6 +79,7 @@ class UpdateNotFinishedRepairs:
                                 await app_repairs_repo.update_by_abai_id(
                                     abai_id=ar.id,
                                     data=UpdateRepairDTO(
+                                        closed_by_telemetry_at=None,
                                         end_time=ar.dend,
                                         work_plan=ar.work_plan,
                                         work_list=ar.work_list,
@@ -108,7 +113,13 @@ class UpdateNotFinishedRepairs:
                 filters.append(repairs_repo.model.abai_id > last_r_abai_id)
             nf_repairs = await repairs_repo.get_list(
                 spec=QuerySpec(
-                    filters=(*filters, repairs_repo.model.is_open),
+                    filters=(
+                        *filters,
+                        or_(
+                            repairs_repo.model.is_open,
+                            repairs_repo.model.closed_by_telemetry_at.is_not(None),
+                        ),
+                    ),
                     order_by=(repairs_repo.model.abai_id.asc(),),
                     limit=self.ITER_SIZE,
                 ),

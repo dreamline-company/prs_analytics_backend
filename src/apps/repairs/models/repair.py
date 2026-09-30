@@ -54,6 +54,13 @@ class Repair(AppBaseModel, IntPkMixin, AbaiIdMixin):
         DateTime,
         nullable=True,
     )
+    # Ремонт закрыт на нашей стороне по телеметрии (скважина уже работает, а в
+    # ABAI он ещё открыт) — когда закрыли. Дата ABAI, когда появится, заменит
+    # нашу, и пометка снимется.
+    closed_by_telemetry_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
 
     @hybrid_property
     def is_open(self) -> bool:
