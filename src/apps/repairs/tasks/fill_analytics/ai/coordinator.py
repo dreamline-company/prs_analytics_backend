@@ -6,6 +6,7 @@ loop so ``FillRepairAnalytics`` stays about orchestration, not persistence.
 
 import mimetypes
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 from apps.files.repositories.file import FileRepository
 from apps.org.repositories import UniqueBrigadeRepository
@@ -19,6 +20,7 @@ from apps.repairs.dto.internal.repositories.ai_results import (
 )
 from apps.repairs.models.analytics import (
     AI_STATUS_COMPLETED,
+    AI_STATUS_FAILED,
     RepairAIAnalysis,
     RepairDynamogramAIResult,
     RepairSPOAIResult,
@@ -35,6 +37,7 @@ from apps.repairs.tasks.fill_analytics.inputs import overall_fingerprint
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.models.spo import SPO
 from core import get_logger
+from core.settings import get_settings
 from shared.database.s3.storage import AiobotoFileStorage, FileNotExistError
 from shared.integrations.cm.repositories.brigade_error_screens import (
     CMBrigadeErrorScreenRepository,
@@ -51,6 +54,9 @@ from .overall_processor import (
 from .spo_processor import SPOAIProcessor, SPOProcessingInput
 
 logger = get_logger(__name__)
+
+# Упавший разбор СПО повторяется не чаще: обход аналитики — каждый час.
+SPO_AI_RETRY_AFTER = timedelta(hours=6)
 
 
 @dataclass(slots=True)
@@ -128,7 +134,10 @@ class AICoordinator:
         repair_id: int,
     ) -> RepairSPOAIResult:
         existing = await self.spo_ai_repo.get_by_spo_id(spo.id)
-        if self._is_current(existing, self.spo_processor.prompt_version):
+        if self._is_current(
+            existing,
+            self.spo_processor.prompt_version,
+        ) or self._failed_recently(existing, self.spo_processor.prompt_version):
             return existing
 
         raw_key = await self._resolve_s3_key(spo.file_id) or ""
@@ -245,6 +254,21 @@ class AICoordinator:
                 inputs_fingerprint=fingerprint,
             ),
         )
+
+    @staticmethod
+    def _failed_recently(row, prompt_version: str) -> bool:  # noqa: ANN001
+        """Упал на том же промпте недавно — не повторять на каждом прогоне.
+
+        Разбор СПО идёт только по закрытым замерам, их данные уже не меняются:
+        повтор сразу упадёт так же. Раз в ``SPO_AI_RETRY_AFTER`` — на случай
+        временного сбоя LLM.
+        """
+        if row is None or row.status != AI_STATUS_FAILED:
+            return False
+        if row.prompt_version != prompt_version:
+            return False
+        now = datetime.now(get_settings().ZONE_INFO).replace(tzinfo=None)
+        return now - row.processed_at < SPO_AI_RETRY_AFTER
 
     @staticmethod
     def _is_current(row, prompt_version: str) -> bool:  # noqa: ANN001
