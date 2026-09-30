@@ -15,7 +15,7 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Final
 
 from apps.detectors.models.incident import INCIDENT_LEVEL_ALARM
@@ -35,6 +35,7 @@ from apps.telemetry.repositories.tech_regime import TechRegimeRepository
 from apps.telemetry.repositories.telemetry import TelemetryRepository
 from apps.wells.models.well import Well
 from apps.wells.services import NGDUWellsService
+from core.settings import get_settings
 from shared.constants.ngdu import KMG_ONLY_OIL_FIELD_PREFIX, AbaiNGDUIDsEnum
 
 # Замер дебита идёт не каждый день (в среднем раз в 2–3 суток), поэтому
@@ -133,9 +134,9 @@ class GetNgduSummaryUseCase:
         *,
         now: datetime | None = None,
     ) -> NgduSummaryDTO:
-        """``now`` — наивный UTC, как время в БД; параметр для воспроизводимых
-        расчётов на исторических данных."""
-        now = now or datetime.now(UTC).replace(tzinfo=None)
+        """``now`` — наивное местное время, как время замеров ЦИТС; параметр
+        для воспроизводимых расчётов на исторических данных."""
+        now = now or datetime.now(get_settings().ZONE_INFO).replace(tzinfo=None)
         wells = await self.ngdu_wells_service.list_wells(
             query.ngdu_id,
             oil_field_id=query.oil_field_id,

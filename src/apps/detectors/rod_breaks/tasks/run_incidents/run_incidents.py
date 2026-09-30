@@ -8,7 +8,7 @@
 """
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +43,7 @@ from apps.models_registry import *  # noqa: F403
 from apps.telemetry.models.sdmo import SdmoStation
 from apps.telemetry.repositories.sdmo import SdmoStationRepository
 from core import get_logger
+from core.settings import get_settings
 from shared.database.sql.setup import session_makers
 from shared.repository.sqlalchemy import QuerySpec
 
@@ -143,7 +144,9 @@ class RodBreakIncidentRunner:
         *,
         cursor_ts: datetime | None,
     ) -> tuple[int, int, int]:
-        now = datetime.now(UTC).replace(tzinfo=None)
+        # Местное время, как savetime СДМО: по UTC последние 5 часов данных
+        # считались «будущим» и не оценивались.
+        now = datetime.now(get_settings().ZONE_INFO).replace(tzinfo=None)
         # Первый прогон — с глубины окна правила; дальше — от курсора.
         eval_from = cursor_ts or (now - timedelta(days=config.WINDOW_DAYS))
         window_start = eval_from - _CONTEXT

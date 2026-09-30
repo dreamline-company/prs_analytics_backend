@@ -8,7 +8,7 @@
 прогон истории — у нового правила курсоров нет, значит отстают все станции).
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 
@@ -35,6 +35,7 @@ from apps.detectors.rod_breaks.tasks.run_incidents.run_incidents import (
 from apps.models_registry import *  # noqa: F403
 from apps.telemetry.models.sdmo import SdmoFcData
 from core import get_logger
+from core.settings import get_settings
 from shared.database.sql.setup import session_makers
 
 logger = get_logger(__name__)
@@ -52,7 +53,8 @@ SWEEP_LAG = timedelta(minutes=30)
 
 
 async def _dispatch(source: str, entity_ids: list[int] | None) -> None:
-    now = datetime.now(UTC).replace(tzinfo=None)
+    # Местное — как last_run_at, который пишут раннеры R2/R9.
+    now = datetime.now(get_settings().ZONE_INFO).replace(tzinfo=None)
     async with session_makers["app"]() as session:
         detectors = await DetectorRepository(session).list_enabled_by_source(
             source,
