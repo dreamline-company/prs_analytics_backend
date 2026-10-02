@@ -20,6 +20,7 @@ class CreateRepairDTO(RepositoryDTO):
     work_list: str | None = None
     work_plan: str | None = None
     repair_type_id: int
+    abai_repair_type_id: int | None = None
     start_time: datetime
     end_time: datetime | None = None
 
@@ -28,6 +29,7 @@ class UpdateRepairDTO(RepositoryDTO):
     work_list: str | None = None
     work_plan: str | None = None
     repair_type_id: int | None = None
+    abai_repair_type_id: int | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
     abai_deleted_at: datetime | None = None

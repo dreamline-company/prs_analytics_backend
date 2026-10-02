@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import date, datetime, time
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 
 from apps.repairs.dto.internal.repair import CurrentRepairDTO
 from apps.repairs.dto.internal.repositories.repair import (
@@ -242,6 +242,27 @@ class RepairRepository(
 
     async def delete_by_id(self, repair_id: int) -> None:
         await self.delete(filters=(Repair.id == repair_id,))
+
+    async def list_abai_ids_without_abai_repair_type(self) -> list[int]:
+        rows = await self.session.execute(
+            select(Repair.abai_id)
+            .where(Repair.abai_repair_type_id.is_(None))
+            .order_by(Repair.abai_id),
+        )
+        return list(rows.scalars())
+
+    async def set_abai_repair_type(
+        self,
+        abai_ids: Sequence[int],
+        abai_repair_type_id: int,
+    ) -> None:
+        if not abai_ids:
+            return
+        await self.session.execute(
+            update(Repair)
+            .where(Repair.abai_id.in_(abai_ids))
+            .values(abai_repair_type_id=abai_repair_type_id),
+        )
 
     async def get_last_by_abai_id(self) -> Repair | None:
         rs = await self.get_list(
