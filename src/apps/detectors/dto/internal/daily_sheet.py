@@ -37,7 +37,6 @@ class DailySheetRowDTO(BaseModel):
     # «Дебит / Техрежим по жидкости» одной строкой, как в бланке.
     rates: str
     plan_oil: str
-    recommendation: str
     # Служебное для UI: эпизоды строки, состояние главного на дату, сила.
     incident_ids: list[int]
     level: str

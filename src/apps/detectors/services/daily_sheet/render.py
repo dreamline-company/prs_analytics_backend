@@ -188,8 +188,6 @@ def _table(document: Document, sheet: DailySheetDTO) -> None:
             str(row.probability_percent),
             row.rates,
             row.plan_oil,
-            row.recommendation,
-            "",
         )
         for cell, value in zip(cells, values, strict=True):
             _fill(cell, value)

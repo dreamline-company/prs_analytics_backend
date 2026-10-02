@@ -1,32 +1,21 @@
 """Тексты граф ведомости из собранного контекста строки — детерминированно.
 
-LLM здесь нет: всё выводится из эпизода, дебитов, ремонтов и статусов по
-шаблонам. Готовое ИИ-заключение эпизода (если есть) цитируется в «Основании».
+LLM здесь нет: всё выводится из эпизода, дебитов и ремонтов по шаблонам.
 """
 
 from datetime import date, datetime, timedelta
 
 from apps.detectors.models.incident import INCIDENT_STATUS_NORMALIZED
 from apps.detectors.services.daily_sheet.config import (
-    AI_SUMMARY_MAX_CHARS,
     DEVIATION_LABELS,
     POST_REPAIR_DAYS,
     R2_RATIO_STRONG,
     R2_TOTAL_LOSS_SUFFIX,
-    REPAIRS_LOOKBACK_DAYS,
     SEVERITY_LABELS,
-    STATUS_LOOKBACK_DAYS,
     WATERED_OUT_CUT,
 )
 from apps.detectors.services.daily_sheet.context import RepairInfo, WellContext
 
-# Изменение медианы дебита меньше этой доли — не упоминаем.
-_LIQUID_CHANGE_MIN = 0.2
-# Сдвиг обводнённости меньше этого, п.п., — «стабильна».
-_WATER_CUT_SHIFT_MIN = 5.0
-_MAX_REPAIRS_IN_TEXT = 2
-_MAX_REASONS_IN_TEXT = 2
-_MAX_WORK_CHARS = 40
 # Правила, эпизод которых считается сутками: в периодах только даты.
 _DAILY_CODES = frozenset({"R9", "R10"})
 
@@ -200,35 +189,9 @@ def plan_oil_text(ctx: WellContext) -> str:
     return fmt_num(ctx.rates.plan_oil, 2)
 
 
-def recommendation_text(ctx: WellContext) -> str:
-    steps = [
-        f"{step.get('step')}) {step.get('text')} "
-        f"({step.get('role')}, {step.get('deadline_hours')} ч)"
-        for step in ctx.recommendations
-    ]
-    basis = "; ".join(basis_sentences(ctx))
-    text = "; ".join(steps) if steps else "наблюдение"
-    return f"{text}. Основание: {basis}." if basis else f"{text}."
-
-
-def basis_sentences(ctx: WellContext) -> list[str]:
-    sentences = [_rule_sentence(ctx), *_rates_sentences(ctx)]
-    sentences.append(_repairs_sentence(ctx))
-    stops = _stops_sentence(ctx)
-    if stops:
-        sentences.append(stops)
-    sentences.append(_level_sentence(ctx))
-    if ctx.ai_summary:
-        summary = ctx.ai_summary.strip()
-        if len(summary) > AI_SUMMARY_MAX_CHARS:
-            summary = summary[: AI_SUMMARY_MAX_CHARS - 1].rstrip() + "…"
-        sentences.append(f"ИИ-заключение: {summary}")
-    return [s for s in sentences if s]
-
-
 def top_text(ctx: WellContext) -> str:
     """Строка ТОП: скважина, вероятность и главное из основания."""
-    lead = "; ".join([_rates_sentences(ctx)[0], _rule_sentence(ctx)])
+    lead = "; ".join([_rates_sentence(ctx), _rule_sentence(ctx)])
     lead = lead[:1].upper() + lead[1:]
     return f"{ctx.well_name} — {ctx.probability_percent}%. {lead}."
 
@@ -236,7 +199,7 @@ def top_text(ctx: WellContext) -> str:
 def attention_text(ctx: WellContext) -> str:
     return (
         f"{ctx.well_name} — {SEVERITY_LABELS[ctx.severity]}, "
-        f"{_rates_sentences(ctx)[0]} ({ctx.probability_percent}%)"
+        f"{_rates_sentence(ctx)} ({ctx.probability_percent}%)"
     )
 
 
@@ -304,11 +267,11 @@ def measure_request_text(well_name: str, payload: dict) -> str:
     return text
 
 
-def _rates_sentences(ctx: WellContext) -> list[str]:
+def _rates_sentence(ctx: WellContext) -> str:
     rates = ctx.rates
     if not rates.has_fresh:
         since = f" с {fmt_day(rates.measured_at)}" if rates.measured_at else ""
-        return [f"замеров дебита нет{since} (ТМ)"]
+        return f"замеров дебита нет{since} (ТМ)"
     parts = [f"жидкость {fmt_num(rates.liquid)} м3/сут"]
     if rates.plan_liquid is not None:
         parts[0] += f" при режиме {fmt_num(rates.plan_liquid)}"
@@ -318,66 +281,4 @@ def _rates_sentences(ctx: WellContext) -> list[str]:
             oil += f" при плане {fmt_num(rates.plan_oil, 2)}"
         parts.append(oil)
     measured = fmt_day(rates.measured_at) if rates.measured_at else ""
-    sentences = [", ".join(parts) + f" ({measured}, ТМ)"]
-
-    recent, previous = rates.liquid_recent, rates.liquid_previous
-    if (
-        recent is not None
-        and previous
-        and abs(recent - previous) / previous >= (_LIQUID_CHANGE_MIN)
-    ):
-        verb = "снизился" if recent < previous else "вырос"
-        sentences.append(
-            f"медианный дебит {verb} с {fmt_num(previous)} до {fmt_num(recent)} "
-            "м3/сут за неделю",
-        )
-    first, last = rates.water_cut_first, rates.water_cut_last
-    if first is not None and last is not None:
-        if abs(last - first) >= _WATER_CUT_SHIFT_MIN:
-            verb = "выросла" if last > first else "снизилась"
-            sentences.append(
-                f"обводнённость {verb} с {first:.0f} до {last:.0f} % за 30 суток",
-            )
-        else:
-            sentences.append(f"обводнённость стабильна {last:.0f} %")
-    return sentences
-
-
-def _repairs_sentence(ctx: WellContext) -> str:
-    if not ctx.repairs:
-        return f"ремонтов за {REPAIRS_LOOKBACK_DAYS} суток нет (ABAI)"
-    items = []
-    for repair in ctx.repairs[:_MAX_REPAIRS_IN_TEXT]:
-        name = repair.type_name or "ремонт"
-        work = " ".join((repair.work or "").split())
-        if work:
-            if len(work) > _MAX_WORK_CHARS:
-                work = work[: _MAX_WORK_CHARS - 1].rstrip() + "…"
-            name += f" «{work}»"
-        end = fmt_day(repair.end) if repair.end else "продолжается"
-        items.append(f"{name} {fmt_day(repair.start)} – {end}")
-    return ", ".join(items) + " (ABAI)"
-
-
-def _stops_sentence(ctx: WellContext) -> str | None:
-    stops = ctx.stops
-    if not stops:
-        return None
-    reasons: dict[str, int] = {}
-    for stop in stops:
-        key = (stop.reason or "без причины").strip()
-        reasons[key] = reasons.get(key, 0) + 1
-    top = sorted(reasons.items(), key=lambda item: -item[1])[:_MAX_REASONS_IN_TEXT]
-    listed = ", ".join(
-        f"{reason} ×{count}" if count > 1 else reason for reason, count in top
-    )
-    return f"остановок за {STATUS_LOOKBACK_DAYS} суток: {len(stops)} ({listed})"
-
-
-def _level_sentence(ctx: WellContext) -> str:
-    if ctx.level is None:
-        return "замера уровня в ГДИС нет (ABAI)"
-    return (
-        f"замер уровня {ctx.level.meas_date.strftime('%d.%m')} (ABAI) — "
-        f"{fmt_num(ctx.level.value_m, 0)} м"
-    )
+    return ", ".join(parts) + f" ({measured}, ТМ)"

@@ -48,22 +48,17 @@ from apps.detectors.services.daily_sheet.config import (
     CONFIG_VERSION,
     NORMALIZED_TAIL_DAYS,
     PLAN_GRACE_DAYS,
-    RATES_HISTORY_DAYS,
-    RATES_WINDOW_DAYS,
     REPAIRS_LOOKBACK_DAYS,
     REPEAT_LOOKBACK_DAYS,
     SEVERITY_RANK,
     SEVERITY_STRONG,
-    STATUS_LOOKBACK_DAYS,
     TELEMETRY_FRESH_DAYS,
     TOP_SIZE,
     sheet_applies,
 )
 from apps.detectors.services.daily_sheet.context import (
-    LevelInfo,
     RateSnapshot,
     RepairInfo,
-    StopInfo,
     WellContext,
 )
 from apps.detectors.services.daily_sheet.errors import (
@@ -72,7 +67,6 @@ from apps.detectors.services.daily_sheet.errors import (
     DailySheetDetectorNotFoundError,
     DailySheetNotApplicableError,
 )
-from apps.detectors.services.daily_sheet.metrics import edge_means, window_medians
 from apps.detectors.services.daily_sheet.oil_fields import (
     OilFieldRef,
     prefixes_key,
@@ -87,7 +81,7 @@ from apps.detectors.services.daily_sheet.selection import (
     group_by_well,
 )
 from apps.files.services.file import FileService
-from apps.repairs.repositories.repair import RepairRepository, RepairTypeRepository
+from apps.repairs.repositories.repair import RepairRepository
 from apps.telemetry.models.tech_regime import TechRegime
 from apps.telemetry.models.telemetry import Telemetry
 from apps.telemetry.repositories.sdmo import (
@@ -97,13 +91,7 @@ from apps.telemetry.repositories.sdmo import (
 from apps.telemetry.repositories.tech_regime import TechRegimeRepository
 from apps.telemetry.repositories.telemetry import TelemetryRepository
 from apps.telemetry.services.well_rates import water_cut
-from apps.wells.repositories.gdis import (
-    GdisCurrentValueRepository,
-    GdisMetricRepository,
-)
-from apps.wells.repositories.status_history import WellStatusHistoryRepository
 from apps.wells.repositories.well import WellRepository
-from apps.wells.services.gdis import WellGdisService
 from core import get_logger
 from core.settings import get_settings
 from shared.constants.ngdu import AbaiNGDUIDsEnum
@@ -179,12 +167,6 @@ class DailySheetBuilder:
         self.telemetry_repo = TelemetryRepository(session)
         self.tech_regime_repo = TechRegimeRepository(session)
         self.repair_repo = RepairRepository(session)
-        self.repair_type_repo = RepairTypeRepository(session)
-        self.status_repo = WellStatusHistoryRepository(session)
-        self.gdis_service = WellGdisService(
-            gdis_metric_repository=GdisMetricRepository(session),
-            gdis_current_value_repository=GdisCurrentValueRepository(session),
-        )
 
     async def build(self, target: SheetTarget) -> DailySheetDTO:
         """Собрать, сохранить файл и строку; вернуть содержимое без ссылки."""
@@ -407,11 +389,6 @@ class DailySheetBuilder:
             well_ids,
             before=day_end,
         )
-        history = await self.telemetry_repo.list_by_well_ids_in_period(
-            well_ids,
-            date_time_from=day_end - timedelta(days=RATES_HISTORY_DAYS),
-            date_time_to=day_end,
-        )
         regimes = await self.tech_regime_repo.get_current_by_abai_well_ids(
             abai_ids,
             on_date=target.sheet_date,
@@ -422,14 +399,6 @@ class DailySheetBuilder:
             well_by_abai,
             sheet_date=target.sheet_date,
         )
-        stops = await self.status_repo.list_by_well_ids_in_period(
-            well_ids,
-            since=day_end - timedelta(days=STATUS_LOOKBACK_DAYS),
-            until=day_end,
-        )
-        levels = await self.gdis_service.get_last_dynamic_level_by_abai_well_ids(
-            abai_ids,
-        )
 
         contexts = []
         for well_id in well_ids:
@@ -438,7 +407,6 @@ class DailySheetBuilder:
             well = wells.get(well_id)
             abai_id = well.abai_id if well is not None else None
             conclusion = conclusions.get((primary.incident.id, primary.level))
-            level = levels.get(abai_id) if abai_id is not None else None
             contexts.append(
                 WellContext(
                     detector_code=target.detector_code,
@@ -448,21 +416,10 @@ class DailySheetBuilder:
                     previous=previous_by_well.get(well_id, []),
                     rates=self._rates(
                         last_rows.get(well_id),
-                        history.get(well_id, []),
                         regimes.get(abai_id) if abai_id is not None else None,
                         day_end=day_end,
                     ),
                     repairs=repairs_by_well.get(well_id, []),
-                    stops=[
-                        StopInfo(at=row.created_at, reason=row.reason)
-                        for row in stops.get(well_id, [])
-                        if not row.is_working
-                    ],
-                    level=(
-                        LevelInfo(value_m=level.h_din_m, meas_date=level.meas_date)
-                        if level is not None
-                        else None
-                    ),
                     **self._verdict(primary, conclusion),
                 ),
             )
@@ -521,11 +478,6 @@ class DailySheetBuilder:
             date_from=sheet_date - timedelta(days=REPAIRS_LOOKBACK_DAYS),
             date_to=sheet_date,
         )
-        type_ids = sorted({r.repair_type_id for r in repairs if r.repair_type_id})
-        types = {
-            repair_type.id: repair_type.name_ru_short or repair_type.name_ru
-            for repair_type in await self.repair_type_repo.list_by_ids(type_ids)
-        }
         known = set(well_ids)
         by_well: dict[int, list[RepairInfo]] = {}
         for repair in repairs:
@@ -537,19 +489,13 @@ class DailySheetBuilder:
             if well_id is None:
                 continue
             by_well.setdefault(well_id, []).append(
-                RepairInfo(
-                    type_name=types.get(repair.repair_type_id),
-                    work=repair.work_list,
-                    start=repair.start_time,
-                    end=repair.end_time,
-                ),
+                RepairInfo(start=repair.start_time, end=repair.end_time),
             )
         return by_well
 
     @staticmethod
     def _rates(
         last: Telemetry | None,
-        history: Sequence[Telemetry],
         regime: TechRegime | None,
         *,
         day_end: datetime,
@@ -568,22 +514,6 @@ class DailySheetBuilder:
             snapshot.stale = last.date_time < day_end - timedelta(
                 days=TELEMETRY_FRESH_DAYS,
             )
-        liquid_points = [(row.date_time, row.qv_liquid) for row in history]
-        snapshot.liquid_recent, snapshot.liquid_previous = window_medians(
-            liquid_points,
-            end=day_end,
-            days=RATES_WINDOW_DAYS,
-        )
-        cut_points = [
-            (row.date_time, water_cut(liquid_rate=row.qv_liquid, oil_rate=row.qm_oil))
-            for row in history
-        ]
-        snapshot.water_cut_first, snapshot.water_cut_last = edge_means(
-            cut_points,
-            end=day_end,
-            span_days=RATES_HISTORY_DAYS,
-            window_days=RATES_WINDOW_DAYS,
-        )
         return snapshot
 
     @staticmethod
@@ -591,19 +521,13 @@ class DailySheetBuilder:
         primary: Episode,
         conclusion: DetectorConclusion | None,
     ) -> dict:
-        """Причина, рекомендации, уверенность: из заключения того же уровня,
-        иначе из справочника — тем же кодом, что и генератор заключений."""
+        """Причина и уверенность: из заключения того же уровня, иначе из
+        справочника — тем же кодом, что и генератор заключений."""
         incident = primary.incident
         if conclusion is not None:
             return {
                 "confidence": conclusion.confidence,
                 "cause": conclusion.cause,
-                "recommendations": list(conclusion.recommendations or []),
-                "ai_summary": (
-                    conclusion.summary
-                    if conclusion.status == CONCLUSION_STATUS_COMPLETED
-                    else None
-                ),
             }
         return {
             "confidence": catalog.compute_confidence(
@@ -612,11 +536,6 @@ class DailySheetBuilder:
             ),
             "cause": catalog.cause_for(incident.detector_code, incident.reason_code)
             or incident.reason_code,
-            "recommendations": catalog.recommendations_for(
-                incident.detector_code,
-                primary.level,
-            ),
-            "ai_summary": None,
         }
 
     # --- строки и сохранение ---------------------------------------------------
@@ -655,7 +574,6 @@ class DailySheetBuilder:
                 probability_percent=ctx.probability_percent,
                 rates=texts.rates_text(ctx),
                 plan_oil=texts.plan_oil_text(ctx),
-                recommendation=texts.recommendation_text(ctx),
                 incident_ids=[episode.incident.id for episode in ctx.episodes],
                 level=ctx.primary.level,
                 status=ctx.primary.status,
