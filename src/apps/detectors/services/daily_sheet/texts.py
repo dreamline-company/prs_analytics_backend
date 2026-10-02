@@ -5,7 +5,10 @@ LLM здесь нет: всё выводится из эпизода, дебит
 
 from datetime import date, datetime, timedelta
 
-from apps.detectors.models.incident import INCIDENT_STATUS_NORMALIZED
+from apps.detectors.models.incident import (
+    INCIDENT_LEVEL_ALARM,
+    INCIDENT_STATUS_NORMALIZED,
+)
 from apps.detectors.services.daily_sheet.config import (
     DEVIATION_LABELS,
     POST_REPAIR_DAYS,
@@ -71,7 +74,8 @@ def period_text(
     day_end: datetime,
     partial_day: bool,
 ) -> str:
-    """«период 26.08 – 29.08, 4 сут, продолжается» и варианты.
+    """«период 26.08 – 29.08, 4 сут» и варианты; активен ли эпизод — в графе
+    «Статус на дату» (status_text).
 
     Активный эпизод без сработки в сами сутки ведомости (правило держит его
     открытым до подтверждения восстановления) помечается «без сработок с …»,
@@ -84,17 +88,15 @@ def period_text(
     last_seen = min(incident.last_seen_at, day_end)
     seen_day = _end_day(last_seen).date() if dates_only else last_seen.date()
     text = span_text(incident.opened_at, last_seen, dates_only=dates_only)
-    if episode.status == INCIDENT_STATUS_NORMALIZED:
-        text += ", эпизод завершён"
-    elif seen_day < sheet_date:
-        text += f", без сработок с {seen_day + timedelta(days=1):%d.%m}"
-    else:
-        duration = (sheet_date - incident.opened_at.date()).days + 1
-        if duration > 1:
-            text += f", {duration} сут"
-        text += ", продолжается"
-        if partial_day:
-            text += " — по неполным суткам"
+    if episode.status != INCIDENT_STATUS_NORMALIZED:
+        if seen_day < sheet_date:
+            text += f", без сработок с {seen_day + timedelta(days=1):%d.%m}"
+        else:
+            duration = (sheet_date - incident.opened_at.date()).days + 1
+            if duration > 1:
+                text += f", {duration} сут"
+            if partial_day:
+                text += ", по неполным суткам"
     parts = [text]
     others = [
         span_text(
@@ -145,6 +147,19 @@ def deviation_text(
             else "; с потерями добычи"
         )
     return text
+
+
+def status_text(ctx: WellContext) -> str:
+    """Горит ли тревога на конец суток ведомости: «Активен · авария» /
+    «Активен · предупреждение» / «Завершён 20.09 15:45»."""
+    episode = ctx.primary
+    normalized_at = episode.incident.normalized_at
+    if episode.status == INCIDENT_STATUS_NORMALIZED and normalized_at is not None:
+        if ctx.detector_code in _DAILY_CODES:
+            return f"Завершён {fmt_day(_end_day(normalized_at))}"
+        return f"Завершён {normalized_at:%d.%m %H:%M}"
+    level = "авария" if episode.level == INCIDENT_LEVEL_ALARM else "предупреждение"
+    return f"Активен · {level}"
 
 
 def post_repair(ctx: WellContext) -> RepairInfo | None:

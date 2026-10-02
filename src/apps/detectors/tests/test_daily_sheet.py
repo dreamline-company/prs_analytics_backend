@@ -14,6 +14,7 @@ from apps.detectors.dto.internal.daily_sheet import (
     DailySheetTopItemDTO,
 )
 from apps.detectors.services.daily_sheet import texts
+from apps.detectors.services.daily_sheet.builder import DailySheetBuilder
 from apps.detectors.services.daily_sheet.config import (
     CATEGORY_HIGH,
     CATEGORY_LOW,
@@ -194,7 +195,8 @@ def test_deviation_text_for_closed_episode_with_losses() -> None:
     text = texts.deviation_text(ctx, day_end=_DAY_END, partial_day=False)
     assert text.startswith("недозаполнение насоса")
     assert "выраженная" in text
-    assert "период 27.08 – 28.08, эпизод завершён" in text
+    assert "период 27.08 – 28.08; повторно" in text
+    assert texts.status_text(ctx) == "Завершён 29.08"
     assert "повторно: пред. проявление 27.07 – 28.07" in text
     assert text.endswith("потери сохраняются")
 
@@ -208,9 +210,11 @@ def test_deviation_text_r2_total_loss_and_partial_day() -> None:
         escalated_at=None,
         payload={"current_ratio": 0.2, "base_moment": 48.5},
     )
-    text = texts.deviation_text(_context(incident), day_end=_DAY_END, partial_day=True)
+    ctx = _context(incident)
+    text = texts.deviation_text(ctx, day_end=_DAY_END, partial_day=True)
     assert "до полной потери нагрузки, сильная" in text
-    assert "период 31.08 05:20 – 09:20, продолжается — по неполным суткам" in text
+    assert "период 31.08 05:20 – 09:20, по неполным суткам" in text
+    assert texts.status_text(ctx) == "Активен · авария"
 
 
 def test_period_text_active_without_recent_alerts() -> None:
@@ -221,11 +225,13 @@ def test_period_text_active_without_recent_alerts() -> None:
         escalated_at=None,
         level="warning",
     )
-    text = texts.period_text(_context(incident), day_end=_DAY_END, partial_day=False)
+    ctx = _context(incident)
+    text = texts.period_text(ctx, day_end=_DAY_END, partial_day=False)
     assert text == "сутки 20.08, без сработок с 21.08"
+    assert texts.status_text(ctx) == "Активен · предупреждение"
     ongoing = _incident(last_seen_at=_DAY_END)
     text = texts.period_text(_context(ongoing), day_end=_DAY_END, partial_day=False)
-    assert text == "период 27.08 – 31.08, 5 сут, продолжается"
+    assert text == "период 27.08 – 31.08, 5 сут"
 
 
 def test_cause_text_qualifiers() -> None:
@@ -349,6 +355,7 @@ def test_render_docx_with_rows_and_empty() -> None:
         well_name="UZK_0377",
         category="Высокодебитные",
         detected_at=datetime(2026, 8, 26, 9, 14),
+        status_label="Завершён 29.08",
         deviation="недозаполнение насоса, сильная, период 26.08 – 29.08 завершился",
         cause="негерметичность насоса",
         probability_percent=85,
@@ -361,6 +368,8 @@ def test_render_docx_with_rows_and_empty() -> None:
     )
     xml = _document_xml(render_docx(_sheet([row])))
     assert "СУТОЧНАЯ ВЕДОМОСТЬ" in xml
+    assert "Статус на дату" in xml
+    assert "Завершён 29.08" in xml
     assert "UZK_0377" in xml
     assert "118 из 146" in xml
     assert "w:tblHeader" in xml
@@ -438,7 +447,7 @@ def test_r10_deviation_and_rule_texts() -> None:
 
     assert texts.deviation_text(drop, day_end=_DAY_END, partial_day=False) == (
         "снижение дебита жидкости по замерам ЦИТС (отклонение от техрежима, "
-        "свежее), выраженная, период 29.08 – 31.08, 3 сут, продолжается"
+        "свежее), выраженная, период 29.08 – 31.08, 3 сут"
     )
     assert (
         "Qж 12 при техрежиме 30 (-60 %), замеров за порогом подряд: 3 с 29.08; "
@@ -499,3 +508,45 @@ def test_render_r10_sheet_with_cits_coverage_and_measure_requests() -> None:
     assert "сутки правилом обработаны" in xml
     assert "Запросить замер" in xml
     assert "UVK_0424" in xml
+
+
+def test_active_rows_before_closed() -> None:
+    # Завершённый эпизод с большей вероятностью — всё равно под активным.
+    closed = _context(
+        _incident(id=1, normalized_at=datetime(2026, 8, 30)),
+        confidence=0.9,
+    )
+    active = _context(
+        _incident(id=2, well_id=11, last_seen_at=_DAY_END),
+        well_id=11,
+        well_name="UZK_0378",
+        confidence=0.4,
+    )
+    builder = DailySheetBuilder.__new__(DailySheetBuilder)
+    builder.now = _DAY_END
+    target = SimpleNamespace(
+        detector_code="R9",
+        ngdu_id=5,
+        ngdu_name="Кайнармунайгаз",
+        abai_ngdu_id=12,
+        sheet_date=_DAY,
+        oil_fields=[],
+    )
+    coverage = DailySheetCoverageDTO(
+        stations_total=1,
+        stations_reporting=1,
+        stations_processed=1,
+    )
+
+    sheet = builder._compose(  # noqa: SLF001
+        target,  # type: ignore[arg-type]
+        "Перекос нагрузки",
+        [closed, active],
+        coverage,
+        day_end=_DAY_END,
+    )
+
+    assert [(r.well_name, r.status_label) for r in sheet.rows] == [
+        ("UZK_0378", "Активен · авария"),
+        ("UZK_0377", "Завершён 29.08"),
+    ]

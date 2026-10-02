@@ -31,6 +31,8 @@ class DailySheetRowDTO(BaseModel):
     well_name: str
     category: str | None
     detected_at: datetime
+    # «Активен · авария» / «Активен · предупреждение» / «Завершён 20.09 15:45».
+    status_label: str
     deviation: str
     cause: str
     probability_percent: int
