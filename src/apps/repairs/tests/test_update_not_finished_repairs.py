@@ -78,14 +78,27 @@ def test_closed_in_abai_and_gone_from_abai(monkeypatch: pytest.MonkeyPatch) -> N
         monkeypatch,
         open_abai_ids=[5880941, 7506638, 5719639],
         in_abai=[
-            SimpleNamespace(id=5880941, dend=CLOSED, work_plan=None, work_list=None),
-            SimpleNamespace(id=7506638, dend=None, work_plan=None, work_list=None),
+            SimpleNamespace(
+                id=5880941,
+                dend=CLOSED,
+                work_plan=None,
+                work_list=None,
+                repair_type=3,
+            ),
+            SimpleNamespace(
+                id=7506638,
+                dend=None,
+                work_plan=None,
+                work_list=None,
+                repair_type=1,
+            ),
         ],
     )
 
     assert updates[5880941]["end_time"] == CLOSED  # VMB_1145: закрыт в ABAI
     # закрытый нами по телеметрии получает дату ABAI и теряет пометку
     assert updates[5880941]["closed_by_telemetry_at"] is None
+    assert updates[5880941]["abai_repair_type_id"] == 3  # тип ремонта ABAI: ПРС
     assert 7506638 not in updates  # VMB_2507: идёт и в ABAI
     assert set(updates[5719639]) == {"abai_deleted_at"}  # UZV_5555: удалён в ABAI
 

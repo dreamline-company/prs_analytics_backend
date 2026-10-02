@@ -83,6 +83,7 @@ class UpdateNotFinishedRepairs:
                                         end_time=ar.dend,
                                         work_plan=ar.work_plan,
                                         work_list=ar.work_list,
+                                        abai_repair_type_id=ar.repair_type,
                                     ),
                                 )
                                 updated += 1

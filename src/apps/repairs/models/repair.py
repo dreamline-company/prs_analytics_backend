@@ -1,6 +1,14 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, ColumnElement, DateTime, ForeignKey, Text, and_
+from sqlalchemy import (
+    BigInteger,
+    ColumnElement,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Text,
+    and_,
+)
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,6 +44,12 @@ class Repair(AppBaseModel, IntPkMixin, AbaiIdMixin):
     )  # Список планируемых работ
     repair_type_id: Mapped[int] = mapped_column(
         ForeignKey("repairs_repair_type.abai_id"),
+    )  # Вид ремонтных работ (ABAI repair_work_type), не тип ремонта
+    # Тип ремонта ABAI (well_workover.repair_type -> well_repair_type): 1 КРС,
+    # 2 ТРС, 3 ПРС, 4 прочие простои, 5 наземный ремонт.
+    abai_repair_type_id: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
     )
     start_time: Mapped[datetime] = mapped_column(
         DateTime,

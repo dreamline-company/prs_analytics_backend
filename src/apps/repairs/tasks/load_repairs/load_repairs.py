@@ -50,6 +50,7 @@ class LoadRepairs:
                                     work_list=r.work_list,
                                     work_plan=r.work_plan,
                                     repair_type_id=r.repair_work_type,
+                                    abai_repair_type_id=r.repair_type,
                                     start_time=r.dbeg,
                                     end_time=r.dend,
                                 )
