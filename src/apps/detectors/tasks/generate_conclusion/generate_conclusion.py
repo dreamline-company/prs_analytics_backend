@@ -5,7 +5,9 @@
 эпизод, повторный запуск при готовом completed выходит сразу.
 
     python -m apps.detectors.tasks.generate_conclusion.generate_conclusion \
-        --incident-id 42
+        --incident-id 42 [--force]
+
+``--force`` перегенерирует и готовое заключение — после смены промпта.
 
 Причина и рекомендации — из справочника, уверенность — из улик, LLM пишет
 только summary; его падение оставляет строку в status=failed для повтора.
@@ -18,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.celery_app import celery_app, run_async
 from apps.detectors.conclusion import catalog
+from apps.detectors.conclusion.facts import facts_for, readable_summary
 from apps.detectors.conclusion.summary import (
     ConclusionSummaryInput,
     ConclusionSummaryProcessor,
@@ -54,7 +57,7 @@ class ConclusionGenerator:
         self.incident_repo = DetectorIncidentRepository(session)
         self.conclusion_repo = DetectorConclusionRepository(session)
 
-    async def run(self, incident_id: int) -> None:
+    async def run(self, incident_id: int, *, force: bool = False) -> None:
         incident = await self.incident_repo.get_one(
             QuerySpec(filters=(DetectorIncident.id == incident_id,)),
         )
@@ -81,7 +84,11 @@ class ConclusionGenerator:
             incident_id=incident.id,
             level=incident.level,
         )
-        if existing is not None and existing.status == CONCLUSION_STATUS_COMPLETED:
+        if (
+            not force
+            and existing is not None
+            and existing.status == CONCLUSION_STATUS_COMPLETED
+        ):
             logger.info(
                 "Conclusion for incident id=%s level=%s already completed",
                 incident.id,
@@ -121,8 +128,13 @@ class ConclusionGenerator:
 
         text = (result.result or {}).get("text") if result.result else None
         if result.status == "completed" and text:
+            summary = readable_summary(
+                text,
+                facts_for(summary_input),
+                summary_input.well_name,
+            )
             final = base.model_copy(
-                update={"status": CONCLUSION_STATUS_COMPLETED, "summary": text},
+                update={"status": CONCLUSION_STATUS_COMPLETED, "summary": summary},
             )
         else:
             final = base.model_copy(
@@ -170,9 +182,9 @@ class ConclusionGenerator:
         )
 
 
-async def main(incident_id: int) -> None:
+async def main(incident_id: int, *, force: bool = False) -> None:
     async with session_makers["app"]() as session:
-        await ConclusionGenerator(session).run(incident_id)
+        await ConclusionGenerator(session).run(incident_id, force=force)
 
 
 @celery_app.task(name="detectors.conclusion.generate")
@@ -183,5 +195,6 @@ def generate_conclusion(incident_id: int) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--incident-id", type=int, required=True)
+    parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
-    asyncio.run(main(args.incident_id))
+    asyncio.run(main(args.incident_id, force=args.force))

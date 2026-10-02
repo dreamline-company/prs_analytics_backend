@@ -1,11 +1,11 @@
 """LLM-summary заключения: объяснить улики эпизода человеческим языком.
 
 Единственное место конвейера заключений, где участвует LLM. Все числа и
-рекомендации приходят из кода (catalog) — модель только пересказывает улики;
-упавший вызов даёт заключению status=failed, подметальщик перезапустит.
+рекомендации приходят из кода (catalog, facts) — модель только связывает
+готовые физические факты; упавший вызов даёт заключению status=failed,
+подметальщик перезапустит.
 """
 
-import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,16 +14,15 @@ from langchain.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph.state import CompiledStateGraph
 
+from apps.detectors.conclusion.facts import facts_for
 from apps.repairs.tasks.fill_analytics.ai.base import BaseAIProcessor
 from core.settings import get_settings
 
 settings = get_settings()
 
-PROMPT_VERSION = "v1"
-
-# Не скармливать LLM всю историю улик: последних корзин/суток достаточно для
-# пересказа, а промпт остаётся коротким.
-_EVIDENCE_TAIL = 8
+# v2: вместо сырых улик правила (k, k_p90, пороги) — физические факты из
+# facts.py: операторам нужна картина насоса, а не механика детектора.
+PROMPT_VERSION = "v2"
 
 
 @dataclass(slots=True)
@@ -57,38 +56,26 @@ class ConclusionSummaryProcessor(BaseAIProcessor[ConclusionSummaryInput]):
     prompt_version = PROMPT_VERSION
 
     def _build_state(self, item: ConclusionSummaryInput) -> dict[str, Any]:
-        payload = dict(item.payload or {})
-        evidence = payload.get("evidence")
-        if isinstance(evidence, list) and len(evidence) > _EVIDENCE_TAIL:
-            payload["evidence"] = evidence[-_EVIDENCE_TAIL:]
-
-        data = {
-            "правило": item.cause,
-            "уровень": item.level,
-            "скважина": item.well_name,
-            "эпизод_открыт": item.opened_at,
-            "последнее_подтверждение": item.last_seen_at,
-            "улики_правила": payload,
-            "паспорт": {
-                "дебит_нефти_факт": item.oil_rate,
-                "дебит_жидкости_факт": item.liquid_rate,
-                "обводнённость_процент": item.water_cut,
-                "дебит_нефти_план": item.plan_oil_rate,
-                "дебит_жидкости_план": item.plan_liquid_rate,
-            },
-        }
+        facts = "\n".join(f"- {fact}" for fact in facts_for(item))
         prompt = (
-            "Ты — технолог по механизированной добыче нефти. По данным ниже "
-            "объясни в 2–4 предложениях по-русски, что происходит на скважине "
-            "и почему сработало правило детекции.\n\n"
+            "Ты — технолог по механизированной добыче нефти и пишешь для "
+            "оператора на промысле. Объясни в 2–3 предложениях по-русски, что "
+            "физически происходит с насосом и штангами на скважине "
+            f"{item.well_name or ''}.\n\n"
             "Правила ответа:\n"
             "- Только текст, без markdown, без списков, без приветствий.\n"
             "- Не давай рекомендаций — они формируются отдельно.\n"
-            "- Не выдумывай числа и факты: используй только данные из входа; "
-            "чего нет во входе — не упоминай.\n"
-            "- Пиши в терминологии домена (момент, заполнение насоса, "
-            "полезная нагрузка, дебит).\n\n"
-            f"Данные:\n{json.dumps(data, ensure_ascii=False, default=str)}"
+            "- Используй только факты ниже, числа бери из них как есть; "
+            "чего нет в фактах — не упоминай.\n"
+            "- Причину называй вероятной («похоже», «вероятно»), а не "
+            "установленным фактом.\n"
+            "- Если в фактах есть дата последних данных станции — назови её.\n"
+            "- Пиши о физике: ход вверх и вниз, нагрузка на штанги, утечка, "
+            "заполнение насоса, дебит. Нельзя: латиница, обозначения и "
+            "названия переменных, слова «коэффициент», «порог», «правило», "
+            "«детекция», «медиана», «перцентиль», «алгоритм».\n\n"
+            f"Вероятная причина: {item.cause}\n"
+            f"Факты:\n{facts}"
         )
         return {"messages": [HumanMessage(content=prompt)]}
 
