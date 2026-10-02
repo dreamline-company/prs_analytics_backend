@@ -31,6 +31,8 @@ COMPACT_HEADER = (
 )
 # Колонки chart.csv из spo_persist._render_csv.
 _CHART_COLUMNS = {"datetime", "hook_weight_t", "h2s_mg_m3", "ch4_percent"}
+# Газы в chart.csv: колонка, имя для модели, единица.
+_GASES = (("h2s_mg_m3", "H2S", "mg/m3"), ("ch4_percent", "CH4", "%"))
 
 
 def _number(value: str) -> float | None:
@@ -84,9 +86,53 @@ def compact_chart_csv(text: str, *, max_rows: int = MAX_CHART_ROWS) -> str:
     return "\n".join(out)
 
 
+def drop_empty_columns(text: str) -> str:
+    """CSV без колонок, пустых во всех строках.
+
+    Без газоанализатора строка кончается на ``,,``, и модель читала максимум
+    веса на крюке как H2S («выброс 10.331 мг/м3»): нет колонки — нечего путать.
+    """
+    rows = [line.split(",") for line in text.strip().splitlines()]
+    if len(rows) < 2:  # noqa: PLR2004 — заголовок и хотя бы одна строка
+        return text
+    keep = [
+        i
+        for i in range(len(rows[0]))
+        if any(i < len(row) and row[i] for row in rows[1:])
+    ]
+    if len(keep) == len(rows[0]):
+        return text
+    return "\n".join(
+        ",".join(row[i] if i < len(row) else "" for i in keep) for row in rows
+    )
+
+
+def gas_summary(text: str) -> str:
+    """Пики газов за весь замер, посчитанные кодом, а не найденные моделью."""
+    lines = text.strip().splitlines()
+    columns = {name: i for i, name in enumerate(lines[0].split(","))}
+    parts = []
+    for column, label, unit in _GASES:
+        peak: tuple[float, str] | None = None
+        if column in columns:
+            for line in lines[1:]:
+                row = line.split(",")
+                value = _number(row[columns[column]])
+                if value is not None and (peak is None or value > peak[0]):
+                    peak = (value, row[columns["datetime"]])
+        parts.append(
+            f"{label}: no sensor data in this measurement"
+            if peak is None
+            else f"{label} max {peak[0]:g} {unit} at {peak[1]}",
+        )
+    return "; ".join(parts)
+
+
 class SPOAIProcessor(BaseAIProcessor[SPOProcessingInput]):
     # Не поднята при сжатии графика: короткие замеры идут в модель как раньше,
     # а длинные раньше не доходили до ответа — пересчитывать готовые незачем.
+    # Не поднята и при сводке газов: разборы, где модель приняла вес за газ,
+    # перезапущены точечно, остальные не трогаем.
     prompt_version: str = "v1"
 
     def _build_state(self, item: SPOProcessingInput) -> dict[str, Any]:
@@ -102,7 +148,12 @@ class SPOAIProcessor(BaseAIProcessor[SPOProcessingInput]):
                     "chart.csv is compacted to fit the model: consecutive points "
                     "are grouped into intervals (min/max hook weight, max gas).",
                 )
-            parts.append(f"chart.csv:\n```csv\n{chart}\n```")
+            parts.append(
+                "Gas sensors, computed from the full measurement: "
+                f"{gas_summary(item.chart_text)}. Report gas only from this "
+                "line; other chart columns are not gas.",
+            )
+            parts.append(f"chart.csv:\n```csv\n{drop_empty_columns(chart)}\n```")
         if item.notes_text is not None:
             parts.append(f"notes.json:\n```json\n{item.notes_text}\n```")
         return {"messages": [HumanMessage(content="\n\n".join(parts))]}
