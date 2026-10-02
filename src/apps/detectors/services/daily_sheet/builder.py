@@ -538,6 +538,7 @@ class DailySheetBuilder:
                 incident.detector_code,
                 incident.reason_code,
                 primary.level,
+                incident.payload,
             )
             or incident.reason_code,
         }

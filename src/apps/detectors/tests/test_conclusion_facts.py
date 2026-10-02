@@ -152,9 +152,22 @@ def test_r2_cause_depends_on_level() -> None:
 
     assert warning.startswith("Снижение нагрузки на штангах при работающем приводе")
     assert alarm.startswith("Обрыв или отворот штанг")
-    # у R9 причина одна на оба уровня
+    # у R9 уровни — только длительность: причина одна на оба
     assert cause_for("R9", "load_imbalance", INCIDENT_LEVEL_WARNING) == cause_for(
         "R9",
         "load_imbalance",
         INCIDENT_LEVEL_ALARM,
     )
+
+
+def test_r9_cause_depends_on_branch() -> None:
+    growth = cause_for("R9", "load_imbalance", INCIDENT_LEVEL_ALARM, R9_PAYLOAD)
+    loss = cause_for(
+        "R9",
+        "load_imbalance",
+        INCIDENT_LEVEL_ALARM,
+        {**R9_PAYLOAD, "branches": ["rel", "loss"]},
+    )
+
+    assert growth.endswith("нарушено уравновешивание станка")
+    assert loss.startswith("Нагрузка на ходе вверх почти пропала")

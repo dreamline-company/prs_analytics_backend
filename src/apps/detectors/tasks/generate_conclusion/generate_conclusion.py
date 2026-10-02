@@ -75,6 +75,7 @@ class ConclusionGenerator:
             incident.detector_code,
             incident.reason_code,
             incident.level,
+            incident.payload,
         )
         if cause is None:
             logger.warning(
