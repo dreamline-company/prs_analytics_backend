@@ -554,12 +554,13 @@ class DailySheetBuilder:
         *,
         day_end: datetime,
     ) -> DailySheetDTO:
+        # Активные выше завершённых, внутри — по вероятности и силе.
         ordered = sorted(
             contexts,
             key=lambda ctx: (
+                not ctx.primary.is_active,
                 -ctx.probability_percent,
                 SEVERITY_RANK[ctx.severity],
-                not ctx.primary.is_active,
                 -ctx.primary.incident.opened_at.timestamp(),
             ),
         )
@@ -570,6 +571,7 @@ class DailySheetBuilder:
                 well_name=ctx.well_name,
                 category=CATEGORY_LABELS.get(category_key(ctx.rates.plan_oil) or ""),
                 detected_at=ctx.primary.incident.detected_at,
+                status_label=texts.status_text(ctx),
                 deviation=texts.deviation_text(
                     ctx,
                     day_end=day_end,

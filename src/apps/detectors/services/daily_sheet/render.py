@@ -183,6 +183,7 @@ def _table(document: Document, sheet: DailySheetDTO) -> None:
             row.well_name,
             row.category or "—",
             f"{row.detected_at:%d.%m.%Y, %H:%M}",
+            row.status_label,
             row.deviation,
             row.cause,
             str(row.probability_percent),
