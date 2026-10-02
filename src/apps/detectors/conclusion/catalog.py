@@ -28,6 +28,15 @@ CAUSES: dict[tuple[str, str], str] = {
     # Для ведомости: заключения по R10 не генерятся (нет в CONCLUSION_DETECTOR_CODES).
     ("R10", "liquid_loss"): "Снижение дебита жидкости по замерам",
 }
+# Причина на уровне, если она другая: warning R2 — момент ниже 60 % от
+# обычного, до полной потери нагрузки (alarm, ниже 40 %) называть это
+# обрывом рано.
+CAUSES_BY_LEVEL: dict[tuple[str, str, str], str] = {
+    ("R2", "rod_break", INCIDENT_LEVEL_WARNING): (
+        "Снижение нагрузки на штангах при работающем приводе: возможен срыв "
+        "подачи насоса, начинающийся отворот или обрыв штанг"
+    ),
+}
 
 # Приоритеты шагов: машинный код + подпись для UI.
 PRIORITY_CRITICAL = {"priority": "critical", "priority_ru": "Критично"}
@@ -133,8 +142,10 @@ RECOMMENDATIONS: dict[tuple[str, str], list[dict]] = {
 }
 
 
-def cause_for(detector_code: str, reason_code: str) -> str | None:
-    return CAUSES.get((detector_code, reason_code))
+def cause_for(detector_code: str, reason_code: str, level: str) -> str | None:
+    return CAUSES_BY_LEVEL.get((detector_code, reason_code, level)) or CAUSES.get(
+        (detector_code, reason_code),
+    )
 
 
 def recommendations_for(detector_code: str, level: str) -> list[dict]:

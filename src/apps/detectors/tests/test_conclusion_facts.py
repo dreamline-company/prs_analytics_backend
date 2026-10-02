@@ -7,10 +7,15 @@
 import re
 from dataclasses import replace
 
+from apps.detectors.conclusion.catalog import cause_for
 from apps.detectors.conclusion.facts import facts_for, readable_summary
 from apps.detectors.conclusion.summary import (
     ConclusionSummaryInput,
     ConclusionSummaryProcessor,
+)
+from apps.detectors.models.incident import (
+    INCIDENT_LEVEL_ALARM,
+    INCIDENT_LEVEL_WARNING,
 )
 
 R9_DAYS = [
@@ -139,3 +144,17 @@ def test_prompt_carries_facts_not_rule_internals() -> None:
     assert "k_p90" not in prompt
     assert "k_alert" not in prompt
     assert "branches" not in prompt
+
+
+def test_r2_cause_depends_on_level() -> None:
+    warning = cause_for("R2", "rod_break", INCIDENT_LEVEL_WARNING)
+    alarm = cause_for("R2", "rod_break", INCIDENT_LEVEL_ALARM)
+
+    assert warning.startswith("Снижение нагрузки на штангах при работающем приводе")
+    assert alarm.startswith("Обрыв или отворот штанг")
+    # у R9 причина одна на оба уровня
+    assert cause_for("R9", "load_imbalance", INCIDENT_LEVEL_WARNING) == cause_for(
+        "R9",
+        "load_imbalance",
+        INCIDENT_LEVEL_ALARM,
+    )

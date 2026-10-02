@@ -534,7 +534,11 @@ class DailySheetBuilder:
                 incident.detector_code,
                 incident.payload,
             ),
-            "cause": catalog.cause_for(incident.detector_code, incident.reason_code)
+            "cause": catalog.cause_for(
+                incident.detector_code,
+                incident.reason_code,
+                primary.level,
+            )
             or incident.reason_code,
         }
 

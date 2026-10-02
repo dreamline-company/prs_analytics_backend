@@ -71,7 +71,11 @@ class ConclusionGenerator:
                 incident_id,
             )
             return
-        cause = catalog.cause_for(incident.detector_code, incident.reason_code)
+        cause = catalog.cause_for(
+            incident.detector_code,
+            incident.reason_code,
+            incident.level,
+        )
         if cause is None:
             logger.warning(
                 "Conclusion: no cause in catalog for (%s, %s)",
