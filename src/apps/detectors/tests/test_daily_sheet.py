@@ -24,17 +24,11 @@ from apps.detectors.services.daily_sheet.config import (
     sheet_applies,
 )
 from apps.detectors.services.daily_sheet.context import (
-    LevelInfo,
     RateSnapshot,
     RepairInfo,
     WellContext,
 )
-from apps.detectors.services.daily_sheet.metrics import (
-    edge_means,
-    median,
-    ratio,
-    window_medians,
-)
+from apps.detectors.services.daily_sheet.metrics import ratio
 from apps.detectors.services.daily_sheet.oil_fields import (
     oil_fields_label,
     prefixes_key,
@@ -87,14 +81,6 @@ def _context(incident: SimpleNamespace, **overrides) -> WellContext:  # noqa: AN
         "episodes": [Episode(incident=incident, status=status, level=level)],
         "confidence": 0.62,
         "cause": "Потеря полезной нагрузки (R9)",
-        "recommendations": [
-            {
-                "step": 1,
-                "text": "Динамометрирование",
-                "role": "Технолог",
-                "deadline_hours": 48,
-            },
-        ],
     }
     return WellContext(**{**fields, **overrides})
 
@@ -168,15 +154,7 @@ def test_category_by_plan_oil() -> None:
 # --- метрики -----------------------------------------------------------------------
 
 
-def test_median_and_windows() -> None:
-    assert median([]) is None
-    assert median([3, 1, 2]) == 2
-    assert median([4, 1, 3, 2]) == 2.5
-    points = [(_DAY_END - timedelta(days=d, hours=1), float(20 - d)) for d in range(14)]
-    recent, previous = window_medians(points, end=_DAY_END, days=7)
-    assert (recent, previous) == (17.0, 10.0)
-    first, last = edge_means(points, end=_DAY_END, span_days=14, window_days=7)
-    assert (first, last) == (10.0, 17.0)
+def test_ratio() -> None:
     assert ratio(19.6, 25) == 19.6 / 25
     assert ratio(19.6, 0) is None
 
@@ -265,12 +243,7 @@ def test_cause_text_qualifiers() -> None:
     after_repair = _context(
         _incident(),
         repairs=[
-            RepairInfo(
-                "ТР 4-1",
-                "Смена насоса",
-                datetime(2026, 8, 24),
-                datetime(2026, 8, 26),
-            ),
+            RepairInfo(datetime(2026, 8, 24), datetime(2026, 8, 26)),
         ],
         rates=RateSnapshot(liquid=30.0, plan_liquid=28.0, measured_at=_DAY_START),
     )
@@ -301,7 +274,7 @@ def test_rates_text_marks_stale_measurements() -> None:
     )
 
 
-def test_recommendation_text_has_steps_and_basis() -> None:
+def test_top_text_has_rates_and_rule() -> None:
     ctx = _context(
         _incident(),
         rates=RateSnapshot(
@@ -310,26 +283,12 @@ def test_recommendation_text_has_steps_and_basis() -> None:
             plan_liquid=25.0,
             plan_oil=10.46,
             measured_at=_DAY_START - timedelta(days=1),
-            liquid_recent=19.6,
-            liquid_previous=30.0,
-            water_cut_first=55.0,
-            water_cut_last=79.0,
         ),
-        level=LevelInfo(value_m=28.0, meas_date=date(2026, 8, 28)),
-        ai_summary="x" * 400,
     )
-    text = texts.recommendation_text(ctx)
-    assert text.startswith("1) Динамометрирование (Технолог, 48 ч). Основание: ")
+    text = texts.top_text(ctx)
+    assert text.startswith("UZK_0377 — 60%. Жидкость 19.6 м3/сут при режиме 25")
+    assert "нефть 0 т/сут при плане 10.46 (30.08, ТМ)" in text
     assert "K = 0.36 при пороге 0.2, база 58 сут (СДМО)" in text
-    assert (
-        "жидкость 19.6 м3/сут при режиме 25, нефть 0 т/сут при плане 10.46 (30.08, ТМ)"
-        in text
-    )
-    assert "медианный дебит снизился с 30 до 19.6 м3/сут за неделю" in text
-    assert "обводнённость выросла с 55 до 79 % за 30 суток" in text
-    assert "ремонтов за 60 суток нет (ABAI)" in text
-    assert "замер уровня 28.08 (ABAI) — 28 м" in text
-    assert "ИИ-заключение: " + "x" * 299 + "…" in text
 
 
 def test_probability_rounds_to_five() -> None:
@@ -395,7 +354,6 @@ def test_render_docx_with_rows_and_empty() -> None:
         probability_percent=85,
         rates="19.6 / 25",
         plan_oil="10.46",
-        recommendation="ПРС. Основание: …",
         incident_ids=[1],
         level="alarm",
         status="normalized",
@@ -475,17 +433,17 @@ def test_r10_severity_by_deviation_and_zeros() -> None:
     assert severity_key("R10", {"event": 1, "dev": -0.35}) == SEVERITY_MODERATE
 
 
-def test_r10_deviation_and_basis_texts() -> None:
+def test_r10_deviation_and_rule_texts() -> None:
     drop = _context(_r10_incident(), cause="Снижение дебита (R10)")
 
     assert texts.deviation_text(drop, day_end=_DAY_END, partial_day=False) == (
         "снижение дебита жидкости по замерам ЦИТС (отклонение от техрежима, "
         "свежее), выраженная, период 29.08 – 31.08, 3 сут, продолжается"
     )
-    assert texts.basis_sentences(drop)[0] == (
+    assert (
         "Qж 12 при техрежиме 30 (-60 %), замеров за порогом подряд: 3 с 29.08; "
         "до серии +0 % (ЦИТС)"
-    )
+    ) in texts.top_text(drop)
 
     zeros = _context(
         _r10_incident(
@@ -499,10 +457,10 @@ def test_r10_deviation_and_basis_texts() -> None:
             note="доля работы СУ в дни нулей: 100%, 100%",
         ),
     )
-    assert texts.basis_sentences(zeros)[0] == (
+    assert (
         "нулевых замеров подряд: 2 с 30.08, техрежим 30; СУ работает; "
         "доля работы СУ в дни нулей: 100%, 100% (ЦИТС)"
-    )
+    ) in texts.top_text(zeros)
 
 
 def test_r10_measure_request_text() -> None:

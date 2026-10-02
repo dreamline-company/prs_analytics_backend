@@ -1,7 +1,7 @@
 """Данные одной строки ведомости, собранные из БД, — вход текстов и ТОП."""
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import datetime
 
 from apps.detectors.services.daily_sheet.config import LOSS_RATIO
 from apps.detectors.services.daily_sheet.metrics import ratio
@@ -27,12 +27,6 @@ class RateSnapshot:
     stale: bool = False
     plan_liquid: float | None = None
     plan_oil: float | None = None
-    # Медианы жидкости: последняя неделя и неделя до неё.
-    liquid_recent: float | None = None
-    liquid_previous: float | None = None
-    # Обводнённость: первая и последняя неделя 30-суточного окна.
-    water_cut_first: float | None = None
-    water_cut_last: float | None = None
 
     @property
     def has_fresh(self) -> bool:
@@ -41,22 +35,8 @@ class RateSnapshot:
 
 @dataclass(slots=True)
 class RepairInfo:
-    type_name: str | None
-    work: str | None
     start: datetime
     end: datetime | None
-
-
-@dataclass(slots=True)
-class StopInfo:
-    at: datetime
-    reason: str | None
-
-
-@dataclass(slots=True)
-class LevelInfo:
-    value_m: float
-    meas_date: date
 
 
 @dataclass(slots=True)
@@ -70,12 +50,8 @@ class WellContext:
     previous: list[IncidentLike] = field(default_factory=list)
     rates: RateSnapshot = field(default_factory=RateSnapshot)
     repairs: list[RepairInfo] = field(default_factory=list)
-    stops: list[StopInfo] = field(default_factory=list)
-    level: LevelInfo | None = None
     confidence: float = 0.5
     cause: str = ""
-    recommendations: list[dict] = field(default_factory=list)
-    ai_summary: str | None = None
 
     @property
     def primary(self) -> Episode:

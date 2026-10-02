@@ -6,6 +6,7 @@
 генерации).
 """
 
+from apps.detectors.load_imbalance.dto.internal.day import BRANCH_LOAD_LOSS
 from apps.detectors.models.incident import (
     INCIDENT_LEVEL_ALARM,
     INCIDENT_LEVEL_WARNING,
@@ -23,10 +24,28 @@ CAUSES: dict[tuple[str, str], str] = {
     ),
     ("R9", "load_imbalance"): (
         "Насос поднимает меньше жидкости: возможна утечка в клапанах, износ "
-        "плунжера или неполное заполнение"
+        "плунжера, неполное заполнение или нарушено уравновешивание станка"
     ),
     # Для ведомости: заключения по R10 не генерятся (нет в CONCLUSION_DETECTOR_CODES).
     ("R10", "liquid_loss"): "Снижение дебита жидкости по замерам",
+}
+# Причина на уровне, если она другая: warning R2 — момент ниже 60 % от
+# обычного, до полной потери нагрузки (alarm, ниже 40 %) называть это
+# обрывом рано.
+CAUSES_BY_LEVEL: dict[tuple[str, str, str], str] = {
+    ("R2", "rod_break", INCIDENT_LEVEL_WARNING): (
+        "Снижение нагрузки на штангах при работающем приводе: возможен срыв "
+        "подачи насоса, начинающийся отворот или обрыв штанг"
+    ),
+}
+# Причина по сработавшей ветке правила (payload.branches), важнее уровня: у R9
+# уровни отличаются только длительностью, а физика — ветками. «Потеря
+# нагрузки» — рабочий момент ниже 10 % обычного, это уже не утечка.
+CAUSES_BY_BRANCH: dict[tuple[str, str, str], str] = {
+    ("R9", "load_imbalance", BRANCH_LOAD_LOSS): (
+        "Нагрузка на ходе вверх почти пропала: вероятен обрыв штанг, срыв "
+        "плунжера или насос не подаёт жидкость"
+    ),
 }
 
 # Приоритеты шагов: машинный код + подпись для UI.
@@ -133,8 +152,19 @@ RECOMMENDATIONS: dict[tuple[str, str], list[dict]] = {
 }
 
 
-def cause_for(detector_code: str, reason_code: str) -> str | None:
-    return CAUSES.get((detector_code, reason_code))
+def cause_for(
+    detector_code: str,
+    reason_code: str,
+    level: str,
+    payload: dict | None = None,
+) -> str | None:
+    for branch in (payload or {}).get("branches") or []:
+        cause = CAUSES_BY_BRANCH.get((detector_code, reason_code, branch))
+        if cause is not None:
+            return cause
+    return CAUSES_BY_LEVEL.get((detector_code, reason_code, level)) or CAUSES.get(
+        (detector_code, reason_code),
+    )
 
 
 def recommendations_for(detector_code: str, level: str) -> list[dict]:
