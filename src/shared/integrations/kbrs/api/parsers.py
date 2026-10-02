@@ -211,6 +211,10 @@ class BinaryExtractor:
 
         header_end = sample_offset or min(len(data), 4096)
         for off in range(0, max(0, header_end - 9)):
+            # События лежат той же 10-байтовой сеткой, что и отсчёты: вне неё
+            # «время + канал» — случайные байты заголовка с мусорным кодом.
+            if sample_offset is not None and (sample_offset - off) % 10:
+                continue
             ts = struct.unpack_from(">I", data, off)[0]
             channel = struct.unpack_from(">H", data, off + 4)[0]
             raw = struct.unpack_from(">i", data, off + 6)[0]
