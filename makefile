@@ -1,9 +1,11 @@
-.PHONY: help run-api up-redis down-redis logs-redis up-api down-api logs-api up-celery down-celery logs-celery up-kbrs-poller down-kbrs-poller logs-kbrs-poller
+.PHONY: help run-api up-redis down-redis logs-redis up-api down-api logs-api up-celery down-celery logs-celery up-kbrs-poller down-kbrs-poller logs-kbrs-poller export-detections
 
 PROJECT_NAME ?= prs_effectiveness
 ENV_FILE ?= src/.env
 TAIL ?= 500
 FOLLOW ?= 0
+WORKER_CONTAINER ?= prs_eff_celery_worker
+EXPORT_DIR ?= ../exports
 
 DOCKER_COMPOSE = docker compose --env-file $(ENV_FILE) -p $(PROJECT_NAME)
 REDIS_COMPOSE = $(DOCKER_COMPOSE) -f deploy/redis/docker-compose.yml
@@ -55,3 +57,10 @@ down-kbrs-poller: ## Stop and remove the KBRS measure poller containers.
 
 logs-kbrs-poller: ## Show KBRS poller logs. Use TAIL=100 and FOLLOW=1 to control output.
 	$(KBRS_POLLER_COMPOSE) logs $(LOG_OPTIONS) kbrs_poller
+
+export-detections: ## Export all detector episodes and R10 findings to EXPORT_DIR/detections_all_<date>.csv.
+	docker exec -w /src $(WORKER_CONTAINER) python -m apps.detectors.tasks.export_detections.export_detections --out /tmp/detections_all.csv
+	@mkdir -p $(EXPORT_DIR)
+	docker cp $(WORKER_CONTAINER):/tmp/detections_all.csv $(EXPORT_DIR)/detections_all_$$(date +%F_%H%M).csv
+	docker exec $(WORKER_CONTAINER) rm -f /tmp/detections_all.csv
+	@ls -la $(EXPORT_DIR) | tail -3
