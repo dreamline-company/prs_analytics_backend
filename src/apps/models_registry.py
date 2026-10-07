@@ -18,6 +18,10 @@ from apps.detectors.models.incident import (
     DetectorCursor,
     DetectorIncident,
 )
+from apps.detectors.models.verification import (
+    DetectorVerification,
+    DetectorVerificationHistory,
+)
 from apps.files.models.file import File
 from apps.kbrs.models.measure import KbrsMeasure
 from apps.org.models.brigade import Brigade, UniqueBrigade
@@ -68,6 +72,8 @@ __all__ = (
     "DetectorDailySheetDelivery",
     "DetectorFinding",
     "DetectorIncident",
+    "DetectorVerification",
+    "DetectorVerificationHistory",
     "Dynamogram",
     "File",
     "GdisCurrent",

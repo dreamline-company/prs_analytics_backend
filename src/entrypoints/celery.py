@@ -18,6 +18,9 @@ from apps.detectors.load_imbalance.tasks.run_incidents.run_incidents import (  #
 from apps.detectors.rod_breaks.tasks.run_incidents.run_incidents import (  # noqa: F401
     run_rod_break_incidents,
 )
+from apps.detectors.rod_breaks.tasks.verify.verify import (  # noqa: F401
+    verify_rod_break_incidents,
+)
 
 # Импорт регистрирует утреннюю сборку суточных ведомостей R2/R9 по НГДУ.
 from apps.detectors.tasks.build_daily_sheets.build_daily_sheets import (  # noqa: F401
@@ -147,6 +150,12 @@ celery_app.conf.beat_schedule = {
     "detectors-sweep": {
         "task": "detectors.sweep",
         "schedule": crontab(minute="*/15"),
+    },
+    # Проверка эпизодов R2 независимыми данными (ремонты, статусы ABAI, привод
+    # СДМО, замеры нефти) — после статусов ABAI (:10) и замеров ЦИТС (:20).
+    "detectors-rod-breaks-verify": {
+        "task": "detectors.rod_breaks.verify",
+        "schedule": crontab(minute=30),
     },
     # R9 — правило суточное: считает вчерашние закрытые сутки. Гарантированный
     # прогон раз в день; диспетчер по приходу данных его продублирует не чаще

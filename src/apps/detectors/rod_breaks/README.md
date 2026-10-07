@@ -54,6 +54,20 @@ cd src && python -m apps.detectors.rod_breaks.tasks.run_detection.run_detection
 cd src && python -m pytest apps/detectors/rod_breaks/tests -q
 ```
 
+## Проверка эпизодов (ложная тревога или нет)
+
+`verification/` — независимая от правила проверка: после срабатывания смотрит
+ремонты и статусы ABAI, статус привода СДМО (регистр 1999) и замеры нефти ЦИТС
+и ставит эпизоду отметку в `detectors_verification` (журнал смен —
+`detectors_verification_history`). Таска `detectors.rod_breaks.verify`
+ежечасно в :30. Пороги — `verification/config.py`, логика без I/O —
+`verification/rule.py`, описание простым языком — `docs/r2_verification.md`.
+
+```bash
+cd src && python -m apps.detectors.rod_breaks.tasks.verify.verify --dry-run
+cd src && python -m apps.detectors.rod_breaks.tasks.verify.verify --backfill-days 60
+```
+
 ## Не сделано (следующие шаги)
 
 - Бэкфилл 60 дней в `telemetry_sdmo_fc_data` — детектор считает по загруженной

@@ -21,6 +21,10 @@ from apps.detectors.models.incident import (
     DetectorCursor,
     DetectorIncident,
 )
+from apps.detectors.models.verification import (
+    VERDICT_PENDING,
+    DetectorVerification,
+)
 from apps.telemetry.models.sdmo import SdmoStation
 from apps.wells.models.well import Well
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
@@ -169,6 +173,7 @@ class DetectorIncidentRepository(
         reason_code: str | None = None,
         status: str | None = None,
         level: str | None = None,
+        verdict: str | None = None,
         opened_from: datetime | None = None,
         opened_to: datetime | None = None,
         limit: int | None = None,
@@ -177,9 +182,27 @@ class DetectorIncidentRepository(
         """Эпизоды скважины для выгрузки: свежие сверху, фильтры опциональны.
 
         Порядок обратный ``list_active_by_well_id``: там нужен таймлайн, здесь —
-        лента, где актуальное читают первым.
+        лента, где актуальное читают первым. ``verdict`` — отметка проверки;
+        «pending» включает и эпизоды, которые ещё не проверялись.
         """
         filters = [DetectorIncident.well_id == well_id]
+        if verdict is not None:
+            checked = select(DetectorVerification.incident_id).where(
+                DetectorVerification.incident_id == DetectorIncident.id,
+            )
+            if verdict == VERDICT_PENDING:
+                filters.append(
+                    or_(
+                        ~checked.exists(),
+                        checked.where(
+                            DetectorVerification.verdict == VERDICT_PENDING,
+                        ).exists(),
+                    ),
+                )
+            else:
+                filters.append(
+                    checked.where(DetectorVerification.verdict == verdict).exists(),
+                )
         if detector_code is not None:
             filters.append(DetectorIncident.detector_code == detector_code)
         if reason_code is not None:
