@@ -3,8 +3,11 @@
 Строка — эпизод (``record_type=incident``) или находка R10
 (``record_type=r10_finding``), к каждой — данные скважины (НГДУ,
 месторождение, способ эксплуатации, статус ABAI) и станции СДМО, улики
-правила разложены по колонкам, целиком — в ``payload_json``. CSV через «;»,
-UTF-8 с BOM — Excel открывает без настроек. Только чтение.
+правила разложены по колонкам, целиком — в ``payload_json``. У эпизода —
+отметка проверки независимыми данными (колонки ``verify_*``: ложная /
+поломка подтверждена / …, доказательства и история смен; пусто — эпизод
+не проверялся). CSV через «;», UTF-8 с BOM — Excel открывает без настроек.
+Только чтение.
 
     python -m apps.detectors.tasks.export_detections.export_detections \\
         --out /tmp/detections_all.csv
@@ -24,6 +27,10 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.detectors.models.verification import (
+    REASON_LABELS_RU,
+    VERDICT_LABELS_RU,
+)
 from apps.models_registry import *  # noqa: F403
 from apps.org.repositories.org import OrgRepository
 from apps.org.services import well_name_prefix
@@ -50,6 +57,27 @@ def _get(payload: Any, *path: str) -> Any:  # noqa: ANN401
     return ",".join(map(str, payload)) if isinstance(payload, list) else payload
 
 
+def _first(payload: Any, key: str) -> dict:  # noqa: ANN401
+    """Первый элемент списка-доказательства (ремонты, статусы ABAI)."""
+    items = payload.get(key) if isinstance(payload, dict) else None
+    return items[0] if isinstance(items, list) and items else {}
+
+
+def _iso_ts(value: Any) -> str:  # noqa: ANN401
+    """ISO-время из evidence (``2026-10-04T20:22:48.8``) → вид остальных колонок."""
+    if not value:
+        return ""
+    return _ts(datetime.fromisoformat(value))
+
+
+def _hours(later: datetime | str | None, earlier: datetime) -> Any:  # noqa: ANN401
+    if not later:
+        return ""
+    if isinstance(later, str):
+        later = datetime.fromisoformat(later)
+    return round((later - earlier).total_seconds() / 3600, 1)
+
+
 async def _well_info(session: AsyncSession, well_ids: set[int]) -> dict[int, dict]:
     wells = (
         await session.execute(
@@ -69,7 +97,8 @@ async def _well_info(session: AsyncSession, well_ids: set[int]) -> dict[int, dic
     expl = await WellExplRepository(session).get_latest_expl_name_by_abai_well_ids(
         abai_ids,
     )
-    # Статусы ABAI хранятся в UTC — в выгрузку местным временем (+5).
+    # Статусы ABAI в нашей копии — местное время (сверено на проде 07.10.2026
+    # по отключениям электроэнергии против связи станций СДМО), без сдвига.
     statuses = {
         row.abai_well_id: row
         for row in (
@@ -77,7 +106,7 @@ async def _well_info(session: AsyncSession, well_ids: set[int]) -> dict[int, dic
                 text(
                     "select distinct on (ws.abai_well_id) ws.abai_well_id, "
                     "st.name_ru status, rs.name_ru reason, "
-                    "ws.dbeg + interval '5 hours' since "
+                    "ws.dbeg since "
                     "from wells_well_status ws "
                     "left join wells_well_status_type st on st.abai_id = ws.status "
                     "left join wells_well_status_reason rs on rs.abai_id = ws.reason "
@@ -115,7 +144,59 @@ async def _well_info(session: AsyncSession, well_ids: set[int]) -> dict[int, dic
     return info
 
 
-def _incident_row(row: Any, info: dict[int, dict]) -> dict:  # noqa: ANN401
+def _verification_cols(row: Any, history: dict[int, list]) -> dict:  # noqa: ANN401
+    """Колонки ``verify_*``: отметка проверки эпизода и её доказательства."""
+    if row["v_id"] is None:
+        return {"verify_verdict": "", "verify_verdict_ru": "Не проверялась"}
+    e = row["v_evidence"] or {}
+    repair = _first(e, "repair")
+    abai = _first(e, "abai")
+    changes = history.get(row["v_id"], [])
+    return {
+        "verify_verdict": row["v_verdict"],
+        "verify_verdict_ru": VERDICT_LABELS_RU.get(row["v_verdict"], ""),
+        "verify_reason": row["v_reason"] or "",
+        "verify_reason_ru": REASON_LABELS_RU.get(row["v_reason"], ""),
+        "verify_is_final": row["v_is_final"],
+        "verify_evidence_at": _ts(row["v_evidence_at"]),
+        "verify_hours_after_t0": _hours(row["v_evidence_at"], row["opened_at"]),
+        "verify_decided_at": _ts(row["v_decided_at"]),
+        "verify_final_at": _ts(row["v_final_at"]),
+        "verify_rule_version": row["v_rule_version"],
+        "verify_oil_measured_at": _iso_ts(_get(e, "oil", "measured_at")),
+        "verify_oil_qm_oil": _get(e, "oil", "qm_oil"),
+        "verify_oil_qv_liquid": _get(e, "oil", "qv_liquid"),
+        "verify_oil_norm": _get(e, "oil", "norm"),
+        "verify_oil_norm_source": _get(e, "oil", "norm_source"),
+        "verify_oil_share_of_norm": _get(e, "oil", "share_of_norm"),
+        "verify_drive_work_share": _get(e, "drive", "work_share"),
+        "verify_drive_samples": _get(e, "drive", "samples"),
+        "verify_drive_stopped_hours": _get(e, "drive", "stopped_hours"),
+        "verify_repair_id": repair.get("repair_id", ""),
+        "verify_repair_start": _iso_ts(repair.get("start")),
+        # Минус — ремонт открыт раньше тревоги: тревога пришлась на идущий ремонт.
+        "verify_repair_hours_after_t0": _hours(repair.get("start"), row["opened_at"]),
+        "verify_repair_rod_break": repair.get("rod_break", ""),
+        "verify_repair_work_list": repair.get("work_list", ""),
+        "verify_abai_since": _iso_ts(abai.get("since")),
+        "verify_abai_hours_after_t0": _hours(abai.get("since"), row["opened_at"]),
+        "verify_abai_status": abai.get("status") or "",
+        "verify_abai_reason": abai.get("reason") or "",
+        "verify_changes": len(changes),
+        "verify_history": " | ".join(
+            f"{_ts(h['changed_at'])}: {h['verdict_from'] or 'new'} → "
+            f"{h['verdict_to']}" + (f" ({h['reason_to']})" if h["reason_to"] else "")
+            for h in changes
+        ),
+        "verify_evidence_json": json.dumps(e, ensure_ascii=False, default=str),
+    }
+
+
+def _incident_row(
+    row: Any,  # noqa: ANN401
+    info: dict[int, dict],
+    history: dict[int, list],
+) -> dict:
     p = row["payload"] or {}
     end = row["normalized_at"]
     return {
@@ -175,6 +256,7 @@ def _incident_row(row: Any, info: dict[int, dict]) -> dict:  # noqa: ANN401
         "r10_last_day": _get(p, "last_day"),
         "r10_note": _get(p, "note"),
         "payload_json": json.dumps(p, ensure_ascii=False, default=str),
+        **_verification_cols(row, history),
     }
 
 
@@ -214,11 +296,16 @@ async def export(out: Path) -> int:
                         "d.source detector_source, "
                         "st.id st_id, st.sdmo_id st_sdmo_id, st.name st_name, "
                         "st.code st_code, st.type_1900 st_type, st.active st_active, "
-                        "st.abai_ngdu_id st_ngdu_abai, so.name_ru st_ngdu_name "
+                        "st.abai_ngdu_id st_ngdu_abai, so.name_ru st_ngdu_name, "
+                        "v.id v_id, v.verdict v_verdict, v.reason v_reason, "
+                        "v.is_final v_is_final, v.evidence_at v_evidence_at, "
+                        "v.decided_at v_decided_at, v.final_at v_final_at, "
+                        "v.evidence v_evidence, v.rule_version v_rule_version "
                         "from detectors_incident i "
                         "join detectors_detector d on d.code = i.detector_code "
                         "left join telemetry_sdmo_station st on st.id = i.entity_id "
                         "left join org so on so.abai_id = st.abai_ngdu_id "
+                        "left join detectors_verification v on v.incident_id = i.id "
                         "order by i.well_id, i.opened_at",
                     ),
                 )
@@ -239,13 +326,24 @@ async def export(out: Path) -> int:
             .mappings()
             .all()
         )
+        history: dict[int, list] = {}
+        for change in (
+            await session.execute(
+                text(
+                    "select verification_id, verdict_from, verdict_to, reason_to, "
+                    "changed_at from detectors_verification_history "
+                    "order by verification_id, changed_at, id",
+                ),
+            )
+        ).mappings():
+            history.setdefault(change["verification_id"], []).append(change)
         info = await _well_info(
             session,
             {r["well_id"] for r in incidents} | {r["well_id"] for r in findings},
         )
         await session.rollback()
 
-    rows = [_incident_row(r, info) for r in incidents]
+    rows = [_incident_row(r, info, history) for r in incidents]
     rows += [_finding_row(r, info) for r in findings]
     header: list[str] = []
     for row in rows:
