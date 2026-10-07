@@ -4,10 +4,16 @@ from apps.detectors.models.incident import (
     DetectorCursor,
     DetectorIncident,
 )
+from apps.detectors.models.verification import (
+    DetectorVerification,
+    DetectorVerificationHistory,
+)
 
 __all__ = (
     "Detector",
     "DetectorCursor",
     "DetectorFinding",
     "DetectorIncident",
+    "DetectorVerification",
+    "DetectorVerificationHistory",
 )

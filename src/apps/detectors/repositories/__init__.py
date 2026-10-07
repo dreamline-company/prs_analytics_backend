@@ -8,6 +8,10 @@ from apps.detectors.repositories.incident import (
     DetectorIncidentRepository,
     DetectorRepository,
 )
+from apps.detectors.repositories.verification import (
+    DetectorVerificationHistoryRepository,
+    DetectorVerificationRepository,
+)
 
 __all__ = (
     "DetectorConclusionFeedbackRepository",
@@ -16,4 +20,6 @@ __all__ = (
     "DetectorFindingRepository",
     "DetectorIncidentRepository",
     "DetectorRepository",
+    "DetectorVerificationHistoryRepository",
+    "DetectorVerificationRepository",
 )

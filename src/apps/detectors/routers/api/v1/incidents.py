@@ -8,12 +8,14 @@ from apps.detectors.dto.internal.incident import DetectorIncidentDTO
 from apps.detectors.dto.queries.incident import (
     IncidentLevel,
     IncidentStatus,
+    IncidentVerdict,
     ListIncidentsByWellIdQuery,
 )
 from apps.detectors.dto.responses.incident import ListDetectorIncidentsResponseDTO
 from apps.detectors.repositories import (
     DetectorIncidentRepository,
     DetectorRepository,
+    DetectorVerificationRepository,
 )
 from apps.detectors.use_cases.list_incidents_by_well_id import (
     ListIncidentsByWellIdUseCase,
@@ -44,6 +46,15 @@ async def get_detector_incidents(  # noqa: PLR0913
         IncidentLevel | None,
         Query(description="Filter: warning | alarm"),
     ] = None,
+    verdict: Annotated[
+        IncidentVerdict | None,
+        Query(
+            description=(
+                "Filter: verification verdict — pending (incl. not yet verified) | "
+                "false_alarm | failure_likely | failure_confirmed | undetermined"
+            ),
+        ),
+    ] = None,
     opened_from: Annotated[
         datetime | None,
         Query(description="Filter: DetectorIncident.opened_at >= opened_from"),
@@ -58,6 +69,7 @@ async def get_detector_incidents(  # noqa: PLR0913
     use_case = ListIncidentsByWellIdUseCase(
         incident_repository=DetectorIncidentRepository(session=session),
         detector_repository=DetectorRepository(session=session),
+        verification_repository=DetectorVerificationRepository(session=session),
     )
     incidents = await use_case.execute(
         ListIncidentsByWellIdQuery(
@@ -66,6 +78,7 @@ async def get_detector_incidents(  # noqa: PLR0913
             reason_code=reason_code,
             status=status,
             level=level,
+            verdict=verdict,
             opened_from=opened_from,
             opened_to=opened_to,
             limit=limit,
