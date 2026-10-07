@@ -54,6 +54,28 @@ REASON_OIL_LOW = "oil_low"  # нефть есть, но меньше полов�
 REASON_NO_OIL_NORM = "no_oil_norm"  # нет ни техрежима, ни замеров до тревоги
 REASON_DRIVE_UNSTABLE = "drive_unstable"  # нефть в норме, но привод работал < порога
 
+# Подписи для людей (выгрузки, фронт).
+VERDICT_LABELS_RU = {
+    VERDICT_PENDING: "Ожидает проверки",
+    VERDICT_FALSE_ALARM: "Тревога ложная",
+    VERDICT_FAILURE_LIKELY: "Скорее всего поломка",
+    VERDICT_FAILURE_CONFIRMED: "Поломка подтверждена",
+    VERDICT_UNDETERMINED: "Не удалось проверить",
+}
+REASON_LABELS_RU = {
+    REASON_OIL_OK_DRIVE_OK: "Нефть в норме, привод работал",
+    REASON_DRIVE_STOPPED: "Привод стоял 10+ часов",
+    REASON_ABAI_STATUS: "В ABAI поставили простой",
+    REASON_REPAIR: "Начался ремонт",
+    REASON_REPAIR_ROD_BREAK: "Начался ремонт, в работах «обрыв»",
+    REASON_NO_STATUS: "СДМО не присылал статус привода",
+    REASON_NO_MEASUREMENT: "Не было замера нефти",
+    REASON_OIL_NOT_MEASURED: "Нефть в замерах пустая или 0",
+    REASON_OIL_LOW: "Нефти меньше половины обычного",
+    REASON_NO_OIL_NORM: "Не с чем сравнить нефть",
+    REASON_DRIVE_UNSTABLE: "Нефть в норме, но привод останавливали",
+}
+
 
 class DetectorVerification(AppBaseModel, IntPkMixin, TimedMixinModel):
     """Текущая отметка проверки эпизода."""
