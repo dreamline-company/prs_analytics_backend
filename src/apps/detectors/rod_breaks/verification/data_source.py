@@ -7,7 +7,7 @@
 - замеры ЦИТС — ``telemetry_well`` (нефть ``qm_oil``), местное время;
 - техрежим по нефти — ``telemetry_tech_regime``;
 - ремонты — ``repairs_repair`` (время ABAI местное, удалённые в ABAI не берутся);
-- статусы — ``wells_well_status`` (UTC, переводятся в местное, см.
+- статусы — ``wells_well_status`` (местное время; перевод из UTC включается
   ``config.ABAI_STATUS_TIME_IS_UTC``).
 """
 
