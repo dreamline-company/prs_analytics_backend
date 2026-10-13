@@ -181,6 +181,13 @@ class Settings(CoreSettings):
     KBRS_POLL_WINDOW_HOURS: int = 24
     KBRS_POLL_REFRESH_GRACE_MINUTES: int = 120
     KBRS_POLL_PAGE_COUNT: int = 200
+    # Досылка архива: прибор со слабой связью дописывает данные в замер часы
+    # спустя, когда тот уже не «живой» (сервер КБРС читает архив медленно).
+    # Раз в KBRS_LATE_SWEEP_MINUTES разобранные замеры, начатые за последние
+    # KBRS_LATE_SWEEP_WINDOW_HOURS, перекачиваются; выросший — разбирается
+    # заново и перепривязывается к ремонту.
+    KBRS_LATE_SWEEP_MINUTES: int = 30
+    KBRS_LATE_SWEEP_WINDOW_HOURS: int = 72
 
     # S3 (minio)
     S3_ACCESS_KEY: str

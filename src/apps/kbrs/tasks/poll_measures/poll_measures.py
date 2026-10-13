@@ -48,6 +48,8 @@ async def main() -> None:
         window_hours=settings.KBRS_POLL_WINDOW_HOURS,
         refresh_grace_minutes=settings.KBRS_POLL_REFRESH_GRACE_MINUTES,
         page_count=settings.KBRS_POLL_PAGE_COUNT,
+        late_sweep_minutes=settings.KBRS_LATE_SWEEP_MINUTES,
+        late_sweep_window_hours=settings.KBRS_LATE_SWEEP_WINDOW_HOURS,
     )
 
     loop = asyncio.get_running_loop()
