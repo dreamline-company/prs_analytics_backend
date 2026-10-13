@@ -65,6 +65,29 @@ class KbrsMeasureRepository(
             ),
         )
 
+    async def list_for_late_recheck(
+        self,
+        *,
+        started_since: datetime,
+        fetched_before: datetime,
+    ) -> Sequence[KbrsMeasure]:
+        """Разобранные замеры, начатые с ``started_since`` и не перекачанные
+        после ``fetched_before`` — кандидаты на досланный хвост архива.
+
+        Живые замеры опросчик перечитывает каждую минуту, поэтому сюда они не
+        попадают (``fetched_at`` свежий).
+        """
+        return await self.get_list(
+            QuerySpec(
+                filters=(
+                    KbrsMeasure.status == MEASURE_STATUS_OK,
+                    KbrsMeasure.start_time >= started_since,
+                    KbrsMeasure.fetched_at <= fetched_before,
+                ),
+                order_by=(KbrsMeasure.start_time,),
+            ),
+        )
+
     async def list_devices_without_description(self) -> list[tuple[int, int]]:
         """Пары (owner_id, device_id), у замеров которых нет описания прибора."""
         qs = (

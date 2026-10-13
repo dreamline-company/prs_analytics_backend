@@ -10,6 +10,12 @@
   * новые замеры скачивает целиком; живые (``end_time`` ближе к now, чем
     ``KBRS_POLL_REFRESH_GRACE_MINUTES``) перечитывает — если сырой payload
     вырос, парсит и перезаливает заново;
+  * не разобравшийся «молодой» замер (у нас меньше grace — только начат,
+    телеметрии ещё нет) повторяет каждый опрос, старый — раз в grace;
+  * фоновым проходом раз в ``KBRS_LATE_SWEEP_MINUTES`` перекачивает
+    закрытые замеры за ``KBRS_LATE_SWEEP_WINDOW_HOURS``: прибор со слабой
+    связью досылает архив часы спустя, и сервер дописывает его в тот же
+    замер, когда тот у нас уже не «живой»;
   * сырой payload / chart.json / notes.json / passport.json кладёт в S3
     (ключи детерминированы — при перечитке объекты перезаписываются),
     метаданные — в таблицу ``kbrs_measure``.
@@ -24,8 +30,10 @@ import json
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.files.dto.internal.repositories.file import CreateFileDTO
 from apps.files.repositories.file import FileRepository
@@ -83,6 +91,8 @@ class _KnownMeasure:
     chart_json_file_id: int | None
     notes_file_id: int | None
     passport_file_id: int | None
+    # Когда строка появилась у нас — ``now()`` БД, на проде UTC.
+    created_at: datetime
 
     @classmethod
     def from_model(cls, row: KbrsMeasure) -> "_KnownMeasure":
@@ -96,13 +106,14 @@ class _KnownMeasure:
             chart_json_file_id=row.chart_json_file_id,
             notes_file_id=row.notes_file_id,
             passport_file_id=row.passport_file_id,
+            created_at=row.created_at,
         )
 
 
 class KbrsMeasurePoller:
     """Держит Toucan-сессии и бесконечно опрашивает новые замеры."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         pool: ToucanClientPool,
@@ -112,6 +123,8 @@ class KbrsMeasurePoller:
         window_hours: int,
         refresh_grace_minutes: int,
         page_count: int,
+        late_sweep_minutes: int,
+        late_sweep_window_hours: int,
     ) -> None:
         self._pool = pool
         self._storage = storage
@@ -120,6 +133,8 @@ class KbrsMeasurePoller:
         self._window_hours = window_hours
         self._refresh_grace = timedelta(minutes=refresh_grace_minutes)
         self._page_count = page_count
+        self._late_sweep_interval = timedelta(minutes=late_sweep_minutes)
+        self._late_sweep_window = timedelta(hours=late_sweep_window_hours)
         self._stop_event = asyncio.Event()
 
     def request_stop(self) -> None:
@@ -135,7 +150,10 @@ class KbrsMeasurePoller:
             self._window_hours,
             list(OWNERS_MAP),
         )
-        keepalive = asyncio.create_task(self._keepalive_loop())
+        background = [
+            asyncio.create_task(self._keepalive_loop()),
+            asyncio.create_task(self._late_sweep_loop()),
+        ]
         try:
             while not self._stop_event.is_set():
                 cycle_started = time.monotonic()
@@ -145,8 +163,9 @@ class KbrsMeasurePoller:
                     logger.exception("Poll cycle failed; will retry on next tick.")
                 await self._wait_next_tick(cycle_started)
         finally:
-            keepalive.cancel()
-            await asyncio.gather(keepalive, return_exceptions=True)
+            for task in background:
+                task.cancel()
+            await asyncio.gather(*background, return_exceptions=True)
             logger.info("KBRS poller stopped.")
 
     async def _wait_next_tick(self, cycle_started: float) -> None:
@@ -172,6 +191,65 @@ class KbrsMeasurePoller:
             else:
                 logger.debug("Keepalive: pinged %s idle clients.", pinged)
 
+    async def _late_sweep_loop(self) -> None:
+        """Раз в ``late_sweep_interval`` — проход по досланным хвостам архива.
+
+        Отдельной задачей, чтобы ежеминутный опрос живых замеров не ждал
+        перекачки сотни закрытых. С основным циклом не пересекается: тот
+        закрытые разобранные замеры не перечитывает.
+        """
+        while True:
+            await asyncio.sleep(self._late_sweep_interval.total_seconds())
+            try:
+                await self.late_sweep(
+                    window=self._late_sweep_window,
+                    min_age=self._late_sweep_interval,
+                )
+            except Exception:
+                logger.exception("Late sweep failed; will retry on next pass.")
+
+    async def late_sweep(self, *, window: timedelta, min_age: timedelta) -> int:
+        """Перекачать разобранные замеры, начатые за ``window``.
+
+        Берутся те, что не скачивались дольше ``min_age``. Не выросший замер
+        только отмечается ``fetched_at``; выросший разбирается заново и
+        ставится на перепривязку к ремонту. Возвращает число выросших.
+        """
+        now = _local_now()
+        async with session_makers["app"]() as session:
+            measure_repo = KbrsMeasureRepository(session)
+            models = await measure_repo.list_for_late_recheck(
+                started_since=now - window,
+                fetched_before=now - min_age,
+            )
+            known = {
+                model.measure_id: _KnownMeasure.from_model(model) for model in models
+            }
+            rows = [
+                MeasureRowDto(
+                    measure_id=model.measure_id,
+                    owner_id=model.owner_id,
+                    device_id=model.device_id,
+                    device_type=model.device_type,
+                    offset=0,
+                )
+                for model in models
+            ]
+            fetched, grown = await self._fetch_rows(
+                session,
+                rows,
+                known=known,
+                descriptions={},
+            )
+        logger.info(
+            "Late sweep: %s measures started within %s, %s re-fetched, %s grown.",
+            len(rows),
+            window,
+            fetched,
+            grown,
+        )
+        return grown
+
     async def _poll_once(self) -> None:
         rows = await self._list_recent_measures()
         if not rows:
@@ -180,7 +258,6 @@ class KbrsMeasurePoller:
 
         async with session_makers["app"]() as session:
             measure_repo = KbrsMeasureRepository(session)
-            file_repo = FileRepository(session)
             known = {
                 measure_id: _KnownMeasure.from_model(model)
                 for measure_id, model in (
@@ -203,41 +280,65 @@ class KbrsMeasurePoller:
             descriptions = await self._device_descriptions(
                 {row.owner_id for row in pending},
             )
-            fetched = 0
-            for row in pending:
-                if self._stop_event.is_set():
-                    break
-                try:
-                    linkable_well = await self._fetch_and_persist(
-                        row,
-                        existing=known.get(row.measure_id),
-                        measure_repo=measure_repo,
-                        file_repo=file_repo,
-                        device_description=descriptions.get(
-                            (int(row.owner_id), int(row.device_id)),
-                        ),
-                    )
-                except Exception:
-                    logger.exception(
-                        "Fetch failed for measure_id=%s; rolled back.",
-                        row.measure_id,
-                    )
-                    await session.rollback()
-                else:
-                    await session.commit()
-                    fetched += 1
-                    if linkable_well is not None:
-                        # Связывание с ремонтом — отдельная celery-таска:
-                        # опросчик не ждёт S3 и парсинг чужого пайплайна.
-                        schedule_spo_link(row.measure_id)
+            fetched, _ = await self._fetch_rows(
+                session,
+                pending,
+                known=known,
+                descriptions=descriptions,
+            )
             if fetched:
                 logger.info("Poll: fetched %s measures.", fetched)
+
+    async def _fetch_rows(
+        self,
+        session: AsyncSession,
+        rows: Sequence[MeasureRowDto],
+        *,
+        known: dict[int, _KnownMeasure],
+        descriptions: dict[tuple[int, int], str],
+    ) -> tuple[int, int]:
+        """Скачать замеры по одному, коммит на каждый; (скачано, выросло)."""
+        measure_repo = KbrsMeasureRepository(session)
+        file_repo = FileRepository(session)
+        fetched = grown = 0
+        for row in rows:
+            if self._stop_event.is_set():
+                break
+            try:
+                changed, linkable_well = await self._fetch_and_persist(
+                    row,
+                    existing=known.get(row.measure_id),
+                    measure_repo=measure_repo,
+                    file_repo=file_repo,
+                    device_description=descriptions.get(
+                        (int(row.owner_id), int(row.device_id)),
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Fetch failed for measure_id=%s; rolled back.",
+                    row.measure_id,
+                )
+                await session.rollback()
+                continue
+            await session.commit()
+            fetched += 1
+            grown += changed
+            if linkable_well is not None:
+                # Связывание с ремонтом — отдельная celery-таска:
+                # опросчик не ждёт S3 и парсинг чужого пайплайна.
+                schedule_spo_link(row.measure_id)
+        return fetched, grown
 
     def _needs_fetch(self, existing: _KnownMeasure | None, now: datetime) -> bool:
         if existing is None:
             return True
         if existing.status != MEASURE_STATUS_OK or existing.end_time is None:
-            # Битые/непарсящиеся — ретрай не чаще, чем раз в grace.
+            # Только что начатый замер не разбирается, пока в нём нет
+            # телеметрии, — пока он «молодой», повторяем каждый опрос, иначе
+            # идущая СПО часами не видна. Старый битый — не чаще раза в grace.
+            if _utc_now() - existing.created_at < self._refresh_grace:
+                return True
             return now - existing.fetched_at >= self._refresh_grace
         # Живой замер (мог дорасти), пока его правый край близок к now.
         return now - existing.end_time <= self._refresh_grace
@@ -313,12 +414,12 @@ class KbrsMeasurePoller:
         measure_repo: KbrsMeasureRepository,
         file_repo: FileRepository,
         device_description: str | None = None,
-    ) -> int | None:
+    ) -> tuple[bool, int | None]:
         """Скачать и сохранить замер.
 
-        Возвращает номер скважины из паспорта, если содержимое замера
-        изменилось и его можно связать с ремонтом; ``None`` — замер не вырос
-        или скважина в паспорте не прочиталась.
+        Возвращает (содержимое изменилось, номер скважины из паспорта для
+        связывания с ремонтом). Номер ``None`` — замер не вырос или скважина
+        в паспорте не прочиталась.
         """
         # Только measure_id: с device_id/update_offset сервер отдаёт дельту
         # без паспорта в заголовке (см. KbrsSPOFetcher._probe_measure).
@@ -338,7 +439,7 @@ class KbrsMeasurePoller:
                 existing.id,
                 UpdateKbrsMeasureDTO(fetched_at=_local_now()),
             )
-            return None
+            return False, None
 
         well_number = MeasurementPassportPeeker.read_well(raw)
         full: MeasurementFullDto | None = None
@@ -417,7 +518,7 @@ class KbrsMeasurePoller:
             len(raw),
             "" if full else " (parse error)",
         )
-        return well_number
+        return True, well_number
 
     async def _upload(
         self,
@@ -459,6 +560,11 @@ def device_description_map(
 
 def _local_now() -> datetime:
     return datetime.now(tz=settings.ZONE_INFO).replace(tzinfo=None)
+
+
+def _utc_now() -> datetime:
+    """Наивный UTC — как ``created_at`` (``now()`` БД на проде в UTC)."""
+    return datetime.now(tz=UTC).replace(tzinfo=None)
 
 
 def _naive(value: datetime | None) -> datetime | None:
