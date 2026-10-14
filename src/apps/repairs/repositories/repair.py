@@ -204,6 +204,34 @@ class RepairRepository(
         result = await self.session.execute(stmt)
         return {row[0]: row[1] for row in result.all()}
 
+    async def list_with_type_by_well_abai_ids(
+        self,
+        abai_well_ids: Sequence[int],
+        *,
+        since: datetime | None = None,
+    ) -> list[tuple[Repair, str | None]]:
+        """Ремонты скважин с названием вида работ — для расчёта МРП.
+
+        Удалённые в ABAI (``abai_deleted_at``) не берутся: их там уже нет, а
+        запись осталась лишь ради привязанной аналитики. ``since`` отсекает
+        ремонты, закончившиеся раньше этой даты; незакрытые остаются.
+        """
+        if not abai_well_ids:
+            return []
+        stmt = (
+            select(Repair, RepairType.name_ru)
+            .join(RepairType, RepairType.abai_id == Repair.repair_type_id, isouter=True)
+            .where(
+                Repair.abai_well_id.in_(abai_well_ids),
+                Repair.abai_deleted_at.is_(None),
+            )
+            .order_by(Repair.abai_well_id, Repair.start_time, Repair.id)
+        )
+        if since is not None:
+            stmt = stmt.where(or_(Repair.end_time.is_(None), Repair.end_time >= since))
+        result = await self.session.execute(stmt)
+        return [(repair, type_name) for repair, type_name in result.all()]
+
     async def list_active_by_well_abai_ids(
         self,
         abai_well_ids: Sequence[int],

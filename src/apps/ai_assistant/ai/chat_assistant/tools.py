@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.files.repositories.file import FileRepository
 from apps.org.repositories.brigade import UniqueBrigadeRepository
 from apps.org.repositories.ngdu import NGDURepository
+from apps.repairs.dto.queries.mrp import GetWellMrpQuery
 from apps.repairs.dto.queries.timeline import GetRepairTimelineQuery
 from apps.repairs.models.reports import RepairSummary
 from apps.repairs.models.transport import RepairTransport
@@ -46,6 +47,7 @@ from apps.repairs.repositories.docs import RepairDocRepository
 from apps.repairs.repositories.repair import RepairRepository, RepairTypeRepository
 from apps.repairs.repositories.reports import RepairSummaryRepository
 from apps.repairs.use_cases.get_repair_timeline import GetRepairTimelineUseCase
+from apps.repairs.use_cases.get_well_mrp import GetWellMrpUseCase
 from apps.wells.models.spo import SPO
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
@@ -537,6 +539,64 @@ async def list_brigade_error_screens(config: RunnableConfig) -> list[dict[str, A
 
 
 @tool
+async def get_well_mrp(config: RunnableConfig) -> dict[str, Any]:
+    """Возвращает межремонтный период (МРП) скважины текущего ремонта.
+
+    МРП — сколько скважина проработала между соседними ремонтами. Tool сам
+    считает средний МРП по истории ремонтов, МРП до и после текущего ремонта
+    и признак, сократился ли МРП после него (ремонт неэффективный), и отдаёт
+    готовую текстовую интерпретацию в поле ``interpretation`` — перескажи её
+    пользователю, числа не пересчитывай. Используй для вопросов про МРП,
+    частоту ремонтов скважины и эффективность текущего ремонта.
+    """
+    repair_id = _get_repair_id(config)
+    async with session_makers["app"]() as session:
+        repair = await RepairRepository(session=session).get_by_id(repair_id)
+        if repair is None:
+            return {"error": "repair_not_found", "repair_id": repair_id}
+        well_repo = WellRepository(session=session)
+        well = await well_repo.get_by_abai_id(repair.abai_well_id)
+        if well is None:
+            return {"error": "well_not_found", "repair_id": repair_id}
+        mrp = await GetWellMrpUseCase(
+            repair_repository=RepairRepository(session=session),
+            well_repository=well_repo,
+        ).execute(GetWellMrpQuery(well_id=well.id), focus_repair_id=repair_id)
+
+    current = next((r for r in mrp.repairs if r.repair_id == repair_id), None)
+    return {
+        "well": mrp.well_name,
+        "avg_mrp_days": mrp.avg_mrp_days,
+        "intervals_count": mrp.intervals_count,
+        "repairs_count": mrp.repairs_count,
+        "worse_count": mrp.worse_count,
+        "interpretation": mrp.interpretation,
+        "current_repair": (
+            None
+            if current is None
+            else {
+                "repair_id": current.repair_id,
+                "mrp_before_days": current.mrp_before_days,
+                "mrp_after_days": current.mrp_after_days,
+                "running_days": current.running_days,
+                "verdict": current.verdict,
+            }
+        ),
+        # Последние ремонты — кратко, чтобы не раздувать контекст
+        "recent_repairs": [
+            {
+                "repair_id": r.repair_id,
+                "start_time": _iso(r.start_time),
+                "mrp_before_days": r.mrp_before_days,
+                "mrp_after_days": r.mrp_after_days,
+                "verdict": r.verdict,
+            }
+            for r in mrp.repairs[:8]
+        ],
+    }
+
+
+@tool
 async def get_file(file_id: int, config: RunnableConfig) -> dict[str, Any]:
     """Возвращает метаинформацию о файле (путь в хранилище, дата создания)
     для доступа к динамограмме, СПО, ПОР или Акту.
@@ -569,5 +629,6 @@ CHAT_ASSISTANT_TOOLS = [
     get_repair_timeline,
     list_repair_transport,
     list_brigade_error_screens,
+    get_well_mrp,
     get_file,
 ]
