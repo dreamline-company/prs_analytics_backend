@@ -1,5 +1,6 @@
 """LangGraph processor for a single SPO measurement."""
 
+import json
 import math
 from dataclasses import dataclass
 from typing import Any
@@ -128,18 +129,69 @@ def gas_summary(text: str) -> str:
     return "; ".join(parts)
 
 
+# Схема ответа. Раньше промпт её не задавал и просил JSON на английском, поэтому
+# у каждого замера поля назывались по-своему (conclusion / summary / overall_
+# assessment …), а текст выводов приходил английским и не читался оператором.
+_OUTPUT_SCHEMA_HINT: dict[str, Any] = {
+    "summary": "строка — краткое заключение по замеру, 1–3 предложения",
+    "hook_weight": {
+        "min_t": "число, т, или null",
+        "max_t": "число, т, или null",
+        "comment": "строка — как вёл себя вес на крюке",
+    },
+    "events": [
+        {
+            "start": "время начала события (ISO)",
+            "end": "время конца события (ISO)",
+            "max_weight_t": "число, т, или null",
+            "description": "строка — что произошло",
+        },
+    ],
+    "gas": {
+        "h2s_max_mg_m3": "число или null",
+        "ch4_max_percent": "число или null",
+        "comment": "строка — что с газом",
+    },
+    "attention_points": ["строки — на что обратить внимание инженеру"],
+}
+
+_INSTRUCTIONS_RU = (
+    "Ты — инженер по анализу спуско-подъёмных операций (СПО) при ремонте "
+    "скважин. Проанализируй замер СПО по приложенным ниже данным.\n\n"
+    "Верни СТРОГО валидный JSON — без пояснений, без текста вокруг, без "
+    "markdown-обёртки. Все текстовые значения пиши ПО-РУССКИ, коротко и по "
+    "делу; английские термины и названия полей в текст не вставляй.\n\n"
+    "Правила:\n"
+    "- Вес на крюке — в тоннах (т). Времена — в формате ISO, как в данных.\n"
+    "- Если по какому-то пункту вывод сделать нельзя — не выдумывай: "
+    "число ставь null, список оставь пустым.\n"
+    "- Газы (H2S, CH4) бери ТОЛЬКО из строки «Gas sensors» ниже. Остальные "
+    "колонки графика — не газ; вес на крюке за газ не принимай. Нет данных "
+    "газоанализатора — так и напиши в gas.comment.\n"
+    "- В events перечисли значимые события (резкие скачки, плато, провалы), "
+    "не более 8, в порядке времени.\n\n"
+    "Схема ответа (пример):\n"
+    f"{json.dumps(_OUTPUT_SCHEMA_HINT, ensure_ascii=False)}"
+)
+
+
 class SPOAIProcessor(BaseAIProcessor[SPOProcessingInput]):
     # Не поднята при сжатии графика: короткие замеры идут в модель как раньше,
     # а длинные раньше не доходили до ответа — пересчитывать готовые незачем.
     # Не поднята и при сводке газов: разборы, где модель приняла вес за газ,
     # перезапущены точечно, остальные не трогаем.
-    prompt_version: str = "v1"
+    # v2: промпт на русском со схемой ответа — все прежние разборы (v1,
+    # английский JSON произвольной формы) будут пересчитаны координатором.
+    prompt_version: str = "v2"
 
     def _build_state(self, item: SPOProcessingInput) -> dict[str, Any]:
         parts: list[str] = [
-            f"Analyze SPO measurement (spo_id={item.spo.id}, "
-            f"snapshot_time={item.spo.snapshot_time.isoformat()}). "
-            "Chart CSV and notes JSON are attached below. Return findings as JSON.",
+            _INSTRUCTIONS_RU,
+            (
+                f"Замер СПО: spo_id={item.spo.id}, "
+                f"snapshot_time={item.spo.snapshot_time.isoformat()}. "
+                "Данные chart.csv и notes.json приложены ниже."
+            ),
         ]
         if item.chart_text is not None:
             chart = compact_chart_csv(item.chart_text)
