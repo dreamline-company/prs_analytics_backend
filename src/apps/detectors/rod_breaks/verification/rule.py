@@ -7,8 +7,11 @@
 Порядок решения:
 
 1. Ремонт или статус простоя ABAI с причиной-отказом → «поломка подтверждена».
-2. Ложная тревога: годный замер нефти не раньше T0 + 4 ч, нефть ≥ 50 % нормы,
-   и привод работал ≥ 90 % времени от T0 до замер + 12 ч.
+2. Ложная тревога — по первому из двух признаков:
+   а) момент вернулся: средний момент в окне T0+1…6 ч ≥ 75 % среднего за
+      24 ч до T0 (решается в T0 + 6 ч);
+   б) годный замер нефти не раньше T0 + 4 ч, нефть ≥ 50 % нормы, и привод
+      работал ≥ 90 % времени от T0 до замер + 12 ч.
 3. «Скорее всего поломка»: привод полностью стоял ≥ 10 часов в окне 96 ч.
    Если выполнены и 2, и 3 — побеждает то, что установлено раньше по времени
    данных.
@@ -17,14 +20,15 @@
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from statistics import median
+from statistics import fmean, median
 
 from apps.detectors.models.verification import (
     REASON_ABAI_STATUS,
     REASON_DRIVE_STOPPED,
     REASON_DRIVE_UNSTABLE,
+    REASON_MOMENT_RECOVERED,
     REASON_NO_MEASUREMENT,
     REASON_NO_OIL_NORM,
     REASON_NO_STATUS,
@@ -39,6 +43,7 @@ from apps.detectors.models.verification import (
     VERDICT_PENDING,
     VERDICT_UNDETERMINED,
 )
+from apps.detectors.rod_breaks import config as r2_config
 from apps.detectors.rod_breaks.verification import config
 
 _HOUR = timedelta(hours=1)
@@ -50,6 +55,15 @@ class StatusSample:
 
     at: datetime
     code: int
+
+
+@dataclass(frozen=True, slots=True)
+class MomentSample:
+    """Отсчёт СДМО: момент штанги (регистр 1991) и скорость ротора (1998)."""
+
+    at: datetime
+    moment: float
+    speed: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +104,7 @@ class VerificationInput:
     tech_regime_oil: float | None
     repairs: Sequence[RepairEvent]
     abai_statuses: Sequence[AbaiStatusEvent]
+    moment_samples: Sequence[MomentSample] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +199,85 @@ def stopped_hours_reached(
             if stopped == need and reached_at is None:
                 reached_at = hour + _HOUR
     return reached_at, stopped
+
+
+@dataclass(frozen=True, slots=True)
+class _MomentCheck:
+    """Итог сравнения момента после тревоги с моментом до неё."""
+
+    decided_at: datetime  # конец окна T0 + 6 ч
+    recovered: bool
+    evidence: dict
+
+
+def _clip_moment(value: float) -> float:
+    return min(max(value, r2_config.MOMENT_CLIP_MIN), r2_config.MOMENT_CLIP_MAX)
+
+
+def moment_check(inp: VerificationInput, now: datetime) -> _MomentCheck | None:
+    """Вернулся ли момент после тревоги; ``None`` — окно T0+1…6 ч не закрылось.
+
+    База — средний момент за 24 ч до T0 по отсчётам, где ротор крутился
+    (скорость > ``FAILURE_SPD_ABS``): остановки не занижают обычный уровень.
+    После — средний момент всех отсчётов окна: если привод после тревоги
+    остановили, это тоже не «вернулся».
+    """
+    decided_at = inp.t0 + timedelta(hours=config.MOMENT_RECOVERY_TO_HOURS)
+    if now < decided_at:
+        return None
+    base_from = inp.t0 - timedelta(hours=config.MOMENT_BASE_HOURS)
+    window_from = inp.t0 + timedelta(hours=config.MOMENT_RECOVERY_FROM_HOURS)
+    before = [
+        _clip_moment(s.moment)
+        for s in inp.moment_samples
+        if base_from <= s.at < inp.t0
+        and s.speed is not None
+        and s.speed > r2_config.FAILURE_SPD_ABS
+    ]
+    after = [
+        _clip_moment(s.moment)
+        for s in inp.moment_samples
+        if window_from <= s.at < decided_at
+    ]
+    base = fmean(before) if before else None
+    level = fmean(after) if after else None
+    share = level / base if base and level is not None else None
+    enough = (
+        len(before) >= config.MOMENT_BASE_MIN_SAMPLES
+        and len(after) >= config.MOMENT_WINDOW_MIN_SAMPLES
+    )
+    recovered = (
+        enough
+        and base is not None
+        and base >= config.MOMENT_BASE_MIN
+        and share is not None
+        and share >= config.MOMENT_RECOVERY_SHARE_MIN
+    )
+    return _MomentCheck(
+        decided_at=decided_at,
+        recovered=recovered,
+        evidence={
+            "base": _round(base, 1),
+            "base_samples": len(before),
+            "base_from": _iso(base_from),
+            "window_from": _iso(window_from),
+            "window_to": _iso(decided_at),
+            "level": _round(level, 1),
+            "samples": len(after),
+            "share_of_base": _round(share),
+            "threshold": config.MOMENT_RECOVERY_SHARE_MIN,
+        },
+    )
+
+
+def _with_moment(
+    result: VerificationResult,
+    moment: _MomentCheck | None,
+) -> VerificationResult:
+    """Цифры момента — в доказательства любой отметки (для калибровки порога)."""
+    if moment is None or "moment" in result.evidence:
+        return result
+    return replace(result, evidence={**result.evidence, "moment": moment.evidence})
 
 
 # --- Ветки решения ---
@@ -364,6 +458,15 @@ def _round(value: float | None, digits: int = 3) -> float | None:
 
 def evaluate(inp: VerificationInput, now: datetime) -> VerificationResult:
     """Отметка эпизода на момент ``now`` (местное время, наивное)."""
+    moment = moment_check(inp, now)
+    return _with_moment(_evaluate(inp, now, moment), moment)
+
+
+def _evaluate(  # noqa: PLR0911 — по ветке на каждую отметку
+    inp: VerificationInput,
+    now: datetime,
+    moment: _MomentCheck | None,
+) -> VerificationResult:
     final = now >= inp.t0 + timedelta(days=config.FINAL_DAYS)
 
     confirmed = _confirmation(inp, now)
@@ -392,6 +495,21 @@ def evaluate(inp: VerificationInput, now: datetime) -> VerificationResult:
     }
 
     # Ложная и «скорее всего поломка» — побеждает установленное раньше.
+    # Момент решается в T0 + 6 ч — раньше и замера нефти (≥ T0 + 16 ч), и
+    # 10 часов остановки, поэтому из двух признаков ложной первым идёт он.
+    if (
+        moment is not None
+        and moment.recovered
+        and (likely_at is None or moment.decided_at <= likely_at)
+    ):
+        return VerificationResult(
+            verdict=VERDICT_FALSE_ALARM,
+            reason=REASON_MOMENT_RECOVERED,
+            is_final=final,
+            evidence_at=moment.decided_at,
+            evidence={"window": window, "moment": moment.evidence},
+        )
+
     if (
         oil is not None
         and oil.decided_at is not None

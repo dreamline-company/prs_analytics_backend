@@ -4,6 +4,7 @@
 
 - статус привода — ``telemetry_sdmo_fc_data.r_1999`` станции эпизода
   (``entity_id``), местное время;
+- момент штанги и скорость ротора — там же, ``r_1991`` / ``r_1998``;
 - замеры ЦИТС — ``telemetry_well`` (нефть ``qm_oil``), местное время;
 - техрежим по нефти — ``telemetry_tech_regime``;
 - ремонты — ``repairs_repair`` (время ABAI местное, удалённые в ABAI не берутся);
@@ -17,10 +18,12 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.detectors.rod_breaks import config as r2_config
 from apps.detectors.rod_breaks.verification import config
 from apps.detectors.rod_breaks.verification.rule import (
     AbaiStatusEvent,
     Measurement,
+    MomentSample,
     RepairEvent,
     StatusSample,
     VerificationInput,
@@ -38,6 +41,8 @@ from apps.wells.models.well_status import (
 from core.settings import get_settings
 
 _STATUS_REGISTER = SdmoFcData.r_1999
+_MOMENT_REGISTER = getattr(SdmoFcData, f"r_{r2_config.MOMENT_REGISTER}")
+_SPEED_REGISTER = getattr(SdmoFcData, f"r_{r2_config.SPEED_REGISTER}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +86,7 @@ class R2VerificationSource:
             tech_regime_oil=await self._tech_regime_oil(abai_well_id, t0),
             repairs=await self._repairs(abai_well_id, t0),
             abai_statuses=await self._abai_statuses(abai_well_id, t0),
+            moment_samples=await self._moment_samples(incident.entity_id, t0),
         )
 
     async def _status_samples(
@@ -105,6 +111,34 @@ class R2VerificationSource:
             .order_by(SdmoFcData.savetime),
         )
         return [StatusSample(at=at, code=int(code)) for at, code in rows.all()]
+
+    async def _moment_samples(
+        self,
+        station_id: int | None,
+        t0: datetime,
+    ) -> list[MomentSample]:
+        """Момент и скорость: сутки до T0 (база) и окно восстановления после."""
+        if station_id is None:
+            return []
+        rows = await self.session.execute(
+            select(SdmoFcData.savetime, _MOMENT_REGISTER, _SPEED_REGISTER)
+            .where(
+                SdmoFcData.station_id == station_id,
+                SdmoFcData.savetime >= t0 - timedelta(hours=config.MOMENT_BASE_HOURS),
+                SdmoFcData.savetime
+                < t0 + timedelta(hours=config.MOMENT_RECOVERY_TO_HOURS),
+                _MOMENT_REGISTER.is_not(None),
+            )
+            .order_by(SdmoFcData.savetime),
+        )
+        return [
+            MomentSample(
+                at=at,
+                moment=float(moment),
+                speed=float(speed) if speed is not None else None,
+            )
+            for at, moment, speed in rows.all()
+        ]
 
     async def _measurements(self, well_id: int, t0: datetime) -> list[Measurement]:
         rows = await self.session.execute(

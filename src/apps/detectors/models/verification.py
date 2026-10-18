@@ -43,6 +43,7 @@ VERDICTS = (
 
 # Причины отметки.
 REASON_OIL_OK_DRIVE_OK = "oil_ok_drive_ok"  # нефть в норме, привод работал
+REASON_MOMENT_RECOVERED = "moment_recovered"  # момент вернулся к обычному за 1–6 ч
 REASON_DRIVE_STOPPED = "drive_stopped"  # оператор надолго выключил привод
 REASON_ABAI_STATUS = "abai_status"  # в ABAI простой с причиной-отказом
 REASON_REPAIR = "repair"  # начался ремонт
@@ -64,6 +65,7 @@ VERDICT_LABELS_RU = {
 }
 REASON_LABELS_RU = {
     REASON_OIL_OK_DRIVE_OK: "Нефть в норме, привод работал",
+    REASON_MOMENT_RECOVERED: "Момент восстановился после тревоги",
     REASON_DRIVE_STOPPED: "Привод стоял 10+ часов",
     REASON_ABAI_STATUS: "В ABAI поставили простой",
     REASON_REPAIR: "Начался ремонт",

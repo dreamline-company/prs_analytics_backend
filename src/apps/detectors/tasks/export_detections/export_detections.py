@@ -172,6 +172,10 @@ def _verification_cols(row: Any, history: dict[int, list]) -> dict:  # noqa: ANN
         "verify_drive_work_share": _get(e, "drive", "work_share"),
         "verify_drive_samples": _get(e, "drive", "samples"),
         "verify_drive_stopped_hours": _get(e, "drive", "stopped_hours"),
+        # Момент: средний за сутки до T0 и в окне T0+1…6 ч, доля от базы.
+        "verify_moment_base": _get(e, "moment", "base"),
+        "verify_moment_level": _get(e, "moment", "level"),
+        "verify_moment_share_of_base": _get(e, "moment", "share_of_base"),
         "verify_repair_id": repair.get("repair_id", ""),
         "verify_repair_start": _iso_ts(repair.get("start")),
         # Минус — ремонт открыт раньше тревоги: тревога пришлась на идущий ремонт.
