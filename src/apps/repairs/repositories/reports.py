@@ -45,6 +45,13 @@ class RepairSummaryRepository(
             ),
         )
 
+    async def list_cars_since(self, since: date) -> list[str]:
+        """Поле «машина» сводок с даты ``since`` — как записано в сводке."""
+        result = await self.session.execute(
+            select(RepairSummary.car).where(RepairSummary.date >= since).distinct(),
+        )
+        return list(result.scalars().all())
+
     async def list_by_well_ids_in_dates(
         self,
         well_ids: Sequence[int],
