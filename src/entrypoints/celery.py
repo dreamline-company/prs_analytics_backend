@@ -41,6 +41,13 @@ from apps.detectors.tasks.mail_daily_sheets.mail_daily_sheets import (  # noqa: 
     mail_daily_sheets,
 )
 
+# Импорт регистрирует справочник машин и загрузку GPS-треков из «Аргуса».
+from apps.gps.tasks.load_tracks.load_tracks import (  # noqa: F401
+    NIGHTLY_REREAD_HOURS,
+    load_gps_tracks,
+)
+from apps.gps.tasks.sync_units.sync_units import sync_gps_units  # noqa: F401
+
 # Импорт регистрирует таску последовательной синхронизации оргструктуры.
 from apps.org.tasks.sync_org.sync_org import sync_org  # noqa: F401
 
@@ -274,5 +281,23 @@ celery_app.conf.beat_schedule = {
     "repairs-analytics-sweep": {
         "task": "repairs.analytics.sweep",
         "schedule": crontab(minute=30),
+    },
+    # Справочник машин «Аргуса» — раз в сутки (полный get_units, ~8 МБ).
+    "gps-units-sync": {
+        "task": "gps.units.sync",
+        "schedule": crontab(hour=4, minute=50),
+    },
+    # GPS-треки — каждые 15 минут с перечиткой 2 ч; новая машина догоняет
+    # историю (180 суток) за несколько прогонов.
+    "gps-tracks-incremental": {
+        "task": "gps.tracks.incremental",
+        "schedule": crontab(minute="7-59/15"),
+    },
+    # Ночная перечитка 72 ч: точки, которые трекер без связи дослал позже.
+    # В 05:00 — между 15-минутными прогонами, чтобы не упереться в их замок.
+    "gps-tracks-nightly-reread": {
+        "task": "gps.tracks.incremental",
+        "schedule": crontab(hour=5, minute=0),
+        "kwargs": {"reread_hours": NIGHTLY_REREAD_HOURS},
     },
 }

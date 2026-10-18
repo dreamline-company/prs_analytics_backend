@@ -1,4 +1,7 @@
 from collections.abc import Sequence
+from datetime import datetime
+
+from sqlalchemy import func, select
 
 from apps.repairs.dto.internal.repositories.transport import (
     CreateRepairTransportDTO,
@@ -91,3 +94,18 @@ class RepairTransportRepository(
 
     async def delete_by_repair_id(self, repair_id: int) -> None:
         await self.delete(filters=(RepairTransport.repair_id == repair_id,))
+
+    async def list_vehicle_numbers_since(self, since: datetime) -> list[str]:
+        """Номера машин путёвок с датой (факт, иначе план, иначе создание)
+        не раньше ``since`` — как записаны в УТО."""
+        when = func.coalesce(
+            RepairTransport.actual_date,
+            RepairTransport.planned_start_at,
+            RepairTransport.operation_created_at,
+        )
+        result = await self.session.execute(
+            select(RepairTransport.vehicle_number)
+            .where(RepairTransport.vehicle_number.is_not(None), when >= since)
+            .distinct(),
+        )
+        return list(result.scalars().all())

@@ -88,6 +88,7 @@ All repositories extend `AsyncAlchemyRepository[CreateDTO, UpdateDTO, ModelT]` f
 - **ABAI** (MySQL) — source of truth for wells, repair work types, coordinates: `shared/integrations/abai/`
 - **WinCC / Kainar / DMG** (MSSQL via ODBC) — telemetry data: `shared/integrations/wincc/`
 - **S3 / MinIO** — dynamograms, SPO files, reports: `shared/database/s3/`
+- **Argus** (HTTP SDK, GPS of EMG vehicles) — client `shared/integrations/argus/`, tracks loaded into `apps/gps/` (`gps_unit`, `gps_message`)
 
 ### Celery tasks
 

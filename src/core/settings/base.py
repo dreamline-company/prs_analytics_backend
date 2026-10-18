@@ -166,6 +166,15 @@ class Settings(CoreSettings):
     UTO_PASS: str
     UTO_CONNECT_THROUGH: str | None = None
 
+    # ARGUS GPS (apps/gps): SDK мониторинга транспорта ЭМГ. Пустой логин или
+    # пароль — загрузчики треков не запускаются (пишут ошибку и выходят).
+    # CONNECT_THROUGH — если DNS контейнера не знает хост:
+    # "admin.argus.emg.kmg.kz:443:10.32.10.113:443".
+    ARGUS_BASE_URL: str = "https://admin.argus.emg.kmg.kz/sdk/"
+    ARGUS_LOGIN: str = ""
+    ARGUS_PASS: str = ""
+    ARGUS_CONNECT_THROUGH: str | None = None
+
     # TOUCAN KBRS CLIENT
     KBRS_HOST: str = "10.32.10.86"
     KBRS_LOGIN: str

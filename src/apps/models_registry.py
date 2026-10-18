@@ -23,6 +23,8 @@ from apps.detectors.models.verification import (
     DetectorVerificationHistory,
 )
 from apps.files.models.file import File
+from apps.gps.models.message import GpsMessage
+from apps.gps.models.unit import GpsUnit
 from apps.kbrs.models.measure import KbrsMeasure
 from apps.org.models.brigade import Brigade, UniqueBrigade
 from apps.org.models.ngdu import NGDU
@@ -79,6 +81,8 @@ __all__ = (
     "GdisCurrent",
     "GdisCurrentValue",
     "GdisMetric",
+    "GpsMessage",
+    "GpsUnit",
     "KbrsMeasure",
     "OilField",
     "Org",
