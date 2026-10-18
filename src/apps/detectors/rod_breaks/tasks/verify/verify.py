@@ -11,6 +11,11 @@
     python -m apps.detectors.rod_breaks.tasks.verify.verify --dry-run
     python -m apps.detectors.rod_breaks.tasks.verify.verify --backfill-days 60
     python -m apps.detectors.rod_breaks.tasks.verify.verify --incident-ids 1170,818
+    python -m apps.detectors.rod_breaks.tasks.verify.verify --recheck-days 60 --dry-run
+
+``--recheck-days`` пересчитывает и окончательные отметки за столько суток —
+после смены правила (``RULE_VERSION``). Подтверждённый отказ и тогда не
+снимается.
 """
 
 import argparse
@@ -85,9 +90,16 @@ def local_now() -> datetime:
 
 
 class R2VerificationRunner:
-    def __init__(self, session: AsyncSession, *, dry_run: bool = False) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        dry_run: bool = False,
+        recheck: bool = False,
+    ) -> None:
         self.session = session
         self.dry_run = dry_run
+        self.recheck = recheck
         self.source = R2VerificationSource(session)
         self.verifications = DetectorVerificationRepository(session)
         self.history = DetectorVerificationHistoryRepository(session)
@@ -97,9 +109,10 @@ class R2VerificationRunner:
         *,
         incident_ids: list[int] | None = None,
         backfill_days: int | None = None,
+        recheck_days: int | None = None,
     ) -> Counter:
         now = local_now()
-        incidents = await self._targets(now, incident_ids, backfill_days)
+        incidents = await self._targets(now, incident_ids, backfill_days, recheck_days)
         existing = {
             incident_id: VerificationRef.of(row)
             for incident_id, row in (
@@ -152,11 +165,13 @@ class R2VerificationRunner:
         now: datetime,
         incident_ids: list[int] | None,
         backfill_days: int | None,
+        recheck_days: int | None = None,
     ) -> list[IncidentRef]:
         """Свежие эпизоды R2 и неокончательные старые (их окончательно закрыть).
 
         ``backfill_days`` — дополнительно эпизоды за столько суток без отметки
-        (первичное заполнение истории).
+        (первичное заполнение истории); ``recheck_days`` — все эпизоды за
+        столько суток, в том числе с окончательной отметкой.
         """
         recent = DetectorIncident.opened_at >= now - timedelta(days=config.FINAL_DAYS)
         not_final = and_(
@@ -170,6 +185,10 @@ class R2VerificationRunner:
                     DetectorVerification.id.is_(None),
                     DetectorIncident.opened_at >= now - timedelta(days=backfill_days),
                 ),
+            )
+        if recheck_days is not None:
+            conditions.append(
+                DetectorIncident.opened_at >= now - timedelta(days=recheck_days),
             )
         stmt = (
             select(
@@ -222,9 +241,14 @@ class R2VerificationRunner:
             await self._log(row.id, None, None, result, now)
             return f"new->{result.verdict}"
 
-        # Окончательная отметка не меняется. Подтверждённый отказ ещё
-        # дополняется (позже пришёл ремонт «обрыв»), пока не истёк срок.
-        if current.is_final and current.verdict != VERDICT_FAILURE_CONFIRMED:
+        # Окончательная отметка не меняется (кроме явного пересчёта после смены
+        # правила). Подтверждённый отказ ещё дополняется (позже пришёл ремонт
+        # «обрыв»), пока не истёк срок.
+        if (
+            current.is_final
+            and current.verdict != VERDICT_FAILURE_CONFIRMED
+            and not self.recheck
+        ):
             return None
         if (
             current.verdict == VERDICT_FAILURE_CONFIRMED
@@ -303,12 +327,19 @@ async def main(
     *,
     incident_ids: list[int] | None = None,
     backfill_days: int | None = None,
+    recheck_days: int | None = None,
     dry_run: bool = False,
 ) -> None:
     async with session_makers["app"]() as session:
-        await R2VerificationRunner(session, dry_run=dry_run).run(
+        runner = R2VerificationRunner(
+            session,
+            dry_run=dry_run,
+            recheck=recheck_days is not None,
+        )
+        await runner.run(
             incident_ids=incident_ids,
             backfill_days=backfill_days,
+            recheck_days=recheck_days,
         )
 
 
@@ -321,6 +352,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="R2: проверка эпизодов")
     parser.add_argument("--incident-ids", type=str, default=None)
     parser.add_argument("--backfill-days", type=int, default=None)
+    parser.add_argument("--recheck-days", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -329,5 +361,10 @@ if __name__ == "__main__":
     args = _parse_args()
     ids = [int(x) for x in args.incident_ids.split(",")] if args.incident_ids else None
     asyncio.run(
-        main(incident_ids=ids, backfill_days=args.backfill_days, dry_run=args.dry_run),
+        main(
+            incident_ids=ids,
+            backfill_days=args.backfill_days,
+            recheck_days=args.recheck_days,
+            dry_run=args.dry_run,
+        ),
     )

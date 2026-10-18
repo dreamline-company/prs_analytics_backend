@@ -217,3 +217,28 @@ def test_finding_row_for_unknown_well_keeps_id() -> None:
     assert row["record_type"] == "r10_finding"
     assert row["well_id"] == 99
     assert (row["fix_date"], row["event"], row["dev"]) == ("2026-09-30", 1, -0.6)
+
+
+def test_incident_row_moment_recovered_columns() -> None:
+    row = _incident_row(
+        _r2_incident(
+            v_id=7,
+            v_verdict="false_alarm",
+            v_reason="moment_recovered",
+            v_is_final=False,
+            v_evidence_at=datetime(2026, 10, 19, 16, 0),
+            v_decided_at=datetime(2026, 10, 19, 16, 30),
+            v_final_at=None,
+            v_evidence={
+                "moment": {"base": 118.4, "level": 110.2, "share_of_base": 0.931},
+            },
+            v_rule_version="r2-verify-v2",
+        ),
+        INFO,
+        {},
+    )
+
+    assert row["verify_reason_ru"] == "Момент восстановился после тревоги"
+    assert (row["verify_moment_base"], row["verify_moment_level"]) == (118.4, 110.2)
+    assert row["verify_moment_share_of_base"] == 0.931
+    assert row["verify_oil_qm_oil"] == ""
