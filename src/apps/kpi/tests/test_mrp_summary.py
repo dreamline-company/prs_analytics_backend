@@ -1,4 +1,4 @@
-"""МРП по методике КМГ через use case: статусы UTC -> местное, ГТМ, ЧРФ."""
+"""МРП по методике КМГ через use case: время работы по статусам, ГТМ, ЧРФ."""
 
 import asyncio
 from datetime import datetime
@@ -67,7 +67,7 @@ class FakeRepairs:
 
 
 class FakeStatuses:
-    """Статусы как в ABAI: UTC, открытый интервал до 3333-12-31."""
+    """Статусы как в ABAI: местное время, открытый интервал до 3333-12-31."""
 
     def __init__(self, rows: list[tuple]) -> None:
         self.rows = rows
@@ -150,8 +150,8 @@ def test_totals_use_work_status_minus_repairs() -> None:
     total = _run().total
 
     # A: 365 − 5 сут ремонтов (2+1+1 ... см. ремонты 11, 12, 13) = 361;
-    # B: июль–сентябрь 92 − 3 ремонта по 1 сут = 89; статусы UTC → местное (+5 ч)
-    assert total.work_days == pytest.approx(361 + 89 - 5 / 24, abs=0.3)
+    # B: июль–сентябрь 92 − 3 ремонта по 1 сут = 89
+    assert total.work_days == pytest.approx(361 + 89, abs=0.3)
     assert total.repairs == 6
     assert total.gtm == 1
     assert total.failures == 5
@@ -163,7 +163,7 @@ def test_downtime_status_is_not_work() -> None:
     by_field = {g.key: g for g in _run().by_oil_field}
 
     # JLM_0002: статус «в работе» только с 1 июля — простой до этого не считается
-    assert by_field["JLM"].work_days == pytest.approx(89 - 5 / 24, abs=0.3)
+    assert by_field["JLM"].work_days == pytest.approx(89, abs=0.3)
 
 
 def test_groups_by_oil_field_and_lift_type() -> None:
