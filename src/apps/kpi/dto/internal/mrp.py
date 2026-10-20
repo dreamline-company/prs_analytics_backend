@@ -46,6 +46,11 @@ class CrfDTO(BaseModel):
     distribution: dict[int, int]
     # Скважины ЧРФ по числу ремонтов
     wells_by_repairs: dict[int, list[str]]
+    # ЧРФ по фонду ШГН: фонд ШГН на конец окна, скважины, ремонты, доля от фонда ШГН
+    shgn_fund_at_end: int = 0
+    shgn_wells_count: int = 0
+    shgn_repairs: int = 0
+    shgn_percent_of_fund: float | None = None
 
 
 class MrpSummaryDTO(BaseModel):

@@ -127,6 +127,10 @@ class GetMrpSummaryUseCase:
                 ],
                 distribution=crf.distribution,
                 wells_by_repairs=crf.wells_by_count,
+                shgn_fund_at_end=crf.shgn_fund_at_end,
+                shgn_wells_count=crf.shgn_wells,
+                shgn_repairs=crf.shgn_repairs,
+                shgn_percent_of_fund=_round(crf.shgn_percent_of_fund, 2),
             ),
             note=NOTE,
         )

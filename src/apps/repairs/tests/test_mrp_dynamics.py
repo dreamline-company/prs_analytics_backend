@@ -117,23 +117,23 @@ def test_month_values_are_for_the_month_only() -> None:
     assert april.month_mrp_without_gtm == pytest.approx(april.month_work_days)
 
 
-def test_month_without_repairs_has_undefined_mrp() -> None:
+def test_month_without_repairs_mrp_equals_work_time() -> None:
+    # Методика КМГ: если ремонтов не было, МРП принимается равным времени работы
     by_month = {p.month: p for p in _series()}
 
     july = by_month["2026-07"]
     assert july.month_repairs == 0
-    assert july.month_mrp_with_gtm is None
-    assert july.month_mrp_without_gtm is None
-    # а скользящий показатель за год определён
+    assert july.month_mrp_with_gtm == july.month_work_days
+    assert july.month_mrp_without_gtm == july.month_work_days
     assert july.rolling_mrp_with_gtm is not None
 
 
-def test_all_repairs_gtm_gives_undefined_mrp_without_gtm() -> None:
+def test_all_repairs_gtm_mrp_without_gtm_equals_work_time() -> None:
     by_month = {p.month: p for p in _series()}
 
-    march = by_month["2026-03"]  # единственный ремонт месяца — ГТМ
+    march = by_month["2026-03"]  # единственный ремонт месяца — ГТМ, отказов нет
     assert march.month_mrp_with_gtm is not None
-    assert march.month_mrp_without_gtm is None
+    assert march.month_mrp_without_gtm == march.month_work_days
 
 
 def test_repair_time_is_subtracted_from_work_time() -> None:

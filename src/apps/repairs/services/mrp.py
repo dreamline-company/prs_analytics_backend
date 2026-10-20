@@ -275,6 +275,12 @@ class CrfResult:
     distribution: dict[int, int]
     # число ремонтов → имена скважин (только для ЧРФ: от min_repairs)
     wells_by_count: dict[int, list[str]]
+    # ЧРФ по фонду ШГН (методика ЧРФ, шаг 6): скважины ШГН, их ремонты, доля от
+    # фонда ШГН на конец окна
+    shgn_fund_at_end: int = 0
+    shgn_wells: int = 0
+    shgn_repairs: int = 0
+    shgn_percent_of_fund: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +348,14 @@ def _length_days(intervals: Iterable[Interval]) -> float:
     return sum(_days(end - start) for start, end in intervals)
 
 
+def is_shgn(lift_type: str | None) -> bool:
+    """Фонд ШГН: штанговые насосы (ШГН, САУ/ИСУ ШГН), без фонтана и комбинированных."""
+    if not lift_type:
+        return False
+    name = lift_type.upper()
+    return "ШГН" in name and not name.startswith(("ФОНТАН", "КОМБИНИР"))
+
+
 def _in_fund(well: WellFundInput, year: int, month: int) -> bool:
     return well.fund_months is None or (year, month) in well.fund_months
 
@@ -406,9 +420,8 @@ def _group(
         repairs=repairs,
         gtm=gtm,
         failures=failures,
-        # Нет времени работы — МРП не определён, а не 0 сут
-        mrp_with_gtm=work_days / repairs if repairs and work_days > 0 else None,
-        mrp_without_gtm=work_days / failures if failures and work_days > 0 else None,
+        mrp_with_gtm=_mrp(work_days, repairs),
+        mrp_without_gtm=_mrp(work_days, failures),
     )
 
 
@@ -442,16 +455,15 @@ def compute_kmg(  # noqa: PLR0913
     # ЧРФ: ремонты без ГТМ, начатые в окне; фонд — скважины с работой в последнем месяце
     last_lo = month_start(*periods[-1])
     last_y, last_m = periods[-1]
-    fund_at_end = sum(
-        1
-        for w in wells
-        if (
-            (w.fund_months is not None
-            and (last_y, last_m) in w.fund_months)
-            or (w.fund_months is None
-            and any(_clip(iv, last_lo, win_end) for iv in w.work_intervals))
-        )
-    )
+
+    def in_last_month_fund(well: WellFundInput) -> bool:
+        if well.fund_months is not None:
+            return (last_y, last_m) in well.fund_months
+        return any(_clip(iv, last_lo, win_end) for iv in well.work_intervals)
+
+    fund_wells = [w for w in wells if in_last_month_fund(w)]
+    fund_at_end = len(fund_wells)
+    shgn_fund_at_end = sum(1 for w in fund_wells if is_shgn(w.lift_type))
     counts: dict[str, int] = {}
     for well in wells:
         n = sum(
@@ -465,6 +477,7 @@ def compute_kmg(  # noqa: PLR0913
             counts[well.name] = n
 
     field_of = {w.name: w.oil_field for w in wells}
+    lift_of = {w.name: w.lift_type for w in wells}
     crf_wells = sorted(
         (
             CrfWell(name, field_of[name], n)
@@ -473,6 +486,7 @@ def compute_kmg(  # noqa: PLR0913
         ),
         key=lambda c: (-c.repairs, c.name),
     )
+    shgn_crf = [c for c in crf_wells if is_shgn(lift_of[c.name])]
     distribution: dict[int, int] = defaultdict(int)
     wells_by_count: dict[int, list[str]] = defaultdict(list)
     for name, n in counts.items():
@@ -496,6 +510,12 @@ def compute_kmg(  # noqa: PLR0913
             else None,
             distribution=dict(sorted(distribution.items())),
             wells_by_count={k: sorted(v) for k, v in sorted(wells_by_count.items())},
+            shgn_fund_at_end=shgn_fund_at_end,
+            shgn_wells=len(shgn_crf),
+            shgn_repairs=sum(c.repairs for c in shgn_crf),
+            shgn_percent_of_fund=(len(shgn_crf) / shgn_fund_at_end * 100)
+            if shgn_fund_at_end
+            else None,
         ),
     )
 
@@ -540,8 +560,13 @@ class DynamicsPoint:
 
 
 def _mrp(work_days: float, count: int) -> float | None:
-    # Нет времени работы или ремонтов — МРП не определён, а не 0 сут
-    return work_days / count if count and work_days > 0 else None
+    """МРП по методике: T / R; если ремонтов не было — МРП равен времени работы T.
+
+    Нет времени работы — МРП не определён (а не 0 сут).
+    """
+    if work_days <= 0:
+        return None
+    return work_days / count if count else work_days
 
 
 def compute_month_stats(
