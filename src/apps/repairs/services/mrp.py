@@ -237,6 +237,10 @@ class WellFundInput:
     work_intervals: Sequence[Interval]
     # Ремонты скважины, пересекающие окно (для вычета времени и подсчёта)
     repairs: Sequence[RepairSpan]
+    # Месяцы (год, месяц), в которых скважина входит в действующий фонд: на
+    # 1-е число действует режим с плановым дебитом жидкости > 0. None — фонд не
+    # ограничивается (месяц с работой в статусах).
+    fund_months: frozenset[tuple[int, int]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,6 +342,10 @@ def _length_days(intervals: Iterable[Interval]) -> float:
     return sum(_days(end - start) for start, end in intervals)
 
 
+def _in_fund(well: WellFundInput, year: int, month: int) -> bool:
+    return well.fund_months is None or (year, month) in well.fund_months
+
+
 def _group(
     key: str,
     wells: Sequence[WellFundInput],
@@ -368,15 +376,23 @@ def _group(
             if (clipped := _clip(iv, win_start, win_end))
         )
         work = _subtract(work, repair_cut)
-        work_days += _length_days(work)
 
-        for lo, hi in month_bounds:
-            if any(_clip(iv, lo, hi) for iv in work):
+        for (year, month), (lo, hi) in zip(months, month_bounds, strict=True):
+            if not _in_fund(well, year, month):
+                continue
+            days = _length_days(c for iv in work if (c := _clip(iv, lo, hi)))
+            work_days += days
+            # Без режима фонд — месяцы с работой; с режимом — все месяцы в фонде
+            if days > 0 or well.fund_months is not None:
                 fund_sum += 1
                 calendar_days += _days(hi - lo)
 
         for r in well.repairs:
-            if win_start <= r.start < win_end:
+            if win_start <= r.start < win_end and _in_fund(
+                well,
+                r.start.year,
+                r.start.month,
+            ):
                 repairs += 1
                 gtm += r.is_gtm
 
@@ -425,13 +441,25 @@ def compute_kmg(  # noqa: PLR0913
 
     # ЧРФ: ремонты без ГТМ, начатые в окне; фонд — скважины с работой в последнем месяце
     last_lo = month_start(*periods[-1])
+    last_y, last_m = periods[-1]
     fund_at_end = sum(
-        1 for w in wells if any(_clip(iv, last_lo, win_end) for iv in w.work_intervals)
+        1
+        for w in wells
+        if (
+            (w.fund_months is not None
+            and (last_y, last_m) in w.fund_months)
+            or (w.fund_months is None
+            and any(_clip(iv, last_lo, win_end) for iv in w.work_intervals))
+        )
     )
     counts: dict[str, int] = {}
     for well in wells:
         n = sum(
-            1 for r in well.repairs if win_start <= r.start < win_end and not r.is_gtm
+            1
+            for r in well.repairs
+            if win_start <= r.start < win_end
+            and not r.is_gtm
+            and _in_fund(well, r.start.year, r.start.month)
         )
         if n:
             counts[well.name] = n
@@ -548,16 +576,19 @@ def compute_month_stats(
             repair_cut,
         )
         for i, (lo, hi) in enumerate(bounds):
+            if not _in_fund(well, *months[i]):
+                continue
             days = _length_days(c for iv in work if (c := _clip(iv, lo, hi)))
-            if days > 0:
+            work_days[i] += days
+            if days > 0 or well.fund_months is not None:
                 fund[i] += 1
                 calendar[i] += _days(hi - lo)
-                work_days[i] += days
         for r in well.repairs:
             for i, (lo, hi) in enumerate(bounds):
                 if lo <= r.start < hi:
-                    repairs[i] += 1
-                    gtm[i] += r.is_gtm
+                    if _in_fund(well, *months[i]):
+                        repairs[i] += 1
+                        gtm[i] += r.is_gtm
                     break
 
     return [

@@ -118,6 +118,34 @@ class TechRegimeRepository(
         result = await self.session.execute(stmt)
         return {row.abai_well_id: row for row in result.scalars()}
 
+    async def list_producing_intervals_by_abai_well_ids(
+        self,
+        abai_well_ids: Sequence[int],
+        *,
+        since: date,
+        until: date,
+    ) -> list[tuple[int, date, date]]:
+        """Режимы с плановым дебитом жидкости > 0, пересекающие [since, until].
+
+        Нужны для «действующего фонда» по методике КМГ: скважина входит в фонд
+        месяца, если на его 1-е число у неё действует такой режим.
+        """
+        if not abai_well_ids:
+            return []
+
+        stmt = select(
+            TechRegime.abai_well_id,
+            TechRegime.start_date,
+            TechRegime.end_date,
+        ).where(
+            TechRegime.abai_well_id.in_(abai_well_ids),
+            TechRegime.liquid > 0,
+            TechRegime.start_date <= until,
+            TechRegime.end_date >= since,
+        )
+        result = await self.session.execute(stmt)
+        return [(row[0], row[1], row[2]) for row in result.all()]
+
     async def get_last_by_abai_well_id(self, abai_well_id: int) -> TechRegime | None:
         regimes = await self.get_list(
             QuerySpec(
