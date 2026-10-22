@@ -43,6 +43,9 @@ class RepairSpan:
     start: datetime
     end: datetime | None  # None — ремонт ещё идёт
     is_gtm: bool = False
+    # «По технической причине»: замена устьевого оборудования или штока — ремонт,
+    # но не отказ (в знаменатель МРП без ГТМ не входит)
+    is_tech: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +258,7 @@ class KmgGroup:
     failures: int
     mrp_with_gtm: float | None
     mrp_without_gtm: float | None
+    tech_reason: int = 0  # ремонты «по технической причине» (не входят в отказы)
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,6 +379,7 @@ def _group(
     fund_sum = 0
     repairs = 0
     gtm = 0
+    tech = 0
 
     month_bounds = [(month_start(y, m), next_month(y, m)) for y, m in months]
 
@@ -409,8 +414,9 @@ def _group(
             ):
                 repairs += 1
                 gtm += r.is_gtm
+                tech += r.is_tech and not r.is_gtm
 
-    failures = repairs - gtm
+    failures = repairs - gtm - tech
     return KmgGroup(
         key=key,
         wells=len(wells),
@@ -422,6 +428,7 @@ def _group(
         failures=failures,
         mrp_with_gtm=_mrp(work_days, repairs),
         mrp_without_gtm=_mrp(work_days, failures),
+        tech_reason=tech,
     )
 
 
@@ -536,6 +543,7 @@ class MonthStat:
     work_days: float
     repairs: int
     gtm: int
+    tech: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -557,6 +565,8 @@ class DynamicsPoint:
     rolling_gtm: int
     rolling_mrp_with_gtm: float | None
     rolling_mrp_without_gtm: float | None
+    month_tech: int = 0
+    rolling_tech: int = 0
 
 
 def _mrp(work_days: float, count: int) -> float | None:
@@ -585,6 +595,7 @@ def compute_month_stats(
     work_days = [0.0] * len(months)
     repairs = [0] * len(months)
     gtm = [0] * len(months)
+    tech = [0] * len(months)
 
     for well in wells:
         repair_cut = _union(
@@ -614,10 +625,11 @@ def compute_month_stats(
                     if _in_fund(well, *months[i]):
                         repairs[i] += 1
                         gtm[i] += r.is_gtm
+                        tech[i] += r.is_tech and not r.is_gtm
                     break
 
     return [
-        MonthStat(y, m, fund[i], calendar[i], work_days[i], repairs[i], gtm[i])
+        MonthStat(y, m, fund[i], calendar[i], work_days[i], repairs[i], gtm[i], tech[i])
         for i, (y, m) in enumerate(months)
     ]
 
@@ -647,6 +659,7 @@ def compute_kmg_dynamics(  # noqa: PLR0913
         work = sum(s.work_days for s in window)
         repairs = sum(s.repairs for s in window)
         gtm = sum(s.gtm for s in window)
+        tech = sum(s.tech for s in window)
         series.append(
             DynamicsPoint(
                 month=f"{current.year}-{current.month:02d}",
@@ -657,14 +670,16 @@ def compute_kmg_dynamics(  # noqa: PLR0913
                 month_mrp_with_gtm=_mrp(current.work_days, current.repairs),
                 month_mrp_without_gtm=_mrp(
                     current.work_days,
-                    current.repairs - current.gtm,
+                    current.repairs - current.gtm - current.tech,
                 ),
+                month_tech=current.tech,
+                rolling_tech=tech,
                 rolling_avg_fund=sum(s.fund for s in window) / window_months_count,
                 rolling_work_days=work,
                 rolling_repairs=repairs,
                 rolling_gtm=gtm,
                 rolling_mrp_with_gtm=_mrp(work, repairs),
-                rolling_mrp_without_gtm=_mrp(work, repairs - gtm),
+                rolling_mrp_without_gtm=_mrp(work, repairs - gtm - tech),
             ),
         )
     return series

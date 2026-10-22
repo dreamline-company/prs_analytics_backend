@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Final
 
 from apps.org.services import well_name_prefix
 from apps.repairs.services.mrp import Interval, RepairSpan, WellFundInput
-from apps.repairs.services.repair_classifier import is_gtm_repair
+from apps.repairs.services.repair_classifier import is_gtm_repair, is_technical_repair
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -88,6 +88,11 @@ class MrpInputsService:
                     start=repair.start_time,
                     end=repair.end_time,
                     is_gtm=is_gtm_repair(
+                        repair_type_id=repair.repair_type_id,
+                        repair_type_name=type_name,
+                        work_list=repair.work_list,
+                    ),
+                    is_tech=is_technical_repair(
                         repair_type_id=repair.repair_type_id,
                         repair_type_name=type_name,
                         work_list=repair.work_list,

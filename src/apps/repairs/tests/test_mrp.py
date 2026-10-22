@@ -306,3 +306,12 @@ def test_shgn_fund_detection() -> None:
     assert not is_shgn("Фонтан(ШГН)")
     assert not is_shgn("Комбинированный (ШГН+ЭЦН)")
     assert not is_shgn(None)
+
+
+def test_technical_repairs_are_not_failures() -> None:
+    # Ремонт «по технической причине» входит в ремонты, но не в отказы
+    from apps.repairs.services.mrp import _mrp  # noqa: PLC0415
+
+    # T=300, R=5, ГТМ=1, по тех. причине=1 -> отказов 3
+    assert _mrp(300, 5) == 60
+    assert _mrp(300, 5 - 1 - 1) == 100

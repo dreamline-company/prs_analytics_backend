@@ -8,7 +8,7 @@ from apps.repairs.dto.internal.mrp import RepairMrpDTO, WellMrpDTO
 from apps.repairs.dto.queries.mrp import GetWellMrpQuery
 from apps.repairs.repositories.repair import RepairRepository
 from apps.repairs.services.mrp import RepairSpan, compute_well_mrp, interpret_well_mrp
-from apps.repairs.services.repair_classifier import is_gtm_repair
+from apps.repairs.services.repair_classifier import is_gtm_repair, is_technical_repair
 from apps.wells.repositories import WellRepository
 from core.settings import get_settings
 from shared.errors import HttpError
@@ -59,20 +59,25 @@ class GetWellMrpUseCase:
                     repair_type_name=type_name,
                     work_list=repair.work_list,
                 ),
+                is_technical_repair(
+                    repair_type_id=repair.repair_type_id,
+                    repair_type_name=type_name,
+                    work_list=repair.work_list,
+                ),
             )
             for repair, type_name in rows
         }
         mrp = compute_well_mrp(
             [
-                RepairSpan(r.id, r.start_time, r.end_time, gtm)
-                for r, _name, gtm in meta.values()
+                RepairSpan(r.id, r.start_time, r.end_time, gtm, tech)
+                for r, _name, gtm, tech in meta.values()
             ],
             now=now,
         )
 
         items = []
         for item in mrp.repairs:
-            repair, type_name, gtm = meta[item.repair_id]
+            repair, type_name, gtm, tech = meta[item.repair_id]
             items.append(
                 RepairMrpDTO(
                     repair_id=repair.id,
@@ -80,6 +85,7 @@ class GetWellMrpUseCase:
                     end_time=repair.end_time,
                     repair_type_name_ru=type_name,
                     is_gtm=gtm,
+                    is_technical=tech,
                     mrp_before_days=_round(item.before_days),
                     mrp_after_days=_round(item.after_days),
                     running_days=_round(item.running_days),

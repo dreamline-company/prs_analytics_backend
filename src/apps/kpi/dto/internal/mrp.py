@@ -18,12 +18,14 @@ class MrpGroupDTO(BaseModel):
     work_days: float
     repairs: int
     gtm: int
-    # Отказы = ремонты − ГТМ (без признака «по технической причине»)
+    # Отказы = ремонты − ГТМ − «по технической причине»
     failures: int
     # Время работы ÷ число ремонтов, сут
     mrp_with_gtm: float | None
     # Время работы ÷ число отказов, сут
     mrp_without_gtm: float | None
+    # Ремонты «по технической причине» (замена устья, штока): не отказы
+    tech_reason: int = 0
 
 
 class CrfWellDTO(BaseModel):
@@ -83,6 +85,8 @@ class MrpDynamicsPointDTO(BaseModel):
     rolling_gtm: int
     rolling_mrp_with_gtm: float | None
     rolling_mrp_without_gtm: float | None
+    month_tech_reason: int = 0
+    rolling_tech_reason: int = 0
 
 
 class MrpDynamicsDTO(BaseModel):

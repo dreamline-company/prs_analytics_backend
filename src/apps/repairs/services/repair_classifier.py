@@ -34,7 +34,8 @@ _GTM_TYPE_NAME = re.compile(
 )
 _GTM_FLUSH_TYPE_NAME = re.compile(r"промывк|очистк\w*\s+забо", re.IGNORECASE)
 _NOT_FLUSH_OF_WELL = re.compile(
-    r"насос|клапан|выкидн|водозабор|нагнетател", re.IGNORECASE,
+    r"насос|клапан|выкидн|водозабор|нагнетател",
+    re.IGNORECASE,
 )
 _GTM_TEXT = re.compile(
     r"по мероприят|по меропр|консервац|гидроразрыв"
@@ -82,3 +83,35 @@ def is_gtm_repair(
     if _FAILURE_TEXT.search(text):
         return False
     return bool(_FLUSH_WITH_INTERVAL.search(text))
+
+
+# «По технической причине» (форма МРП заказчика): замена верхнего (устьевого)
+# оборудования и замена штока. Это ремонт, но в отказы для «МРП без ГТМ» он не
+# входит; в ЧРФ такие ремонты учитываются (методика ЧРФ: «прочие» — да).
+_TECH_TYPE_NAME = re.compile(
+    r"(?:замен|смен)\w*\s+(?:полированн\w*\s+)?штока"
+    r"|устьев\w*\s+оборудован|сусг|сальник",
+    re.IGNORECASE,
+)
+_TECH_TEXT = re.compile(
+    r"замен\w*\s+(?:полир\w*\s+)?шток|(?:смен|замен|ревизи)\w*\s+устьев",
+    re.IGNORECASE,
+)
+
+
+def is_technical_repair(
+    *,
+    repair_type_id: int | None,
+    repair_type_name: str | None,
+    work_list: str | None,
+) -> bool:
+    """True, если ремонт «по технической причине»: не ГТМ, замена устья или штока."""
+    if is_gtm_repair(
+        repair_type_id=repair_type_id,
+        repair_type_name=repair_type_name,
+        work_list=work_list,
+    ):
+        return False
+    if repair_type_name:
+        return bool(_TECH_TYPE_NAME.search(repair_type_name))
+    return bool(_TECH_TEXT.search(work_list or ""))
