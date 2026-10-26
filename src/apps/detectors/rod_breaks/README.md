@@ -1,7 +1,8 @@
 # Детектор обрыва штанги — правило R2
 
 Изолированный слайс: всё, что касается детекции обрыва штанги (Rod_break), живёт
-здесь. Другие детекторы добавляются соседними папками в `apps/detectors/`.
+здесь. Другие детекторы — соседние папки в `apps/detectors/` (обзор всех правил —
+`apps/detectors/README.md`).
 
 ## Физика и правило (spec 5.2)
 
@@ -10,45 +11,76 @@
 отличает аварию от штатной остановки, где обнуляется и то и другое.
 
 ```
-flag = (mom_min < 0.4 * mom_med24) AND (spd > 0.4 * spd_med24)
-срабатывание = flag в 2 подряд 2-часовых корзинах; дата = первая корзина серии.
-окно анализа = 60 дней.
+корзина = 15 минут: MIN момента, медиана скорости
+mom_med24 / spd_med24 = скользящие медианы за 24 ч (трейлинг, по времени)
+
+alarm-флаг   = (mom_min < 0.4 * mom_med24) AND (spd > 0.4 * spd_med24)
+warning-флаг = (mom_min < 0.6 * mom_med24) AND (spd > 0.4 * spd_med24)
 ```
+
+Медиана считается, если в 24-часовом окне есть хотя бы 48 корзин (12 ч
+прогрева); иначе корзина не флагуется. Пороги — `config.py` (правило) и
+`incident_config.py` (жизненный цикл эпизода).
+
+## Эпизод
+
+Один эпизод на скважину, `reason_code = rod_break`, таблица `detectors_incident`.
+State machine — `services/episode.py`:
+
+| Переход | Условие |
+|---|---|
+| открыть **warning** | warning-флаг 4 корзины подряд (1 ч) |
+| открыть **alarm** / эскалировать warning → alarm | alarm-флаг 3 корзины подряд (45 мин) |
+| подтвердить (`last_seen`) | очередная корзина с флагом при открытом эпизоде |
+| **нормализовать** | `mom_min > 0.75 * base_moment` и `spd > 30` — 12 корзин подряд (3 ч) |
+
+`base_moment` — медиана момента на рабочих отсчётах (скорость > 30) за окно
+прогона. Уровень только растёт; `opened_at` — начало серии, а не момент
+расчёта.
+
+В `payload` эпизода: `base_moment`, улики (корзины вокруг события),
+`failure_dt` (последний момент, когда насос реально работал — `services/failure_dt.py`),
+`event_class` (`actionable` / `failed_long_before_repair` / `already_stopped`),
+`lead_time_hours`, `low_confidence` (база момента < 50: глобальный 0.4 для
+слабых скважин ненадёжен).
 
 ## Данные
 
 - Источник — app-копия телеметрии `telemetry_sdmo_fc_data` (`SdmoFcData`,
-  Postgres), **не** sdmo MySQL напрямую.
-- Флот — станции `type_1900 = 6` (Danfoss VLT, ЭВН-КУДУ).
-- Момент — регистр addr **1991** («Момент штанги»), скорость — addr **1998**
-  («Скорость ротора»); ключи JSON-карты `SdmoFcData.data`.
-- Ряд внутрисуточный (~1 отсчёт / 2 мин). Агрегация в 2-часовые корзины (MIN
-  момента, медиана скорости) выполняется в SQL по `savetime` (явный UTC).
-- Выбросы момента (Int32-глюки) отсекаются диапазоном `MOMENT_CLIP_*` до MIN.
-
-## Слои
-
-```
-rule.py            чистое ядро (bucket → flag), без I/O — тестируется отдельно
-config.py          все пороги и параметры
-services/
-  telemetry_source SQL: 2ч-корзины MIN(момент)/медиана(скорость) из app-копии
-  bucketizer       скользящая медиана за 24ч (гэп-устойчивое трейлинг-окно)
-  failure_dt       восстановление даты отказа + классификация события
-detector.py        сборка: source → bucketizer → rule → failure_dt → результат
-use_cases/         run_for_well, list_detections
-tasks/run_detection ежедневный прогон флота (standalone + celery-обёртка)
-routers/           GET /api/detectors/v1/rod-breaks/detections
-models/            RodBreakRun, RodBreakDetection (результаты в БД app)
-```
+  Postgres), **не** СДМО MySQL напрямую.
+- Флот — станции `type_1900 = 6` (Danfoss VLT, ЭВН-КУДУ) с привязкой к
+  скважине; у скважины с несколькими станциями берётся станция с минимальным
+  локальным `id`, чтобы эпизоды скважины считались по одной ленте.
+- Момент — регистр **1991** («Момент штанги»), скорость — **1998** («Скорость
+  ротора»); типизированные колонки `r_1991` / `r_1998`.
+- Ряд внутрисуточный (~1 отсчёт / 2 мин). Агрегация в 15-минутные корзины
+  (`date_bin` по `savetime`) — в SQL. `savetime` и все даты эпизодов — местное
+  время (`ZONE_INFO`), не UTC.
+- Выбросы момента (Int32-глюки, видели -4292 и 65518) отсекаются диапазоном
+  `MOMENT_CLIP_*` до MIN.
 
 ## Запуск
 
-```bash
-# разовый прогон вручную
-cd src && python -m apps.detectors.rod_breaks.tasks.run_detection.run_detection
+Расписания по часам у R2 нет — правило инкрементальное, по курсорам
+(`detectors_cursor`, курсор на станцию):
 
-# по расписанию: celery beat, задача detectors.rod_breaks.run (ежедневно 06:00)
+- **диспетчер** (`detectors/tasks/dispatch`): загрузчик СДМО после коммита новых
+  строк зовёт `dispatch_detectors`, тот ставит `detectors.rod_breaks.run_incidents`
+  по станциям с новыми данными;
+- **подметальщик** `detectors.sweep` (каждые 15 мин) догоняет станции, чей
+  курсор отстал от данных больше чем на 30 мин (потерянные задачи, первичный
+  прогон).
+
+Прогон по станции: курсор → телеметрия с 24-часовым контекстом → state machine
+→ upsert эпизодов → сдвиг курсора, всё в одной транзакции. Первый прогон
+станции — с глубины 7 суток. Формирующаяся корзина не оценивается. Повторная
+обработка того же окна идемпотентна: уже закрытые эпизоды при перечитке
+истории распознаются по `opened_at` и не дублируются. Открытие и эскалация
+будят генерацию ИИ-заключения (`detectors/conclusion`).
+
+```bash
+# разовый прогон вручную по всем станциям (от курсоров)
+cd src && python -m apps.detectors.rod_breaks.tasks.run_incidents.run_incidents
 
 # тесты чистого ядра (без БД)
 cd src && python -m pytest apps/detectors/rod_breaks/tests -q
@@ -57,21 +89,60 @@ cd src && python -m pytest apps/detectors/rod_breaks/tests -q
 ## Проверка эпизодов (ложная тревога или нет)
 
 `verification/` — независимая от правила проверка: после срабатывания смотрит
-ремонты и статусы ABAI, статус привода СДМО (регистр 1999) и замеры нефти ЦИТС
-и ставит эпизоду отметку в `detectors_verification` (журнал смен —
-`detectors_verification_history`). Таска `detectors.rod_breaks.verify`
-ежечасно в :30. Пороги — `verification/config.py`, логика без I/O —
-`verification/rule.py`, описание простым языком — `docs/r2_verification.md`.
+ремонты и статусы ABAI, статус привода СДМО (регистр 1999), восстановление
+момента и замеры нефти ЦИТС и ставит эпизоду отметку в `detectors_verification`
+(журнал смен — `detectors_verification_history`). Таска
+`detectors.rod_breaks.verify` ежечасно в :30. Окна отсчитываются от T0 =
+`opened_at`:
+
+1. ремонт или простой ABAI с причиной-отказом → **поломка подтверждена**;
+2. **ложная тревога** по первому из признаков:
+   - момент вернулся: средний момент в окне T0+1…6 ч ≥ 75 % среднего за 24 ч
+     до T0 (с 19.10.2026, `r2-verify-v2`; не применяется при базе < 50 или
+     без связи);
+   - годный замер нефти (≥ 50 % нормы, не раньше T0+4 ч), и привод работал
+     ≥ 90 % времени до замер + 12 ч;
+3. привод полностью стоял ≥ 10 ч в окне 96 ч → **скорее всего поломка**;
+4. окно 96 ч закрылось без 1–3 → **не удалось проверить**; иначе — **ожидает**.
+
+Отметка окончательна через 7 суток. Пороги — `verification/config.py`, логика
+без I/O — `verification/rule.py`, описание простым языком —
+`docs/r2_verification.md`. Отметки отдаются в
+`GET /detectors/v1/incidents` (фильтр `verdict`) и в выгрузке детекций.
 
 ```bash
 cd src && python -m apps.detectors.rod_breaks.tasks.verify.verify --dry-run
 cd src && python -m apps.detectors.rod_breaks.tasks.verify.verify --backfill-days 60
+cd src && python -m apps.detectors.rod_breaks.tasks.verify.verify --recheck-days 30
+cd src && python -m apps.detectors.rod_breaks.tasks.verify.verify --incident-ids 1170,818
 ```
 
-## Не сделано (следующие шаги)
+## Слои
 
-- Бэкфилл 60 дней в `telemetry_sdmo_fc_data` — детектор считает по загруженной
-  копии; без данных вернёт пусто.
-- Бэктест на журнале ремонтов (цель recall ≈ 82%, 79/96).
+```
+rule.py              чистое ядро: корзина → alarm-флаг, серия → срабатывание
+config.py            пороги правила (корзина, медиана, 0.4/0.4, сустейн, клип)
+incident_config.py   пороги эпизода (warning 0.6, нормализация 0.75 / 3 ч)
+services/
+  telemetry_source   SQL: 15-мин корзины MIN(момент)/медиана(скорость), base_moment
+  bucketizer         скользящая медиана за 24 ч (гэп-устойчивое трейлинг-окно)
+  episode            state machine эпизода (open/escalate/confirm/normalize)
+  failure_dt         восстановление даты отказа + классификация события
+tasks/
+  run_incidents      курсорный прогон (celery detectors.rod_breaks.run_incidents)
+  verify             проверка эпизодов (celery detectors.rod_breaks.verify)
+verification/        пороги, чистая логика и выборка данных для проверки
+backtest/            ретро-тест на журнале ремонтов: python -m apps.detectors.rod_breaks.backtest
+detector.py          разовая детекция по скважине без эпизодов (ручные прогоны)
+```
+
+Эпизоды, курсоры, реестр правил, API (`/detectors/v1/incidents`,
+`/conclusions`, `/reports`) — общие для всех детекторов, лежат в
+`apps/detectors/` (models, repositories, routers).
+
+## Не сделано / открытые вопросы
+
 - Нормировка порогов под слабые скважины (база момента < 50): сейчас глобальный
   0.4 + флаг `low_confidence`.
+- Перепроверка истории (`--recheck-days`) по правилу восстановления момента
+  ждёт решения.
