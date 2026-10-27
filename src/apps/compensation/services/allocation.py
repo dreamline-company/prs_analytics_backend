@@ -9,15 +9,23 @@
   высоким риском — только когда на месторождении кончились остальные;
 - риск — по ступени прироста скорости, которую автор пула выбирал по запасу
   столба жидкости: 15 % — низкий, 10 % — средний, меньше — высокий.
+
+С 27.10.2026 за потерей не больше ``MAX_DONORS_PER_LOSS`` доноров: пул
+меньше суммы потерь, и без лимита его целиком забирала крупнейшая. Лишние
+пары «на согласовании» закрываются, их доноры уходят следующим потерям.
 """
 
 import math
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from apps.compensation.constants import (
+    CLOSE_DONOR_LIMIT,
     CLOSE_DONOR_UNAVAILABLE,
     CLOSE_LOSS_RESOLVED,
+    MAX_DONORS_PER_LOSS,
+    RECOMMENDATION_PENDING,
     RISK_HIGH,
     RISK_LOW,
     RISK_MEDIUM,
@@ -56,6 +64,15 @@ def covered(loss: float, gains: Iterable[float]) -> float:
     return min(sum(gains), loss)
 
 
+def _donor_rank(
+    risk: str,
+    distance: int | None,
+    tiebreak: int,
+) -> tuple[bool, bool, int, int]:
+    """Кто из доноров потери лучше: низкий/средний риск, затем ближе."""
+    return (risk == RISK_HIGH, distance is None, distance or 0, tiebreak)
+
+
 @dataclass(frozen=True, slots=True)
 class LossInput:
     well_id: int
@@ -63,6 +80,7 @@ class LossInput:
     value: float  # план Qн, т/сут
     covered: float  # уже закрыто открытыми парами
     point: Point | None
+    donors: int = 0  # сколько открытых пар уже у потери
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,17 +104,20 @@ def allocate(
     free_donors: Sequence[DonorInput],
     *,
     excluded: frozenset[tuple[int, int]] = frozenset(),
+    max_donors: int = MAX_DONORS_PER_LOSS,
 ) -> list[NewPair]:
     """Закрепить свободных доноров за непокрытыми частями потерь.
 
     ``excluded`` — пары (скважина потери, донор), которые технолог отклонил:
-    этого донора этой потере больше не предлагаем.
+    этого донора этой потере больше не предлагаем. ``max_donors`` — сколько
+    доноров всего (с уже открытыми парами) может быть у одной потери.
     """
     used: set[int] = set()
     pairs: list[NewPair] = []
     for loss in sorted(losses, key=lambda item: (-item.value, item.well_id)):
         remaining = loss.value - loss.covered
-        if remaining <= 0:
+        slots = max_donors - loss.donors
+        if remaining <= 0 or slots <= 0:
             continue
         candidates = [
             donor
@@ -107,19 +128,15 @@ def allocate(
         ]
         ranked = sorted(
             ((donor, distance_m(loss.point, donor.point)) for donor in candidates),
-            key=lambda item: (
-                item[0].risk == RISK_HIGH,
-                item[1] is None,
-                item[1] or 0,
-                item[0].donor_id,
-            ),
+            key=lambda item: _donor_rank(item[0].risk, item[1], item[0].donor_id),
         )
         for donor, distance in ranked:
-            if remaining <= 0:
+            if remaining <= 0 or slots <= 0:
                 break
             used.add(donor.donor_id)
             pairs.append(NewPair(loss.well_id, donor.donor_id, distance))
             remaining -= donor.gain
+            slots -= 1
     return pairs
 
 
@@ -128,6 +145,9 @@ class OpenPair:
     pair_id: int
     loss_well_id: int
     donor_well_id: int
+    status: str
+    risk: str  # риск донора
+    distance_m: int | None
 
 
 def pairs_to_close(
@@ -135,12 +155,36 @@ def pairs_to_close(
     *,
     stopped_well_ids: set[int],
     available_donor_well_ids: set[int],
+    max_donors: int = MAX_DONORS_PER_LOSS,
 ) -> list[tuple[int, str]]:
-    """Какие пары закрыть и почему: потеря снята или донор недоступен."""
+    """Какие пары закрыть и почему: потеря снята, донор недоступен или у
+    потери доноров больше лимита.
+
+    Сверх лимита закрываются только пары «на согласовании», худшие по тому же
+    порядку, что в ``allocate``; принятые и применённые остаются и занимают
+    места лимита первыми.
+    """
     result = []
+    kept: dict[int, list[OpenPair]] = defaultdict(list)
     for pair in open_pairs:
         if pair.loss_well_id not in stopped_well_ids:
             result.append((pair.pair_id, CLOSE_LOSS_RESOLVED))
         elif pair.donor_well_id not in available_donor_well_ids:
             result.append((pair.pair_id, CLOSE_DONOR_UNAVAILABLE))
+        else:
+            kept[pair.loss_well_id].append(pair)
+
+    for pairs in kept.values():
+        ranked = sorted(
+            pairs,
+            key=lambda pair: (
+                pair.status == RECOMMENDATION_PENDING,
+                _donor_rank(pair.risk, pair.distance_m, pair.pair_id),
+            ),
+        )
+        result.extend(
+            (pair.pair_id, CLOSE_DONOR_LIMIT)
+            for pair in ranked[max_donors:]
+            if pair.status == RECOMMENDATION_PENDING
+        )
     return result

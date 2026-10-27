@@ -13,6 +13,12 @@ DONOR_RESERVE = "reserve"
 CLOSE_LOSS_RESOLVED = "loss_resolved"  # скважина с потерей запустилась
 CLOSE_DONOR_UNAVAILABLE = "donor_unavailable"  # донор встал или в аварии
 CLOSE_REJECTED = "rejected"  # технолог отклонил
+CLOSE_DONOR_LIMIT = "donor_limit"  # у потери доноров больше MAX_DONORS_PER_LOSS
+
+# Сколько доноров закрепляется за одной потерей. Без лимита крупнейшая
+# потеря забирала весь пул месторождения (14 доноров у одной скважины),
+# остальные стоящие оставались пустыми.
+MAX_DONORS_PER_LOSS = 3
 
 RISK_LOW = "low"
 RISK_MEDIUM = "medium"
