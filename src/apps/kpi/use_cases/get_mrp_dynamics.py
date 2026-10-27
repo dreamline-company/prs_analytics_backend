@@ -40,6 +40,8 @@ def _point_dto(point: DynamicsPoint) -> MrpDynamicsPointDTO:
         rolling_gtm=point.rolling_gtm,
         rolling_mrp_with_gtm=_round(point.rolling_mrp_with_gtm),
         rolling_mrp_without_gtm=_round(point.rolling_mrp_without_gtm),
+        month_tech_reason=point.month_tech,
+        rolling_tech_reason=point.rolling_tech,
     )
 
 

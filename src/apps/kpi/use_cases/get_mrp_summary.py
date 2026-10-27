@@ -22,16 +22,15 @@ from apps.repairs.services.mrp import (
     window_months,
 )
 from apps.repairs.services.mrp_inputs import MrpInputsService
-from apps.repairs.services.repair_classifier import GTM_REPAIR_TYPE_ID
 from apps.wells.services import NGDUWellsService
 from core.settings import get_settings
 
 NOTE = (
-    "ГТМ определяются автоматически по виду работ и тексту ремонта (оценка, "
-    "около 80% совпадения с ручной разметкой заказчика; вид работ "
-    f"{GTM_REPAIR_TYPE_ID} «По мероприятию» всегда ГТМ). Признак «по технической "
-    "причине» в данных отсутствует, поэтому из отказов не вычитается. Фонд — "
-    "скважины со статусом «в работе» (WRK/PEXP), время работы — за вычетом "
+    "ГТМ — по перечню заказчика: промывка забоя, подготовка к ГИС и ГРП, ГРП, "
+    "ликвидация, консервация, ввод из консервации и из бурения. «По технической "
+    "причине» (замена устьевого оборудования и штока) — ремонт, но не отказ. "
+    "Фонд месяца — скважины с плановым дебитом жидкости > 0 в тех. режиме на 1-е "
+    "число, время работы — их время в статусах «в работе» (WRK/PEXP) за вычетом "
     "ремонтов."
 )
 
@@ -52,6 +51,7 @@ def _group_dto(group: KmgGroup) -> MrpGroupDTO:
         failures=group.failures,
         mrp_with_gtm=_round(group.mrp_with_gtm),
         mrp_without_gtm=_round(group.mrp_without_gtm),
+        tech_reason=group.tech_reason,
     )
 
 
@@ -127,6 +127,10 @@ class GetMrpSummaryUseCase:
                 ],
                 distribution=crf.distribution,
                 wells_by_repairs=crf.wells_by_count,
+                shgn_fund_at_end=crf.shgn_fund_at_end,
+                shgn_wells_count=crf.shgn_wells,
+                shgn_repairs=crf.shgn_repairs,
+                shgn_percent_of_fund=_round(crf.shgn_percent_of_fund, 2),
             ),
             note=NOTE,
         )

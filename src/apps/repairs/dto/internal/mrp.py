@@ -16,6 +16,9 @@ class RepairMrpDTO(BaseModel):
     end_time: datetime | None
     repair_type_name_ru: str | None
     is_gtm: bool
+    # «По технической причине»: замена устьевого оборудования или штока — ремонт,
+    # но не отказ
+    is_technical: bool = False
     # Конец предыдущего ремонта → начало этого, сут
     mrp_before_days: float | None
     # Конец этого → начало следующего, сут

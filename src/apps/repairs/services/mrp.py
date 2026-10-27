@@ -43,6 +43,9 @@ class RepairSpan:
     start: datetime
     end: datetime | None  # None — ремонт ещё идёт
     is_gtm: bool = False
+    # «По технической причине»: замена устьевого оборудования или штока — ремонт,
+    # но не отказ (в знаменатель МРП без ГТМ не входит)
+    is_tech: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +240,10 @@ class WellFundInput:
     work_intervals: Sequence[Interval]
     # Ремонты скважины, пересекающие окно (для вычета времени и подсчёта)
     repairs: Sequence[RepairSpan]
+    # Месяцы (год, месяц), в которых скважина входит в действующий фонд: на
+    # 1-е число действует режим с плановым дебитом жидкости > 0. None — фонд не
+    # ограничивается (месяц с работой в статусах).
+    fund_months: frozenset[tuple[int, int]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,6 +258,7 @@ class KmgGroup:
     failures: int
     mrp_with_gtm: float | None
     mrp_without_gtm: float | None
+    tech_reason: int = 0  # ремонты «по технической причине» (не входят в отказы)
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +279,12 @@ class CrfResult:
     distribution: dict[int, int]
     # число ремонтов → имена скважин (только для ЧРФ: от min_repairs)
     wells_by_count: dict[int, list[str]]
+    # ЧРФ по фонду ШГН (методика ЧРФ, шаг 6): скважины ШГН, их ремонты, доля от
+    # фонда ШГН на конец окна
+    shgn_fund_at_end: int = 0
+    shgn_wells: int = 0
+    shgn_repairs: int = 0
+    shgn_percent_of_fund: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,6 +352,18 @@ def _length_days(intervals: Iterable[Interval]) -> float:
     return sum(_days(end - start) for start, end in intervals)
 
 
+def is_shgn(lift_type: str | None) -> bool:
+    """Фонд ШГН: штанговые насосы (ШГН, САУ/ИСУ ШГН), без фонтана и комбинированных."""
+    if not lift_type:
+        return False
+    name = lift_type.upper()
+    return "ШГН" in name and not name.startswith(("ФОНТАН", "КОМБИНИР"))
+
+
+def _in_fund(well: WellFundInput, year: int, month: int) -> bool:
+    return well.fund_months is None or (year, month) in well.fund_months
+
+
 def _group(
     key: str,
     wells: Sequence[WellFundInput],
@@ -353,6 +379,7 @@ def _group(
     fund_sum = 0
     repairs = 0
     gtm = 0
+    tech = 0
 
     month_bounds = [(month_start(y, m), next_month(y, m)) for y, m in months]
 
@@ -368,19 +395,28 @@ def _group(
             if (clipped := _clip(iv, win_start, win_end))
         )
         work = _subtract(work, repair_cut)
-        work_days += _length_days(work)
 
-        for lo, hi in month_bounds:
-            if any(_clip(iv, lo, hi) for iv in work):
+        for (year, month), (lo, hi) in zip(months, month_bounds, strict=True):
+            if not _in_fund(well, year, month):
+                continue
+            days = _length_days(c for iv in work if (c := _clip(iv, lo, hi)))
+            work_days += days
+            # Без режима фонд — месяцы с работой; с режимом — все месяцы в фонде
+            if days > 0 or well.fund_months is not None:
                 fund_sum += 1
                 calendar_days += _days(hi - lo)
 
         for r in well.repairs:
-            if win_start <= r.start < win_end:
+            if win_start <= r.start < win_end and _in_fund(
+                well,
+                r.start.year,
+                r.start.month,
+            ):
                 repairs += 1
                 gtm += r.is_gtm
+                tech += r.is_tech and not r.is_gtm
 
-    failures = repairs - gtm
+    failures = repairs - gtm - tech
     return KmgGroup(
         key=key,
         wells=len(wells),
@@ -390,9 +426,9 @@ def _group(
         repairs=repairs,
         gtm=gtm,
         failures=failures,
-        # Нет времени работы — МРП не определён, а не 0 сут
-        mrp_with_gtm=work_days / repairs if repairs and work_days > 0 else None,
-        mrp_without_gtm=work_days / failures if failures and work_days > 0 else None,
+        mrp_with_gtm=_mrp(work_days, repairs),
+        mrp_without_gtm=_mrp(work_days, failures),
+        tech_reason=tech,
     )
 
 
@@ -425,18 +461,30 @@ def compute_kmg(  # noqa: PLR0913
 
     # ЧРФ: ремонты без ГТМ, начатые в окне; фонд — скважины с работой в последнем месяце
     last_lo = month_start(*periods[-1])
-    fund_at_end = sum(
-        1 for w in wells if any(_clip(iv, last_lo, win_end) for iv in w.work_intervals)
-    )
+    last_y, last_m = periods[-1]
+
+    def in_last_month_fund(well: WellFundInput) -> bool:
+        if well.fund_months is not None:
+            return (last_y, last_m) in well.fund_months
+        return any(_clip(iv, last_lo, win_end) for iv in well.work_intervals)
+
+    fund_wells = [w for w in wells if in_last_month_fund(w)]
+    fund_at_end = len(fund_wells)
+    shgn_fund_at_end = sum(1 for w in fund_wells if is_shgn(w.lift_type))
     counts: dict[str, int] = {}
     for well in wells:
         n = sum(
-            1 for r in well.repairs if win_start <= r.start < win_end and not r.is_gtm
+            1
+            for r in well.repairs
+            if win_start <= r.start < win_end
+            and not r.is_gtm
+            and _in_fund(well, r.start.year, r.start.month)
         )
         if n:
             counts[well.name] = n
 
     field_of = {w.name: w.oil_field for w in wells}
+    lift_of = {w.name: w.lift_type for w in wells}
     crf_wells = sorted(
         (
             CrfWell(name, field_of[name], n)
@@ -445,6 +493,7 @@ def compute_kmg(  # noqa: PLR0913
         ),
         key=lambda c: (-c.repairs, c.name),
     )
+    shgn_crf = [c for c in crf_wells if is_shgn(lift_of[c.name])]
     distribution: dict[int, int] = defaultdict(int)
     wells_by_count: dict[int, list[str]] = defaultdict(list)
     for name, n in counts.items():
@@ -468,6 +517,12 @@ def compute_kmg(  # noqa: PLR0913
             else None,
             distribution=dict(sorted(distribution.items())),
             wells_by_count={k: sorted(v) for k, v in sorted(wells_by_count.items())},
+            shgn_fund_at_end=shgn_fund_at_end,
+            shgn_wells=len(shgn_crf),
+            shgn_repairs=sum(c.repairs for c in shgn_crf),
+            shgn_percent_of_fund=(len(shgn_crf) / shgn_fund_at_end * 100)
+            if shgn_fund_at_end
+            else None,
         ),
     )
 
@@ -488,6 +543,7 @@ class MonthStat:
     work_days: float
     repairs: int
     gtm: int
+    tech: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -509,11 +565,18 @@ class DynamicsPoint:
     rolling_gtm: int
     rolling_mrp_with_gtm: float | None
     rolling_mrp_without_gtm: float | None
+    month_tech: int = 0
+    rolling_tech: int = 0
 
 
 def _mrp(work_days: float, count: int) -> float | None:
-    # Нет времени работы или ремонтов — МРП не определён, а не 0 сут
-    return work_days / count if count and work_days > 0 else None
+    """МРП по методике: T / R; если ремонтов не было — МРП равен времени работы T.
+
+    Нет времени работы — МРП не определён (а не 0 сут).
+    """
+    if work_days <= 0:
+        return None
+    return work_days / count if count else work_days
 
 
 def compute_month_stats(
@@ -532,6 +595,7 @@ def compute_month_stats(
     work_days = [0.0] * len(months)
     repairs = [0] * len(months)
     gtm = [0] * len(months)
+    tech = [0] * len(months)
 
     for well in wells:
         repair_cut = _union(
@@ -548,20 +612,24 @@ def compute_month_stats(
             repair_cut,
         )
         for i, (lo, hi) in enumerate(bounds):
+            if not _in_fund(well, *months[i]):
+                continue
             days = _length_days(c for iv in work if (c := _clip(iv, lo, hi)))
-            if days > 0:
+            work_days[i] += days
+            if days > 0 or well.fund_months is not None:
                 fund[i] += 1
                 calendar[i] += _days(hi - lo)
-                work_days[i] += days
         for r in well.repairs:
             for i, (lo, hi) in enumerate(bounds):
                 if lo <= r.start < hi:
-                    repairs[i] += 1
-                    gtm[i] += r.is_gtm
+                    if _in_fund(well, *months[i]):
+                        repairs[i] += 1
+                        gtm[i] += r.is_gtm
+                        tech[i] += r.is_tech and not r.is_gtm
                     break
 
     return [
-        MonthStat(y, m, fund[i], calendar[i], work_days[i], repairs[i], gtm[i])
+        MonthStat(y, m, fund[i], calendar[i], work_days[i], repairs[i], gtm[i], tech[i])
         for i, (y, m) in enumerate(months)
     ]
 
@@ -591,6 +659,7 @@ def compute_kmg_dynamics(  # noqa: PLR0913
         work = sum(s.work_days for s in window)
         repairs = sum(s.repairs for s in window)
         gtm = sum(s.gtm for s in window)
+        tech = sum(s.tech for s in window)
         series.append(
             DynamicsPoint(
                 month=f"{current.year}-{current.month:02d}",
@@ -601,14 +670,16 @@ def compute_kmg_dynamics(  # noqa: PLR0913
                 month_mrp_with_gtm=_mrp(current.work_days, current.repairs),
                 month_mrp_without_gtm=_mrp(
                     current.work_days,
-                    current.repairs - current.gtm,
+                    current.repairs - current.gtm - current.tech,
                 ),
+                month_tech=current.tech,
+                rolling_tech=tech,
                 rolling_avg_fund=sum(s.fund for s in window) / window_months_count,
                 rolling_work_days=work,
                 rolling_repairs=repairs,
                 rolling_gtm=gtm,
                 rolling_mrp_with_gtm=_mrp(work, repairs),
-                rolling_mrp_without_gtm=_mrp(work, repairs - gtm),
+                rolling_mrp_without_gtm=_mrp(work, repairs - gtm - tech),
             ),
         )
     return series

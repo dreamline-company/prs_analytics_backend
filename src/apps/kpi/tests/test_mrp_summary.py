@@ -1,7 +1,7 @@
 """МРП по методике КМГ через use case: время работы по статусам, ГТМ, ЧРФ."""
 
 import asyncio
-from datetime import datetime
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -82,6 +82,22 @@ class FakeStatuses:
         return [row for row in self.rows if row[0] in abai_well_ids]
 
 
+class FakeRegimes:
+    """Режимы с плановым дебитом жидкости > 0: (abai_well_id, начало, конец)."""
+
+    def __init__(self, rows: list[tuple[int, date, date]]) -> None:
+        self.rows = rows
+
+    async def list_producing_intervals_by_abai_well_ids(
+        self,
+        abai_well_ids: list[int],
+        *,
+        since: date,  # noqa: ARG002
+        until: date,  # noqa: ARG002
+    ) -> list[tuple[int, date, date]]:
+        return [row for row in self.rows if row[0] in abai_well_ids]
+
+
 class FakeExpl:
     async def get_latest_expl_name_by_abai_well_ids(
         self,
@@ -121,20 +137,30 @@ STATUSES = [
 ]
 
 
-def _use_case() -> GetMrpSummaryUseCase:
+REGIMES = [
+    (1001, date(2025, 1, 1), date(2099, 12, 31)),
+    (1002, date(2026, 7, 1), date(2099, 12, 31)),
+]
+
+
+def _use_case(regimes: list | None = None) -> GetMrpSummaryUseCase:
     return GetMrpSummaryUseCase(
         ngdu_wells_service=FakeNgduWells(WELLS),  # type: ignore[arg-type]
         mrp_inputs_service=MrpInputsService(
             repair_repository=FakeRepairs(REPAIRS),  # type: ignore[arg-type]
             status_repository=FakeStatuses(STATUSES),  # type: ignore[arg-type]
             expl_repository=FakeExpl(),  # type: ignore[arg-type]
+            regime_repository=FakeRegimes(REGIMES if regimes is None else regimes),  # type: ignore[arg-type]
         ),
     )
 
 
-def _run(**query: object) -> MrpSummaryDTO:
+def _run(regimes: list | None = None, **query: object) -> MrpSummaryDTO:
     return asyncio.run(
-        _use_case().execute(GetMrpSummaryQuery(end_month="2026-09", **query), now=NOW),
+        _use_case(regimes).execute(
+            GetMrpSummaryQuery(end_month="2026-09", **query),
+            now=NOW,
+        ),
     )
 
 
@@ -200,3 +226,24 @@ def test_note_explains_assumptions() -> None:
 
     assert "ГТМ" in note
     assert "технической причине" in note
+
+
+def test_fund_is_limited_by_producing_regime() -> None:
+    # Скважина B без режима с дебитом > 0 в июле: её ремонт 21 (10 июля) и время
+    # работы июля в расчёт не входят — в фонд месяца она не попадает.
+    regimes = [
+        (1001, date(2025, 1, 1), date(2099, 12, 31)),
+        (1002, date(2026, 8, 1), date(2099, 12, 31)),
+    ]
+    by_field = {g.key: g for g in _run(regimes).by_oil_field}
+
+    assert by_field["JLM"].repairs == 2
+    # август + сентябрь = 61 сут минус два ремонта по 1 сут
+    assert by_field["JLM"].work_days == pytest.approx(59, abs=0.5)
+
+
+def test_well_without_producing_regime_is_not_in_fund() -> None:
+    summary = _run([(1001, date(2025, 1, 1), date(2099, 12, 31))])
+
+    assert {g.key for g in summary.by_oil_field} == {"VMB"}
+    assert summary.total.repairs == 3

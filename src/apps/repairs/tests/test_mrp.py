@@ -10,6 +10,7 @@ from apps.repairs.services.mrp import (
     compute_kmg,
     compute_well_mrp,
     interpret_well_mrp,
+    is_shgn,
     window_months,
 )
 
@@ -296,3 +297,21 @@ def test_no_work_time_gives_undefined_mrp_not_zero() -> None:
     assert result.total.work_days == 0
     assert result.total.mrp_with_gtm is None
     assert result.total.mrp_without_gtm is None
+
+
+def test_shgn_fund_detection() -> None:
+    assert is_shgn("ШГН")
+    assert is_shgn("САУ ШГН")
+    assert not is_shgn("ЭВН")
+    assert not is_shgn("Фонтан(ШГН)")
+    assert not is_shgn("Комбинированный (ШГН+ЭЦН)")
+    assert not is_shgn(None)
+
+
+def test_technical_repairs_are_not_failures() -> None:
+    # Ремонт «по технической причине» входит в ремонты, но не в отказы
+    from apps.repairs.services.mrp import _mrp  # noqa: PLC0415
+
+    # T=300, R=5, ГТМ=1, по тех. причине=1 -> отказов 3
+    assert _mrp(300, 5) == 60
+    assert _mrp(300, 5 - 1 - 1) == 100
