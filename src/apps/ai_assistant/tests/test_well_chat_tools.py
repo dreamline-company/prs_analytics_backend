@@ -30,6 +30,8 @@ EXPECTED_TOOLS = {
     "get_well_mrp": set(),
     "get_repair_analysis": {"repair_id"},
     "get_compensation_contour": set(),
+    "get_donor_role": set(),
+    "list_field_donors": {"status"},
 }
 
 

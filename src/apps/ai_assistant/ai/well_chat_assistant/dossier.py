@@ -24,6 +24,10 @@ from apps.ai_assistant.ai.well_chat_assistant.tools._common import (
     local_now,
     rounded,
 )
+from apps.ai_assistant.ai.well_chat_assistant.tools.compensation import (
+    DONOR_STATUS_RU,
+    RISK_RU,
+)
 from apps.ai_assistant.ai.well_chat_assistant.tools.incidents import (
     VERDICT_RU,
     list_incident_dtos,
@@ -44,6 +48,11 @@ from apps.ai_assistant.ai.well_chat_assistant.tools.telemetry import (
 from apps.compensation.constants import CONTOUR_NO_PLAN, CONTOUR_STOPPED
 from apps.compensation.dto.internal.compensation import CompensationContourDTO
 from apps.compensation.dto.queries.compensation import GetCompensationContourQuery
+from apps.compensation.repositories import (
+    CompensationDonorRepository,
+    CompensationRecommendationRepository,
+)
+from apps.compensation.services.view import donor_status
 from apps.compensation.use_cases.get_contour import GetCompensationContourUseCase
 from apps.detectors.dto.internal.conclusion import WellAiConclusionDTO
 from apps.detectors.dto.internal.incident import DetectorIncidentDTO
@@ -117,6 +126,7 @@ class DossierData:
     repairs: list[tuple[Repair, str | None]] | None = None
     mrp: WellMrpDTO | None = None
     contour: CompensationContourDTO | None = None
+    donor: dict[str, Any] | None = None  # скважина в пуле доноров
 
 
 # --- Рендер: чистые функции ---
@@ -315,6 +325,18 @@ def _render_contour(contour: CompensationContourDTO | None) -> list[str]:
     return []
 
 
+def _render_donor(donor: dict[str, Any] | None) -> list[str]:
+    if donor is None:
+        return []
+    status = DONOR_STATUS_RU.get(donor["status"], donor["status"])
+    assigned = f", закреплён за {donor['loss_well']}" if donor["loss_well"] else ""
+    return [
+        f"Донор контура компенсации: {status}{assigned}; разгон привода на "
+        f"{donor['step_percent']} % даст {_num(donor['gain'], ' т/сут')} нефти "
+        f"(риск {RISK_RU.get(donor['risk'], donor['risk'])}).",
+    ]
+
+
 def render_dossier(data: DossierData) -> str:
     return "\n".join(
         [
@@ -326,6 +348,7 @@ def render_dossier(data: DossierData) -> str:
             *_render_conclusion(data.conclusion),
             *_render_repairs(data.repairs, data.mrp, data.now),
             *_render_contour(data.contour),
+            *_render_donor(data.donor),
         ],
     )
 
@@ -440,6 +463,30 @@ async def _load_contour(session: AsyncSession, well: Well) -> CompensationContou
     )
 
 
+async def _load_donor(session: AsyncSession, well: Well) -> dict[str, Any] | None:
+    """Строка пула доноров без загрузки всего месторождения — для досье."""
+    donors = await CompensationDonorRepository(session).list_by_well_ids([well.id])
+    if not donors:
+        return None
+    donor = donors[0]
+    pairs = CompensationRecommendationRepository(session)
+    open_pairs = await pairs.list_open_by_donor_ids([donor.id])
+    latest = await pairs.list_latest_by_donor_ids([donor.id])
+    pair = open_pairs[0] if open_pairs else None
+    loss_well = (
+        await WellRepository(session=session).get_by_id(id_=pair.loss_well_id)
+        if pair is not None
+        else None
+    )
+    return {
+        "status": donor_status(pair, latest.get(donor.id)),
+        "loss_well": loss_well.name if loss_well else None,
+        "step_percent": donor.step_percent,
+        "gain": donor.gain,
+        "risk": donor.risk,
+    }
+
+
 type Loader = Callable[[AsyncSession, Well], Awaitable[Any]]
 
 # Поле DossierData -> загрузчик раздела.
@@ -454,6 +501,7 @@ LOADERS: dict[str, Loader] = {
     "repairs": _load_repairs,
     "mrp": _load_mrp,
     "contour": _load_contour,
+    "donor": _load_donor,
 }
 
 

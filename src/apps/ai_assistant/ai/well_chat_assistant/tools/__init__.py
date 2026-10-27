@@ -9,6 +9,8 @@ from apps.ai_assistant.ai.well_chat_assistant.tools._common import (
 )
 from apps.ai_assistant.ai.well_chat_assistant.tools.compensation import (
     get_compensation_contour,
+    get_donor_role,
+    list_field_donors,
 )
 from apps.ai_assistant.ai.well_chat_assistant.tools.incidents import (
     get_ai_conclusion,
@@ -37,6 +39,8 @@ WELL_CHAT_ASSISTANT_TOOLS = [
     get_well_mrp,
     get_repair_analysis,
     get_compensation_contour,
+    get_donor_role,
+    list_field_donors,
 ]
 
 __all__ = ["WELL_CHAT_ASSISTANT_TOOLS", "WellContextMissingError"]

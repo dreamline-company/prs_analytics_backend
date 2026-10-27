@@ -189,3 +189,23 @@ def test_dossier_goes_to_system_prompt_not_history() -> None:
     # На второй вопрос — свежее досье, старое в историю не попало.
     assert "ДОСЬЕ-2" in second[0].content
     assert all("ДОСЬЕ" not in str(m.content) for m in result["messages"])
+
+
+def test_render_dossier_donor_line() -> None:
+    data = DossierData(
+        well_id=1,
+        well_name="UVK_0468",
+        now=NOW,
+        donor={
+            "status": "pending",
+            "loss_well": "UVK_0441",
+            "step_percent": 15,
+            "gain": 3.44,
+            "risk": "low",
+        },
+    )
+
+    assert render_dossier(data).splitlines()[-1] == (
+        "Донор контура компенсации: на согласовании, закреплён за UVK_0441; "
+        "разгон привода на 15 % даст 3.44 т/сут нефти (риск низкий)."
+    )
