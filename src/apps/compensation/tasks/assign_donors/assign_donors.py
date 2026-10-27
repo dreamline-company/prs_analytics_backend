@@ -2,7 +2,8 @@
 
 1. Скважины НГДУ (у Кайнармунайгаза — только VMB), кто из них стоит, план Qн.
 2. Открытые пары закрываются, если скважина с потерей запустилась или донор
-   встал (простой, ремонт, авария). Остальные пары не перетасовываются.
+   встал (простой, ремонт, авария), а пары «на согласовании» сверх лимита
+   доноров на потерю — тоже. Остальные пары не перетасовываются.
 3. Непокрытые части потерь добираются свободными донорами — ``allocate``.
 
 Каждый НГДУ — своя транзакция: сбой одного не мешает остальным.
@@ -95,7 +96,14 @@ class DonorAssigner:
         )
         closing = pairs_to_close(
             [
-                OpenPair(pair.id, pair.loss_well_id, donor_by_id[pair.donor_id].well_id)
+                OpenPair(
+                    pair.id,
+                    pair.loss_well_id,
+                    donor_by_id[pair.donor_id].well_id,
+                    pair.status,
+                    donor_by_id[pair.donor_id].risk,
+                    pair.distance_m,
+                )
                 for pair in open_pairs
             ],
             stopped_well_ids=set(state.stops),
@@ -110,10 +118,12 @@ class DonorAssigner:
 
         closed_ids = {pair_id for pair_id, _ in closing}
         covered_by_loss: dict[int, float] = defaultdict(float)
+        donors_by_loss: dict[int, int] = defaultdict(int)
         busy: set[int] = set()
         for pair in open_pairs:
             if pair.id not in closed_ids:
                 covered_by_loss[pair.loss_well_id] += pair.gain
+                donors_by_loss[pair.loss_well_id] += 1
                 busy.add(pair.donor_id)
 
         loss_wells = [
@@ -137,6 +147,7 @@ class DonorAssigner:
                     state.plans[well.id][0],
                     covered_by_loss[well.id],
                     points[well.id],
+                    donors_by_loss[well.id],
                 )
                 for well in loss_wells
             ],

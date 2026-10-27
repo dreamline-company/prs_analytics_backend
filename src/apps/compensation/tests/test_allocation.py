@@ -1,8 +1,11 @@
-"""Подбор доноров: месторождение, добор до покрытия, риск, расстояние, закрытие."""
+"""Подбор доноров: месторождение, добор, риск, расстояние, лимит, закрытие."""
 
 from apps.compensation.constants import (
+    CLOSE_DONOR_LIMIT,
     CLOSE_DONOR_UNAVAILABLE,
     CLOSE_LOSS_RESOLVED,
+    RECOMMENDATION_ACCEPTED,
+    RECOMMENDATION_PENDING,
     RISK_HIGH,
     RISK_LOW,
     RISK_MEDIUM,
@@ -33,8 +36,9 @@ def _loss(
     *,
     field: str = "VMB",
     covered_value: float = 0.0,
+    donors: int = 0,
 ) -> LossInput:
-    return LossInput(well_id, field, value, covered_value, ORIGIN)
+    return LossInput(well_id, field, value, covered_value, ORIGIN, donors)
 
 
 def _donor(
@@ -131,11 +135,23 @@ def test_covered_is_capped_by_loss() -> None:
     assert covered(3.4, [0.57, 0.42]) == 0.99
 
 
+def _pair(
+    pair_id: int,
+    loss_well_id: int,
+    *,
+    status: str = RECOMMENDATION_PENDING,
+    risk: str = RISK_MEDIUM,
+    distance: int | None = 1000,
+) -> OpenPair:
+    """Пара с донором на скважине ``pair_id * 10``."""
+    return OpenPair(pair_id, loss_well_id, pair_id * 10, status, risk, distance)
+
+
 def test_pairs_to_close() -> None:
     pairs = [
-        OpenPair(1, loss_well_id=100, donor_well_id=10),  # скважина запустилась
-        OpenPair(2, loss_well_id=200, donor_well_id=20),  # донор встал
-        OpenPair(3, loss_well_id=200, donor_well_id=30),  # всё в силе
+        _pair(1, loss_well_id=100),  # скважина запустилась
+        _pair(2, loss_well_id=200),  # донор встал
+        _pair(3, loss_well_id=200),  # всё в силе
     ]
 
     closing = pairs_to_close(
@@ -145,3 +161,62 @@ def test_pairs_to_close() -> None:
     )
 
     assert closing == [(1, CLOSE_LOSS_RESOLVED), (2, CLOSE_DONOR_UNAVAILABLE)]
+
+
+def test_donors_per_loss_are_limited_and_rest_go_to_next_losses() -> None:
+    donors = [_donor(i, 0.2, i) for i in range(1, 6)]
+
+    pairs = allocate([_loss(100, 5.0), _loss(200, 1.0)], donors, max_donors=2)
+
+    assert [(pair.loss_well_id, pair.donor_id) for pair in pairs] == [
+        (100, 1),
+        (100, 2),
+        (200, 3),
+        (200, 4),
+    ]
+
+
+def test_open_pairs_take_places_of_the_limit() -> None:
+    pairs = allocate(
+        [_loss(100, 5.0, covered_value=0.4, donors=2)],
+        [_donor(1, 0.2, 1), _donor(2, 0.2, 2)],
+        max_donors=3,
+    )
+
+    assert [pair.donor_id for pair in pairs] == [1]
+
+
+def test_pending_pairs_over_the_limit_are_closed_worst_first() -> None:
+    pairs = [
+        _pair(1, 100, risk=RISK_HIGH, distance=100),
+        _pair(2, 100, distance=3000),
+        _pair(3, 100, distance=None),
+        _pair(4, 100, distance=500),
+        _pair(5, 100, status=RECOMMENDATION_ACCEPTED, risk=RISK_HIGH),
+    ]
+
+    closing = pairs_to_close(
+        pairs,
+        stopped_well_ids={100},
+        available_donor_well_ids={10, 20, 30, 40, 50},
+        max_donors=3,
+    )
+
+    # Принятая пара остаётся вне очереди; из ожидающих — средний риск ближе.
+    assert sorted(closing) == [
+        (1, CLOSE_DONOR_LIMIT),
+        (3, CLOSE_DONOR_LIMIT),
+    ]
+
+
+def test_accepted_pairs_are_never_closed_by_the_limit() -> None:
+    pairs = [_pair(i, 100, status=RECOMMENDATION_ACCEPTED) for i in range(1, 5)]
+
+    closing = pairs_to_close(
+        pairs,
+        stopped_well_ids={100},
+        available_donor_well_ids={10, 20, 30, 40},
+        max_donors=3,
+    )
+
+    assert closing == []
