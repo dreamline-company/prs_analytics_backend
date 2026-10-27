@@ -32,6 +32,7 @@ from apps.ai_assistant.dto.responses.well_chat_assistant import (
 )
 from apps.ai_assistant.use_cases.ask_well_chat_assistant import (
     AskWellChatAssistantUseCase,
+    WellChatModelRejectedError,
 )
 from core import get_logger
 from shared.ai.llm.messages import HumanMessageDTO
@@ -39,6 +40,13 @@ from shared.errors import WSError
 
 logger = get_logger(__name__)
 ws_router = APIRouter(prefix="/wells")
+
+
+THREAD_RESET_TEXT = (
+    "Не получилось ответить: история диалога стала слишком длинной для модели. "
+    "Начинаю диалог по этой скважине заново — задайте вопрос ещё раз."
+)
+ANSWER_FAILED_TEXT = "Не получилось ответить на вопрос. Попробуйте ещё раз."
 
 
 class BadRequestDataError(WSError):
@@ -65,6 +73,10 @@ class WellChatSession:
             self.thread_id = _new_thread_id(self.chat_id)
         return self.thread_id
 
+    def reset_thread(self) -> None:
+        """Новый тред той же скважины — старый уже не влезает в окно модели."""
+        self.thread_id = _new_thread_id(self.chat_id)
+
 
 def _parse_payload(
     data: object,
@@ -90,19 +102,30 @@ async def _handle_message(
     request: AskWellChatAssistantRequestDTO,
     use_case: AskWellChatAssistantUseCase,
 ) -> None:
+    """Ответ на вопрос; сбой модели или tools не рвёт соединение — клиенту
+    уходит текст ошибки, а чат продолжает принимать вопросы."""
     thread_id = session.ensure_thread()
-    result = await use_case.execute(
-        command=AskWellChatAssistantCommand(
-            chat_id=session.chat_id,
-            thread_id=thread_id,
-            well_id=session.well_id,
-            message=HumanMessageDTO(content=request.message),
-        ),
-    )
+    try:
+        result = await use_case.execute(
+            command=AskWellChatAssistantCommand(
+                chat_id=session.chat_id,
+                thread_id=thread_id,
+                well_id=session.well_id,
+                message=HumanMessageDTO(content=request.message),
+            ),
+        )
+        text = result.content
+    except WellChatModelRejectedError:
+        logger.exception("Well chat model rejected request: chat=%s", session.chat_id)
+        session.reset_thread()
+        text = THREAD_RESET_TEXT
+    except Exception:
+        logger.exception("Well chat answer failed: chat=%s", session.chat_id)
+        text = ANSWER_FAILED_TEXT
     await ws.send_json(
         WellChatAssistantResponseDTO(
             chat_id=session.chat_id,
-            text=result.content,
+            text=text,
         ).model_dump(mode="json"),
     )
 

@@ -126,6 +126,18 @@ async def list_incident_dtos(
     return sorted(merged.values(), key=lambda item: item.opened_at, reverse=True)
 
 
+def counts_brief(counts: dict[str, tuple[int, int]]) -> dict[str, Any]:
+    """Счётчики эпизодов за период: всего и по правилам, с числом ложных."""
+    return {
+        "total": sum(total for total, _ in counts.values()),
+        "false_alarms": sum(false for _, false in counts.values()),
+        "by_detector": {
+            code: {"total": total, "false_alarms": false}
+            for code, (total, false) in sorted(counts.items())
+        },
+    }
+
+
 @tool
 async def get_incidents(
     config: RunnableConfig,
@@ -135,6 +147,9 @@ async def get_incidents(
     ШГН, R10 — падение дебита по замерам ЦИТС. Активные — все, закрытые —
     открытые за последние ``days`` суток (по умолчанию 90, максимум 365).
 
+    ``period_counts`` — точное число эпизодов, открытых за период, по правилам
+    и сколько из них проверка признала ложными; список ``incidents`` — не
+    больше 20 свежих (``shown`` из них показано) плюс все активные.
     По каждому эпизоду: уровень (warning/alarm), статус (active/normalized),
     даты, причина закрытия, ключевые цифры в ``facts`` и отметка проверки
     тревоги в ``verification`` (пока только R2): verdict_ru — «ложная тревога»,
@@ -144,16 +159,23 @@ async def get_incidents(
     well_id = get_well_id(config)
     days = clamp(days, 1, INCIDENTS_MAX_DAYS)
     async with session_makers["app"]() as session:
+        incident_repository = DetectorIncidentRepository(session)
         use_case = ListIncidentsByWellIdUseCase(
-            incident_repository=DetectorIncidentRepository(session),
+            incident_repository=incident_repository,
             detector_repository=DetectorRepository(session),
             verification_repository=DetectorVerificationRepository(session),
         )
         incidents = await list_incident_dtos(use_case, well_id=well_id, days=days)
+        counts = await incident_repository.count_by_detector_since(
+            well_id=well_id,
+            opened_from=local_now() - timedelta(days=days),
+        )
     return {
         "days": days,
-        "total": len(incidents),
-        "incidents": [incident_brief(item) for item in incidents[:INCIDENTS_LIMIT]],
+        "period_counts": counts_brief(counts),
+        "active": sum(1 for item in incidents if item.status == "active"),
+        "shown": len(incidents),
+        "incidents": [incident_brief(item) for item in incidents],
     }
 
 

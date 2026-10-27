@@ -26,7 +26,11 @@ from apps.compensation.dto.queries.compensation import (
     ListCompensationDonorsQuery,
 )
 from apps.compensation.repositories import CompensationRecommendationRepository
-from apps.compensation.services.state import CompensationStateService, utc_now
+from apps.compensation.services.state import (
+    CompensationStateService,
+    WellsState,
+    utc_now,
+)
 from apps.compensation.use_cases.get_contour import GetCompensationContourUseCase
 from apps.compensation.use_cases.list_donors import ListCompensationDonorsUseCase
 from apps.org.repositories.oil_field import OilFieldRepository
@@ -89,6 +93,16 @@ async def field_donors(
                     status=status,
                 ),
             )
+    return None
+
+
+def donor_unavailable_reason(state: WellsState, well_id: int) -> str | None:
+    """Почему донор сейчас не годится — как в подборе: стоит или есть alarm."""
+    stop = state.stops.get(well_id)
+    if stop is not None:
+        return "стоит: " + ("простой ABAI" if stop.kind == STOP_IDLE else "идёт ремонт")
+    if well_id in state.alarms:
+        return "по скважине открыта тревога детектора (alarm)"
     return None
 
 
@@ -160,14 +174,7 @@ async def get_donor_role(config: RunnableConfig) -> dict[str, Any]:
                 else None
             ),
         }
-    stop = state.stops.get(well_id)
-    unavailable = None
-    if stop is not None:
-        unavailable = "стоит: " + (
-            "простой ABAI" if stop.kind == STOP_IDLE else "идёт ремонт"
-        )
-    elif well_id in state.alarms:
-        unavailable = "по скважине открыта тревога детектора (alarm)"
+    unavailable = donor_unavailable_reason(state, well_id)
     return {
         "is_donor": True,
         "status": item.status,

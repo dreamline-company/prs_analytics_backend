@@ -148,7 +148,7 @@ async def get_drive_telemetry(
                 _fmt_time(row["bucket"]),
                 row["samples"],
                 _share(row["working"], row["status_samples"]),
-                _share(row["rotating"], row["samples"]),
+                _share(row["rotating"], row["speed_samples"]),
                 scale(row["speed_median"], ROTOR_SPEED_REGISTER),
                 scale(row["moment_median"], PUMP_MOMENT_REGISTER),
                 scale(row["moment_min"], PUMP_MOMENT_REGISTER),

@@ -27,6 +27,7 @@ from apps.ai_assistant.ai.well_chat_assistant.tools._common import (
 from apps.ai_assistant.ai.well_chat_assistant.tools.compensation import (
     DONOR_STATUS_RU,
     RISK_RU,
+    donor_unavailable_reason,
 )
 from apps.ai_assistant.ai.well_chat_assistant.tools.incidents import (
     VERDICT_RU,
@@ -52,6 +53,7 @@ from apps.compensation.repositories import (
     CompensationDonorRepository,
     CompensationRecommendationRepository,
 )
+from apps.compensation.services.state import CompensationStateService, utc_now
 from apps.compensation.services.view import donor_status
 from apps.compensation.use_cases.get_contour import GetCompensationContourUseCase
 from apps.detectors.dto.internal.conclusion import WellAiConclusionDTO
@@ -89,7 +91,7 @@ from apps.telemetry.services import WellRatesService
 from apps.wells.dto.internal.well_card import WellCardDTO
 from apps.wells.dto.queries.well import GetWellCardQuery
 from apps.wells.models.well import Well
-from apps.wells.repositories import WellExplRepository
+from apps.wells.repositories import WellExplRepository, WellOrgRepository
 from apps.wells.repositories.coords import WellCoordRepository
 from apps.wells.repositories.gdis import (
     GdisCurrentValueRepository,
@@ -97,7 +99,7 @@ from apps.wells.repositories.gdis import (
 )
 from apps.wells.repositories.status_history import WellStatusHistoryRepository
 from apps.wells.repositories.well import WellRepository
-from apps.wells.services import CoordPointService, WellGdisService
+from apps.wells.services import CoordPointService, NGDUWellsService, WellGdisService
 from apps.wells.use_cases.get_well_card import GetWellCardUseCase
 from core import get_logger
 from shared.database.sql.setup import session_makers
@@ -107,6 +109,9 @@ logger = get_logger(__name__)
 CACHE_TTL_SEC = 300
 INCIDENTS_WINDOW_DAYS = 90
 REPAIRS_WINDOW_DAYS = 365
+# Сколько разделов одного досье грузится одновременно: у каждого своя сессия,
+# а пул движка app (5 + 10) общий с HTTP-эндпоинтами процесса.
+PARALLEL_SECTIONS = 3
 
 
 @dataclass(slots=True)
@@ -122,6 +127,8 @@ class DossierData:
     abai_status: dict[str, Any] | None = None
     card: WellCardDTO | None = None
     incidents: list[DetectorIncidentDTO] | None = None
+    # Правило -> (эпизодов за окно, из них ложных) — без лимита ленты.
+    incident_counts: dict[str, tuple[int, int]] | None = None
     conclusion: WellAiConclusionDTO | None = None
     repairs: list[tuple[Repair, str | None]] | None = None
     mrp: WellMrpDTO | None = None
@@ -204,11 +211,13 @@ def _render_drive(card: WellCardDTO | None, station_type: int | None) -> list[st
         lines.append("Привод СДМО: станции или отсчётов нет.")
     else:
         if p.sdmo_vlt_status is None:
-            drive = "статус неизвестен"
+            drive = "статус станции неизвестен"
         elif p.sdmo_vlt_status in DRIVE_WORK_CODES:
-            drive = "работает"
+            drive = f"статус станции {p.sdmo_vlt_status} — работает"
         else:
-            drive = "без тока (остановлен или авария)"
+            drive = (
+                f"статус станции {p.sdmo_vlt_status} — без тока (остановлен или авария)"
+            )
         units = f" {p.pump_speed_units}" if p.pump_speed_units else ""
         values = (
             "момент и скорость в нём не заполнены (динамика — get_drive_telemetry)"
@@ -218,8 +227,7 @@ def _render_drive(card: WellCardDTO | None, station_type: int | None) -> list[st
             f"заполнение {_num(p.pump_fill, ' %')}"
         )
         lines.append(
-            f"Привод СДМО, последний отсчёт {_dt(p.sdmo_time)}: {values}; "
-            f"статус станции {p.sdmo_vlt_status} — {drive}.",
+            f"Привод СДМО, последний отсчёт {_dt(p.sdmo_time)}: {values}; {drive}.",
         )
     if p.h_din_m is not None:
         lines.append(
@@ -231,10 +239,22 @@ def _render_drive(card: WellCardDTO | None, station_type: int | None) -> list[st
 
 def _render_incidents(
     incidents: Sequence[DetectorIncidentDTO] | None,
-    now: datetime,
+    counts: dict[str, tuple[int, int]] | None,
 ) -> list[str]:
-    if incidents is None:
-        return []
+    lines = [] if incidents is None else _render_active(incidents)
+    if counts:
+        summary = ", ".join(f"{code} — {n}" for code, (n, _) in sorted(counts.items()))
+        false_alarms = sum(false for _, false in counts.values())
+        lines.append(
+            f"Эпизодов за {INCIDENTS_WINDOW_DAYS} суток: {summary}; "
+            f"проверка признала ложными: {false_alarms}.",
+        )
+    elif counts is not None:
+        lines.append(f"Эпизодов за {INCIDENTS_WINDOW_DAYS} суток не было.")
+    return lines
+
+
+def _render_active(incidents: Sequence[DetectorIncidentDTO]) -> list[str]:
     active = [item for item in incidents if item.status == "active"]
     lines = (
         [f"Активные эпизоды детекторов: {len(active)}."]
@@ -253,22 +273,6 @@ def _render_incidents(
             f"- {item.detector_code} {item.detector_name_ru or ''}: {item.level}, "
             f"открыт {_dt(item.opened_at)}, последнее подтверждение "
             f"{_dt(item.last_seen_at)}{check} (incident_id {item.id}).",
-        )
-    since = now - timedelta(days=INCIDENTS_WINDOW_DAYS)
-    window = [item for item in incidents if item.opened_at >= since]
-    if window:
-        counts: dict[str, int] = {}
-        for item in window:
-            counts[item.detector_code] = counts.get(item.detector_code, 0) + 1
-        false_alarms = sum(
-            1
-            for item in window
-            if item.verification and item.verification.verdict == "false_alarm"
-        )
-        summary = ", ".join(f"{code} — {n}" for code, n in sorted(counts.items()))
-        lines.append(
-            f"Эпизодов за {INCIDENTS_WINDOW_DAYS} суток: {summary}; "
-            f"проверка признала ложными: {false_alarms}.",
         )
     return lines
 
@@ -330,10 +334,15 @@ def _render_donor(donor: dict[str, Any] | None) -> list[str]:
         return []
     status = DONOR_STATUS_RU.get(donor["status"], donor["status"])
     assigned = f", закреплён за {donor['loss_well']}" if donor["loss_well"] else ""
+    unavailable = (
+        f" Сейчас как донор недоступен — {donor['unavailable']}."
+        if donor["unavailable"]
+        else ""
+    )
     return [
         f"Донор контура компенсации: {status}{assigned}; разгон привода на "
         f"{donor['step_percent']} % даст {_num(donor['gain'], ' т/сут')} нефти "
-        f"(риск {RISK_RU.get(donor['risk'], donor['risk'])}).",
+        f"(риск {RISK_RU.get(donor['risk'], donor['risk'])}).{unavailable}",
     ]
 
 
@@ -344,7 +353,7 @@ def render_dossier(data: DossierData) -> str:
             *_render_state(data),
             *_render_rates(data.card),
             *_render_drive(data.card, data.station_type),
-            *_render_incidents(data.incidents, data.now),
+            *_render_incidents(data.incidents, data.incident_counts),
             *_render_conclusion(data.conclusion),
             *_render_repairs(data.repairs, data.mrp, data.now),
             *_render_contour(data.contour),
@@ -387,14 +396,33 @@ async def _load_card(session: AsyncSession, well: Well) -> WellCardDTO:
 
 
 async def _load_place(session: AsyncSession, well: Well) -> tuple[str, str] | None:
+    """Месторождение и НГДУ. Один префикс может числиться за несколькими НГДУ —
+    тогда берётся то месторождение, в чей круг скважин входит эта."""
     prefix = well_name_prefix(well.name)
     if prefix is None:
         return None
-    fields = await OilFieldRepository(session).list_by_prefix(prefix)
-    if not fields:
+    oil_fields = await OilFieldRepository(session).list_by_prefix(prefix)
+    oil_field = oil_fields[0] if len(oil_fields) == 1 else None
+    if len(oil_fields) > 1:
+        org_repository = OrgRepository(session)
+        wells_service = NGDUWellsService(
+            org_repository=org_repository,
+            well_repository=WellRepository(session),
+            well_org_repository=WellOrgRepository(session),
+            oil_field_repository=OilFieldRepository(session),
+        )
+        for candidate in oil_fields:
+            scope = await wells_service.list_wells(
+                candidate.ngdu_id,
+                oil_field_id=candidate.id,
+            )
+            if any(item.id == well.id for item in scope):
+                oil_field = candidate
+                break
+    if oil_field is None:
         return None
-    ngdu = await OrgRepository(session).get_by_id(fields[0].ngdu_id)
-    return fields[0].name, ngdu.name_ru if ngdu else "—"
+    ngdu = await OrgRepository(session).get_by_id(oil_field.ngdu_id)
+    return oil_field.name, ngdu.name_ru if ngdu else "—"
 
 
 async def _load_lift(session: AsyncSession, well: Well) -> str | None:
@@ -435,6 +463,16 @@ async def _load_incidents(
     )
 
 
+async def _load_incident_counts(
+    session: AsyncSession,
+    well: Well,
+) -> dict[str, tuple[int, int]]:
+    return await DetectorIncidentRepository(session).count_by_detector_since(
+        well_id=well.id,
+        opened_from=local_now() - timedelta(days=INCIDENTS_WINDOW_DAYS),
+    )
+
+
 async def _load_conclusion(session: AsyncSession, well: Well) -> WellAiConclusionDTO:
     return await GetWellAiConclusionUseCase(
         incident_repository=DetectorIncidentRepository(session=session),
@@ -464,11 +502,19 @@ async def _load_contour(session: AsyncSession, well: Well) -> CompensationContou
 
 
 async def _load_donor(session: AsyncSession, well: Well) -> dict[str, Any] | None:
-    """Строка пула доноров без загрузки всего месторождения — для досье."""
+    """Строка пула доноров без загрузки всего месторождения — для досье.
+
+    Скважины КМГ вне VMB в пуле есть, но в контур не входят, и подбор их
+    никогда не возьмёт — донором в досье они не называются.
+    """
     donors = await CompensationDonorRepository(session).list_by_well_ids([well.id])
     if not donors:
         return None
+    state_service = CompensationStateService(session)
+    if await state_service.is_excluded_kmg_well(well):
+        return None
     donor = donors[0]
+    state = await state_service.load([well], now=utc_now())
     pairs = CompensationRecommendationRepository(session)
     open_pairs = await pairs.list_open_by_donor_ids([donor.id])
     latest = await pairs.list_latest_by_donor_ids([donor.id])
@@ -484,6 +530,7 @@ async def _load_donor(session: AsyncSession, well: Well) -> dict[str, Any] | Non
         "step_percent": donor.step_percent,
         "gain": donor.gain,
         "risk": donor.risk,
+        "unavailable": donor_unavailable_reason(state, well.id),
     }
 
 
@@ -497,6 +544,7 @@ LOADERS: dict[str, Loader] = {
     "station_type": _load_station_type,
     "abai_status": _load_abai_status,
     "incidents": _load_incidents,
+    "incident_counts": _load_incident_counts,
     "conclusion": _load_conclusion,
     "repairs": _load_repairs,
     "mrp": _load_mrp,
@@ -505,13 +553,19 @@ LOADERS: dict[str, Loader] = {
 }
 
 
-async def _load_section(name: str, loader: Loader, well: Well) -> Any:  # noqa: ANN401
-    try:
-        async with session_makers["app"]() as session:
-            return await loader(session, well)
-    except Exception:
-        logger.exception("Well dossier section %s failed: well=%s", name, well.id)
-        return None
+async def _load_section(
+    name: str,
+    loader: Loader,
+    well: Well,
+    limit: asyncio.Semaphore,
+) -> Any:  # noqa: ANN401
+    async with limit:
+        try:
+            async with session_makers["app"]() as session:
+                return await loader(session, well)
+        except Exception:
+            logger.exception("Well dossier section %s failed: well=%s", name, well.id)
+            return None
 
 
 async def build_well_dossier(well_id: int) -> str | None:
@@ -520,8 +574,9 @@ async def build_well_dossier(well_id: int) -> str | None:
         well = await WellRepository(session=session).get_by_id(id_=well_id)
     if well is None:
         return None
+    limit = asyncio.Semaphore(PARALLEL_SECTIONS)
     results = await asyncio.gather(
-        *(_load_section(name, loader, well) for name, loader in LOADERS.items()),
+        *(_load_section(name, loader, well, limit) for name, loader in LOADERS.items()),
     )
     data = DossierData(well_id=well.id, well_name=well.name, now=local_now())
     for name, value in zip(LOADERS, results, strict=True):

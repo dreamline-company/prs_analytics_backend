@@ -3,7 +3,7 @@
 import asyncio
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
@@ -87,6 +87,8 @@ def test_render_dossier_full() -> None:
                 verification=None,
             ),
         ],
+        # Счётчик — отдельным запросом, он больше ленты из 20 эпизодов.
+        incident_counts={"R2": (34, 21), "R9": (2, 0)},
     )
 
     text = render_dossier(data)
@@ -98,7 +100,9 @@ def test_render_dossier_full() -> None:
     assert "нефть 3.2 т/сут при плане 4.5 т/сут, отклонение -1.3 т/сут" in text
     assert "статус станции 4 — работает" in text
     assert "проверка: ложная тревога (moment_recovered)" in text
-    assert "Эпизодов за 90 суток: R2 — 2; проверка признала ложными: 1." in text
+    assert "Эпизодов за 90 суток: R2 — 34, R9 — 2; проверка признала ложными: 21." in (
+        text
+    )
 
 
 def test_render_dossier_skips_failed_sections() -> None:
@@ -121,6 +125,29 @@ def test_render_dossier_empty_last_sample() -> None:
     )
 
     assert "момент и скорость в нём не заполнены" in render_dossier(data)
+
+
+def test_render_dossier_unknown_station_status_has_no_code() -> None:
+    data = DossierData(
+        well_id=1,
+        well_name="VMB_0456",
+        now=NOW,
+        card=SimpleNamespace(  # type: ignore[arg-type]
+            current_repair=None,
+            passport=_passport(sdmo_vlt_status=None),
+        ),
+    )
+
+    text = render_dossier(data)
+
+    assert "статус станции неизвестен" in text
+    assert "None" not in text
+
+
+def test_render_dossier_no_incidents_in_window() -> None:
+    data = DossierData(well_id=1, well_name="VMB_0456", now=NOW, incident_counts={})
+
+    assert "Эпизодов за 90 суток не было." in render_dossier(data)
 
 
 def test_provider_caches_by_well(monkeypatch: Any) -> None:  # noqa: ANN401
@@ -202,6 +229,7 @@ def test_render_dossier_donor_line() -> None:
             "step_percent": 15,
             "gain": 3.44,
             "risk": "low",
+            "unavailable": None,
         },
     )
 
@@ -209,3 +237,103 @@ def test_render_dossier_donor_line() -> None:
         "Донор контура компенсации: на согласовании, закреплён за UVK_0441; "
         "разгон привода на 15 % даст 3.44 т/сут нефти (риск низкий)."
     )
+
+
+def test_render_dossier_unavailable_donor() -> None:
+    data = DossierData(
+        well_id=1,
+        well_name="UVK_0468",
+        now=NOW,
+        donor={
+            "status": "reserve",
+            "loss_well": None,
+            "step_percent": 10,
+            "gain": 1.2,
+            "risk": "medium",
+            "unavailable": "стоит: идёт ремонт",
+        },
+    )
+
+    assert (
+        render_dossier(data)
+        .splitlines()[-1]
+        .endswith(
+            "(риск средний). Сейчас как донор недоступен — стоит: идёт ремонт.",
+        )
+    )
+
+
+def test_loaders_cover_every_dossier_section() -> None:
+    sections = set(DossierData.__dataclass_fields__) - {"well_id", "well_name", "now"}
+
+    assert set(dossier_module.LOADERS) == sections
+
+
+class _SessionTouched(Exception):  # noqa: N818
+    pass
+
+
+class _ProbeSession:
+    """Любое обращение к базе — маркер: до него загрузчик собрал свои use
+    case и репозитории, то есть сигнатуры конструкторов совпали."""
+
+    def __getattr__(self, name: str) -> Any:  # noqa: ANN401
+        def touched(*_args: object, **_kwargs: object) -> None:
+            raise _SessionTouched(name)
+
+        return touched
+
+
+def test_loaders_are_wired_to_current_signatures() -> None:
+    well = SimpleNamespace(id=6086, abai_id=1001, name="VMB_0456", coords_id=None)
+
+    for name, loader in dossier_module.LOADERS.items():
+        try:
+            asyncio.run(loader(_ProbeSession(), well))  # type: ignore[arg-type]
+        except _SessionTouched:
+            pass
+        except TypeError as error:
+            message = f"загрузчик {name} не собирается: {error}"
+            raise AssertionError(message) from error
+
+
+def test_build_survives_failing_section_and_limits_parallelism(
+    monkeypatch: Any,  # noqa: ANN401
+) -> None:
+    class _Session:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+    class _Wells:
+        def __init__(self, session: object) -> None: ...
+
+        async def get_by_id(self, id_: int) -> SimpleNamespace:
+            return SimpleNamespace(id=id_, abai_id=1, name="VMB_0456")
+
+    running = 0
+    peak = 0
+
+    async def slow(_session: object, _well: object) -> None:
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+
+    async def broken(_session: object, _well: object) -> None:
+        raise RuntimeError
+
+    loaders = dict.fromkeys(dossier_module.LOADERS, slow)
+    loaders["place"] = broken
+    monkeypatch.setattr(dossier_module, "session_makers", {"app": _Session})
+    monkeypatch.setattr(dossier_module, "WellRepository", _Wells)
+    monkeypatch.setattr(dossier_module, "LOADERS", loaders)
+
+    text = asyncio.run(dossier_module.build_well_dossier(6086))
+
+    assert text is not None
+    assert text.startswith("Скважина VMB_0456 (well_id 6086).")
+    assert peak <= dossier_module.PARALLEL_SECTIONS

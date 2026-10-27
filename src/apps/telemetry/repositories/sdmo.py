@@ -519,11 +519,13 @@ class SdmoFcDataRepository(
 
         В корзине: отсчёты, доля работы привода, доля вращения ротора, медиана
         скорости, медиана/минимум/максимум момента, медиана тока. Значения
-        сырые — koef применяет ``SdmoRegisterScaler``. Работа привода — доля
-        отсчётов с регистром 1999 из ``drive_work_codes`` среди отсчётов, где
-        регистр заполнен. Момент чистится до агрегатов: ``moment_wrap``
-        разворачивает uint16 (у ШГН отрицательный момент приезжает как
-        65536 − x), ``moment_clip`` отбрасывает Int32-выбросы вне диапазона.
+        сырые — koef применяет ``SdmoRegisterScaler``. Регистры приходят не в
+        каждой строке, поэтому доли считаются среди строк, где регистр
+        заполнен: работа привода — 1999 из ``drive_work_codes`` среди
+        ``status_samples``, вращение — 1998 > 0 среди ``speed_samples``.
+        Момент чистится до агрегатов: ``moment_wrap`` разворачивает uint16
+        (у ШГН отрицательный момент приезжает как 65536 − x), ``moment_clip``
+        отбрасывает Int32-выбросы вне диапазона.
         Корзины без отсчётов не возвращаются.
         """
         moment = getattr(SdmoFcData, f"r_{PUMP_MOMENT_REGISTER}")
@@ -548,6 +550,7 @@ class SdmoFcDataRepository(
                 func.count().label("samples"),
                 func.count(status).label("status_samples"),
                 func.count().filter(status.in_(drive_work_codes)).label("working"),
+                func.count(speed).label("speed_samples"),
                 func.count().filter(speed > 0).label("rotating"),
                 median.within_group(speed).label("speed_median"),
                 median.within_group(moment).label("moment_median"),
