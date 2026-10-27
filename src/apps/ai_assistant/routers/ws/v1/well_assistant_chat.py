@@ -18,6 +18,7 @@ from apps.ai_assistant.ai.well_chat_assistant.agent import (
     get_well_agent_config,
     well_chat_assistant_agent,
 )
+from apps.ai_assistant.ai.well_chat_assistant.dossier import well_dossier_provider
 from apps.ai_assistant.dto.commands.ask_well_chat_assistant import (
     AskWellChatAssistantCommand,
 )
@@ -129,6 +130,7 @@ async def well_assistant_chat_websocket(
     use_case = AskWellChatAssistantUseCase(
         agent=well_chat_assistant_agent,
         config_factory=get_well_agent_config,
+        dossier_provider=well_dossier_provider.get,
     )
     session = WellChatSession(chat_id=chat_id)
 

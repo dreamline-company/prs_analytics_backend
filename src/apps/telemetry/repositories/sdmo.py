@@ -1,7 +1,16 @@
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import BigInteger, RowMapping, cast, func, select, true
+from sqlalchemy import (
+    BigInteger,
+    RowMapping,
+    case,
+    cast,
+    func,
+    select,
+    text,
+    true,
+)
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -27,7 +36,8 @@ from shared.repository.sqlalchemy import (
 # Регистры параметров СДМО для API (type_1900 = 1/6/16; имена из
 # telemetry_sdmo_fc_reg): 1998 «Скорость ротора», 1991 «Момент штанги/на валу»,
 # 1614 «Ток двигателя», 1997 «Относительное заполнение насоса»,
-# 1999 «Статус (VLT SALT)» — статус станции: онлайн / не онлайн.
+# 1999 «Статус (VLT SALT)» — код состояния привода: 1/2/4 — работает под
+# нагрузкой, 0/512/4096/16384/1048576 — без тока (сверено на проде 06.10.2026).
 ROTOR_SPEED_REGISTER = 1998
 PUMP_MOMENT_REGISTER = 1991
 ENGINE_CURRENT_REGISTER = 1614
@@ -493,6 +503,68 @@ class SdmoFcDataRepository(
             )
         ).one()
         return int(row[0]), int(row[1]), row[2]
+
+    async def list_drive_stats(  # noqa: PLR0913
+        self,
+        station_id: int,
+        *,
+        since: datetime,
+        until: datetime,
+        bucket_hours: int,
+        drive_work_codes: Sequence[int],
+        moment_clip: tuple[float, float] | None = None,
+        moment_wrap: bool = False,
+    ) -> list[RowMapping]:
+        """Сводка привода по корзинам ``bucket_hours`` за [since, until).
+
+        В корзине: отсчёты, доля работы привода, доля вращения ротора, медиана
+        скорости, медиана/минимум/максимум момента, медиана тока. Значения
+        сырые — koef применяет ``SdmoRegisterScaler``. Работа привода — доля
+        отсчётов с регистром 1999 из ``drive_work_codes`` среди отсчётов, где
+        регистр заполнен. Момент чистится до агрегатов: ``moment_wrap``
+        разворачивает uint16 (у ШГН отрицательный момент приезжает как
+        65536 − x), ``moment_clip`` отбрасывает Int32-выбросы вне диапазона.
+        Корзины без отсчётов не возвращаются.
+        """
+        moment = getattr(SdmoFcData, f"r_{PUMP_MOMENT_REGISTER}")
+        if moment_wrap:
+            moment = case((moment > 32767, moment - 65536), else_=moment)  # noqa: PLR2004
+        if moment_clip is not None:
+            low, high = moment_clip
+            moment = case((moment.between(low, high), moment), else_=None)
+        speed = getattr(SdmoFcData, f"r_{ROTOR_SPEED_REGISTER}")
+        current = getattr(SdmoFcData, f"r_{ENGINE_CURRENT_REGISTER}")
+        status = getattr(SdmoFcData, f"r_{VLT_STATUS_REGISTER}")
+        # Якорь — местная полночь эпохи: корзины по 3 ч начинаются в 0, 3, 6 …
+        bucket = func.date_bin(
+            func.make_interval(0, 0, 0, 0, bucket_hours),
+            SdmoFcData.savetime,
+            text("timestamp '1970-01-01 00:00:00'"),
+        )
+        median = func.percentile_cont(0.5)
+        stmt = (
+            select(
+                bucket.label("bucket"),
+                func.count().label("samples"),
+                func.count(status).label("status_samples"),
+                func.count().filter(status.in_(drive_work_codes)).label("working"),
+                func.count().filter(speed > 0).label("rotating"),
+                median.within_group(speed).label("speed_median"),
+                median.within_group(moment).label("moment_median"),
+                func.min(moment).label("moment_min"),
+                func.max(moment).label("moment_max"),
+                median.within_group(current).label("current_median"),
+            )
+            .where(
+                SdmoFcData.station_id == station_id,
+                SdmoFcData.savetime >= since,
+                SdmoFcData.savetime < until,
+            )
+            .group_by(bucket)
+            .order_by(bucket)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.mappings().all())
 
     async def get_first_rotor_running(
         self,
