@@ -79,7 +79,7 @@ class WellStatusRepository(
         return result.scalar() or 0
 
     async def list_open_intervals(self, now: datetime) -> Sequence[WellStatus]:
-        """Локальные незакрытые интервалы: dend в будущем (UTC, как в источнике)."""
+        """Локальные незакрытые интервалы: dend позже ``now``."""
         return await self.get_list(
             QuerySpec(
                 filters=(WellStatus.dend > now,),
@@ -114,7 +114,7 @@ class WellStatusRepository(
         """Интервалы скважин, пересекающие [since, until), с кодом и причиной.
 
         Строка: (abai_well_id, dbeg, dend, код статуса, название статуса,
-        название причины). Время — UTC, как в источнике.
+        название причины). Время местное, как в источнике (не UTC).
         """
         if not abai_well_ids:
             return ()

@@ -1,8 +1,10 @@
 """Состояние скважин для контура: кто стоит и почему, план Qн, авария, координаты.
 
 Общая выборка для почасового подбора и для эндпоинтов, чтобы «стоит» и
-«потеря» везде значили одно и то же. Время ABAI (статусы, ремонты) хранится
-в UTC и отдаётся в местном.
+«потеря» везде значили одно и то же. Время ABAI (статусы, ремонты) записано в
+местном времени — сверено на проде 19.10.2026: начало ремонта совпадает с
+началом статуса простоя. Наружу ``now`` приходит наивным UTC и переводится в
+местное один раз, в ``load``.
 """
 
 from dataclasses import dataclass, field
@@ -114,24 +116,24 @@ class CompensationStateService:
             return state
         well_by_abai = {well.abai_id: well.id for well in wells}
         abai_ids = list(well_by_abai)
+        local_now = to_local(now)
 
         intervals = await self.status_repository.list_intervals_by_abai_well_ids(
             abai_ids,
-            since=now,
-            until=now + timedelta(seconds=1),
+            since=local_now,
+            until=local_now + timedelta(seconds=1),
         )
         for abai_well_id, dbeg, dend, code, name, reason in intervals:
-            if code == ABAI_STATUS_IDLE and dbeg <= now < dend:
+            if code == ABAI_STATUS_IDLE and dbeg <= local_now < dend:
                 state.stops[well_by_abai[abai_well_id]] = Stop(
                     STOP_IDLE,
                     reason or name,
-                    to_local(dbeg),
+                    dbeg,
                 )
         # Ремонт важнее простоя: вид работ говорит больше, чем «ПРС» в статусе.
-        # Время ремонтов ABAI, в отличие от статусов, уже местное.
         repairs = await self.repair_repository.list_current_by_abai_well_ids(
             abai_ids,
-            now=to_local(now),
+            now=local_now,
         )
         for abai_well_id, repair in repairs.items():
             state.stops[well_by_abai[abai_well_id]] = Stop(
@@ -142,7 +144,7 @@ class CompensationStateService:
 
         regimes = await self.regime_repository.get_current_by_abai_well_ids(
             abai_ids,
-            on_date=to_local(now).date(),
+            on_date=local_now.date(),
             grace_days=PLAN_GRACE_DAYS,
         )
         state.plans = {

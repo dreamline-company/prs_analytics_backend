@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -10,7 +11,9 @@ from langchain.agents.middleware.types import (
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.typing import ContextT
+from openai import BadRequestError
 
+from apps.ai_assistant.ai.well_chat_assistant.agent import WellChatContext
 from apps.ai_assistant.dto.commands.ask_well_chat_assistant import (
     AskWellChatAssistantCommand,
 )
@@ -21,6 +24,13 @@ if TYPE_CHECKING:
     from langchain.messages import AIMessage
 
 logger = get_logger(__name__)
+
+
+class WellChatModelRejectedError(RuntimeError):
+    """Модель отвергла запрос (400) — чаще всего тред не влез в окно.
+
+    Повтор в том же треде упадёт так же, поэтому вызывающий начинает новый.
+    """
 
 
 class WellConfigFactory(Protocol):
@@ -40,15 +50,27 @@ class AskWellChatAssistantUseCase:
         _OutputAgentState[ResponseT],
     ]
     config_factory: WellConfigFactory
+    # Досье скважины для системного промпта; None — собрать не удалось.
+    dossier_provider: Callable[[int], Awaitable[str | None]] | None = None
 
     async def execute(self, command: AskWellChatAssistantCommand) -> AIMessageDTO:
-        result = await self.agent.ainvoke(
-            input={"messages": [command.message]},
-            config=self.config_factory(
-                thread_id=command.thread_id,
-                well_id=command.well_id,
-            ),
-        )
+        dossier = None
+        if command.well_id is not None and self.dossier_provider is not None:
+            dossier = await self.dossier_provider(command.well_id)
+        try:
+            result = await self.agent.ainvoke(
+                input={"messages": [command.message]},
+                config=self.config_factory(
+                    thread_id=command.thread_id,
+                    well_id=command.well_id,
+                ),
+                context=WellChatContext(
+                    well_bound=command.well_id is not None,
+                    dossier=dossier,
+                ),
+            )
+        except BadRequestError as e:
+            raise WellChatModelRejectedError(str(e)) from e
         messages = result["messages"]
         last_response = cast("AIMessage", messages[-1])
         usage = getattr(last_response, "usage_metadata", None) or {}

@@ -22,6 +22,7 @@ from apps.detectors.models.incident import (
     DetectorIncident,
 )
 from apps.detectors.models.verification import (
+    VERDICT_FALSE_ALARM,
     VERDICT_PENDING,
     DetectorVerification,
 )
@@ -229,6 +230,40 @@ class DetectorIncidentRepository(
                 offset=offset,
             ),
         )
+
+    async def count_by_detector_since(
+        self,
+        *,
+        well_id: int,
+        opened_from: datetime,
+    ) -> dict[str, tuple[int, int]]:
+        """Эпизоды скважины, открытые с ``opened_from``, по правилам.
+
+        Значение — (всего эпизодов, из них проверка признала ложными). Отдельно
+        от ленты ``list_by_well_id``: та режется лимитом, а счётчик должен быть
+        честным.
+        """
+        false_alarms = func.count(DetectorVerification.id).filter(
+            DetectorVerification.verdict == VERDICT_FALSE_ALARM,
+        )
+        stmt = (
+            select(
+                DetectorIncident.detector_code,
+                func.count(DetectorIncident.id),
+                false_alarms,
+            )
+            .outerjoin(
+                DetectorVerification,
+                DetectorVerification.incident_id == DetectorIncident.id,
+            )
+            .where(
+                DetectorIncident.well_id == well_id,
+                DetectorIncident.opened_at >= opened_from,
+            )
+            .group_by(DetectorIncident.detector_code)
+        )
+        result = await self.session.execute(stmt)
+        return {code: (int(total), int(false)) for code, total, false in result.all()}
 
     async def list_active_by_well_id(
         self,
