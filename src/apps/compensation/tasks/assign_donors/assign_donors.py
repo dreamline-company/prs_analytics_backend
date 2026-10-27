@@ -51,7 +51,7 @@ logger = get_logger(__name__)
 class DonorAssigner:
     def __init__(self, session: AsyncSession, *, now: datetime | None = None) -> None:
         self.session = session
-        self.now = now or utc_now()  # наивный UTC — как время статусов ABAI
+        self.now = now or utc_now()  # наивный UTC; в местное переводит state.load
         self.state_service = CompensationStateService(session)
         self.donor_repository = CompensationDonorRepository(session)
         self.pair_repository = CompensationRecommendationRepository(session)
