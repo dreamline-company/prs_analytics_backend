@@ -24,6 +24,7 @@ from apps.wells.dto.internal.well_matrix_incidents import (
 from apps.wells.dto.queries.well import GetWellMatrixIncidentsQuery
 from apps.wells.repositories.well_expl import WellExplRepository
 from apps.wells.services import NGDUWellsService
+from apps.wells.services.well_state.read import WellStateReadService
 from shared.constants.ngdu import KMG_ONLY_OIL_FIELD_PREFIX, AbaiNGDUIDsEnum
 
 
@@ -38,6 +39,7 @@ class GetWellMatrixIncidentsUseCase:
         current_repair_service: CurrentRepairService,
         well_rates_service: WellRatesService,
         sdmo_fc_data_repository: SdmoFcDataRepository,
+        well_state_read_service: WellStateReadService,
     ) -> None:
         self.ngdu_wells_service = ngdu_wells_service
         self.org_repository = org_repository
@@ -46,6 +48,7 @@ class GetWellMatrixIncidentsUseCase:
         self.current_repair_service = current_repair_service
         self.well_rates_service = well_rates_service
         self.sdmo_fc_data_repository = sdmo_fc_data_repository
+        self.well_state_read_service = well_state_read_service
 
     async def execute(
         self,
@@ -85,6 +88,7 @@ class GetWellMatrixIncidentsUseCase:
         vlt_statuses = await fc_data_repository.get_last_vlt_status_by_well_ids(
             well_ids,
         )
+        states = await self.well_state_read_service.get_for_wells(well_ids)
 
         return [
             WellMatrixIncidentDTO(
@@ -94,6 +98,7 @@ class GetWellMatrixIncidentsUseCase:
                     if well.abai_id in expl_names
                     else None
                 ),
+                state=states[well.id],
                 incident_status=incident_statuses[well.id],
                 current_repair=current_repairs.get(well.abai_id),
                 passport=WellMatrixIncidentPassportDTO(

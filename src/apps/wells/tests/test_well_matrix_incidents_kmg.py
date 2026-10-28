@@ -53,7 +53,7 @@ class _Repairs:
 
 class _Rates:
     async def get_for_wells(self, abai_id_by_well_id: dict[int, int]) -> dict:
-        empty = dict.fromkeys(WellRatesDTO.model_fields)
+        empty = dict.fromkeys(WellRatesDTO.model_fields) | {"telemetry_stale": True}
         return {well_id: WellRatesDTO(**empty) for well_id in abai_id_by_well_id}
 
 
@@ -65,6 +65,11 @@ class _FcData:
         return {}
 
 
+class _States:
+    async def get_for_wells(self, ids: list[int]) -> dict:
+        return dict.fromkeys(ids)
+
+
 def _well_names(abai_ngdu_id: int) -> list[str]:
     use_case = GetWellMatrixIncidentsUseCase(
         ngdu_wells_service=_NgduWells(),
@@ -74,6 +79,7 @@ def _well_names(abai_ngdu_id: int) -> list[str]:
         current_repair_service=_Repairs(),
         well_rates_service=_Rates(),
         sdmo_fc_data_repository=_FcData(),
+        well_state_read_service=_States(),
     )
     rows = asyncio.run(use_case.execute(GetWellMatrixIncidentsQuery(ngdu_id=5)))
     return [row.well.well_name for row in rows]

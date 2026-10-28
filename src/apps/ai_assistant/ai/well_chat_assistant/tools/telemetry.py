@@ -26,6 +26,7 @@ from apps.telemetry.repositories.sdmo import (
 )
 from apps.telemetry.repositories.tech_regime import TechRegimeRepository
 from apps.telemetry.repositories.telemetry import TelemetryRepository
+from apps.telemetry.services.drive import DRIVE_RUNNING_VLT_CODES
 from apps.telemetry.services.sdmo_scale import SdmoRegisterScaler
 from apps.telemetry.services.well_rates import water_cut
 from apps.wells.repositories.well import WellRepository
@@ -53,9 +54,6 @@ RATES_MAX_DAYS = 90
 RATES_LIMIT = 60
 RATES_COLUMNS = ("time", "oil_t_day", "liquid_m3_day", "water_cut_pct")
 
-# Регистр 1999: коды «привод работает под нагрузкой» (сверено на проде
-# 06.10.2026 по току и мощности), остальные коды — привод без тока.
-DRIVE_WORK_CODES = (1, 2, 4)
 # Типы станций (type_1900): у ШГН момент 1991 едет uint16 — отрицательный
 # приезжает как 65536 − x; у ЭВН встречаются Int32-выбросы (-4292, 65518).
 STATION_TYPE_SHGN = 1
@@ -121,7 +119,7 @@ async def get_drive_telemetry(
             since=until - timedelta(hours=hours),
             until=until,
             bucket_hours=bucket_hours,
-            drive_work_codes=DRIVE_WORK_CODES,
+            drive_work_codes=sorted(DRIVE_RUNNING_VLT_CODES),
             moment_clip=(
                 EVN_MOMENT_CLIP if station.type_1900 == STATION_TYPE_EVN else None
             ),

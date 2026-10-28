@@ -9,7 +9,8 @@ class NgduSummaryWellsDTO(BaseModel):
     """Фонд скважин."""
 
     total: int
-    # Станция СДМО скважины онлайн: последний регистр 1999 «Статус (VLT SALT)» = 1.
+    # Привод работает: последний код регистра 1999 «Статус (VLT)» — из рабочих
+    # (apps.telemetry.services.drive).
     active: int
 
 

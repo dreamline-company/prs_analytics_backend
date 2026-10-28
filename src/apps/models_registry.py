@@ -57,6 +57,7 @@ from apps.wells.models.status_history import WellStatusHistory
 from apps.wells.models.well import Well
 from apps.wells.models.well_expl import WellExpl, WellExplType
 from apps.wells.models.well_org import WellOrg
+from apps.wells.models.well_state import WellDriveState, WellState, WellStateRun
 from apps.wells.models.well_status import WellStatus, WellStatusReason, WellStatusType
 
 __all__ = (
@@ -110,9 +111,12 @@ __all__ = (
     "UniqueBrigade",
     "Well",
     "WellCoord",
+    "WellDriveState",
     "WellExpl",
     "WellExplType",
     "WellOrg",
+    "WellState",
+    "WellStateRun",
     "WellStatus",
     "WellStatusHistory",
     "WellStatusReason",

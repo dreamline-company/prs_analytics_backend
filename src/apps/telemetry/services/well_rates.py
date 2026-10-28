@@ -1,10 +1,18 @@
 """Дебиты скважины (факт + план) — один ответ для карточки и для матрицы."""
 
 from collections.abc import Mapping
+from datetime import datetime, timedelta
+from typing import Final
 
 from apps.telemetry.dto.internal.well_rates import WellRatesDTO
 from apps.telemetry.repositories.tech_regime import TechRegimeRepository
 from apps.telemetry.repositories.telemetry import TelemetryRepository
+from core.settings import get_settings
+
+# Замер дебита идёт не каждый день (в среднем раз в 2–3 суток); замер старше
+# стольких суток не отражает текущую добычу. Старше 7 суток на 28.10.2026:
+# ДМГ 6 %, ЖМГ 5 %, VMB 9 %, ЖлМГ 28 % скважин с планом.
+FRESH_TELEMETRY_DAYS: Final = 7
 
 # Границы обводнённости: значение вне 0…100 означает мусор в дебитах, а не
 # реальный режим (в telemetry_well встречаются выбросы на много порядков).
@@ -61,6 +69,8 @@ class WellRatesService:
     async def get_for_wells(
         self,
         abai_id_by_well_id: Mapping[int, int],
+        *,
+        now: datetime | None = None,
     ) -> dict[int, WellRatesDTO]:
         """Ключ — локальный ``well_id``.
 
@@ -77,6 +87,9 @@ class WellRatesService:
             list(abai_id_by_well_id.values()),
         )
 
+        # Время замеров ЦИТС — наивное местное.
+        now = now or datetime.now(get_settings().ZONE_INFO).replace(tzinfo=None)
+        fresh_since = now - timedelta(days=FRESH_TELEMETRY_DAYS)
         rates = {}
         for well_id, abai_well_id in abai_id_by_well_id.items():
             last = telemetry.get(well_id)
@@ -93,6 +106,7 @@ class WellRatesService:
                 liquid_rate=liquid_rate,
                 water_cut=water_cut(liquid_rate=liquid_rate, oil_rate=oil_rate),
                 telemetry_time=last.date_time if last else None,
+                telemetry_stale=last is None or last.date_time < fresh_since,
                 plan_oil_rate=plan_oil_rate,
                 plan_liquid_rate=regime.liquid if regime else None,
                 tech_regime_date=regime.start_date if regime else None,

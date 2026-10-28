@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from apps.detectors.dto.internal.well_status import WellIncidentStatusDTO
 from apps.repairs.dto.internal.repair import CurrentRepairDTO
 from apps.telemetry.dto.internal.well_rates import WellRatesDTO
+from apps.wells.dto.internal.well_state import WellStateDTO
 
 
 class WellMatrixIncidentWellDTO(BaseModel):
@@ -36,6 +37,9 @@ class WellMatrixIncidentPassportDTO(WellRatesDTO):
 class WellMatrixIncidentDTO(BaseModel):
     well: WellMatrixIncidentWellDTO
     expl: WellMatrixIncidentExplDTO | None = None
+    # Итоговое состояние скважины — то же, что в карточке; None — скважина
+    # ещё не посчитана.
+    state: WellStateDTO | None = None
     # Те же блоки, что в карточке скважины: строка матрицы и карточка должны
     # показывать одно и то же состояние, а не расходиться в трактовках.
     incident_status: WellIncidentStatusDTO
