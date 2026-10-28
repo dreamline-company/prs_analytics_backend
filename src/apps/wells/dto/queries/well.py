@@ -20,6 +20,15 @@ class GetWellCardQuery(BaseModel):
     well_id: int = Field(ge=1)
 
 
+class GetWellTimelineQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    well_id: int = Field(ge=1)
+    # Период: случаи с ремонтом (без ремонта — с поломкой) не старше стольких суток.
+    days: int = Field(default=365, ge=1, le=3 * 365)
+    limit: int = Field(default=20, ge=1, le=100)
+
+
 class GetWellMatrixIncidentsQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
