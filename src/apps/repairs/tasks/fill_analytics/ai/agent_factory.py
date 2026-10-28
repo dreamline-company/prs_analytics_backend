@@ -13,7 +13,14 @@ from core.settings import get_settings
 settings = get_settings()
 
 
-def _chat_model() -> ChatOpenAI:
+# Разбор динамограммы держит её замок на время вызова: без таймаута зависший
+# вызов (обрыв связи без RST) держал бы проход по фонду до лимита celery, а
+# аналитику ремонта — на замке. Худший случай — 2 попытки × 120 с.
+DYNAMOGRAM_LLM_TIMEOUT_SEC = 120
+DYNAMOGRAM_LLM_MAX_RETRIES = 1
+
+
+def _chat_model(**kwargs: object) -> ChatOpenAI:
     return ChatOpenAI(
         base_url=settings.LLM_BASE_URL,
         api_key=settings.LLM_API_KEY,
@@ -21,11 +28,17 @@ def _chat_model() -> ChatOpenAI:
         extra_body={
             "reasoning_effort": "none",
         },
+        **kwargs,
     )
 
 
 def build_dynamogram_agent() -> CompiledStateGraph:
-    return create_agent(_chat_model())
+    return create_agent(
+        _chat_model(
+            timeout=DYNAMOGRAM_LLM_TIMEOUT_SEC,
+            max_retries=DYNAMOGRAM_LLM_MAX_RETRIES,
+        ),
+    )
 
 
 def build_spo_agent() -> CompiledStateGraph:

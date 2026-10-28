@@ -92,6 +92,11 @@ from apps.telemetry.tasks.load_telemetry.load_wincc import (  # noqa: F401
     load_wincc_incremental,
 )
 
+# Импорт регистрирует ИИ-разбор динамограмм всего фонда.
+from apps.wells.tasks.analyze_dynamograms.analyze_dynamograms import (  # noqa: F401
+    analyze_dynamograms,
+)
+
 # Импорт регистрирует таску инкрементальной загрузки ГДИС из ABAI.
 from apps.wells.tasks.load_gdis.load_gdis import load_gdis_incremental  # noqa: F401
 
@@ -232,6 +237,21 @@ celery_app.conf.beat_schedule = {
         "task": "wells.gdis.incremental_load",
         "schedule": crontab(hour=5, minute=40),
     },
+    # ИИ-разбор динамограмм фонда, от свежих к старым: каждые полчаса с
+    # бюджетом 20 минут — история (~100 тыс.) догоняется за несколько суток,
+    # новые разбираются в ближайший проход. Пары до/после ремонта разбирает
+    # и аналитика ремонта — через тот же анализатор. В расписании — только с
+    # DYNAMOGRAM_AI_FUND_ENABLED (включается после пилота).
+    **(
+        {
+            "wells-dynamograms-analyze": {
+                "task": "wells.dynamograms.analyze",
+                "schedule": crontab(minute="10,40"),
+            },
+        }
+        if settings.DYNAMOGRAM_AI_FUND_ENABLED
+        else {}
+    ),
     # Ежедневная синхронизация оргструктуры из ABAI: типы организаций ->
     # организации -> бригады -> дедупликация бригад (порядок внутри таска).
     "org-sync-daily": {

@@ -54,7 +54,6 @@ from apps.repairs.models.analytics import AI_STATUS_COMPLETED, RepairAnalytics
 from apps.repairs.models.repair import Repair
 from apps.repairs.repositories.ai_results import (
     RepairAIAnalysisRepository,
-    RepairDynamogramAIResultRepository,
     RepairSPOAIResultRepository,
 )
 from apps.repairs.repositories.analytics import (
@@ -88,15 +87,15 @@ from apps.repairs.tasks.fetch_sources.triggers import (
     ANALYTICS_SWEEP_TASK,
 )
 from apps.repairs.tasks.fill_analytics.ai.agent_factory import (
-    build_dynamogram_agent,
     build_kpi_por_agent,
     build_kpi_spo_analysis_agent,
     build_overall_agent,
     build_spo_agent,
 )
 from apps.repairs.tasks.fill_analytics.ai.coordinator import AICoordinator
-from apps.repairs.tasks.fill_analytics.ai.dynamogram_processor import (
-    DynamogramAIProcessor,
+from apps.repairs.tasks.fill_analytics.ai.dynamogram_analyzer import (
+    build_dynamogram_analyzer,
+    build_dynamogram_processor,
 )
 from apps.repairs.tasks.fill_analytics.ai.overall_processor import OverallAIProcessor
 from apps.repairs.tasks.fill_analytics.ai.spo_processor import SPOAIProcessor
@@ -333,10 +332,11 @@ class FillRepairAnalytics:
             )
 
         # AI: разборы по элементам питают общий вердикт.
+        abai_well_id = well.abai_id if well else None
         dyn_before_ai = (
             await ai_coordinator.process_dynamogram(
                 dynamogram=inputs.before,
-                role="before",
+                abai_well_id=abai_well_id,
                 repair_id=repair.id,
             )
             if inputs.before is not None
@@ -345,7 +345,7 @@ class FillRepairAnalytics:
         dyn_after_ai = (
             await ai_coordinator.process_dynamogram(
                 dynamogram=inputs.after,
-                role="after",
+                abai_well_id=abai_well_id,
                 repair_id=repair.id,
             )
             if inputs.after is not None
@@ -449,9 +449,10 @@ class FillRepairAnalytics:
         cm_brigade_repo = CMBrigadeRepository(cm_session)
         cm_brigade_error_screen_repo = CMBrigadeErrorScreenRepository(cm_session)
         ai_coordinator = AICoordinator(
-            dynamogram_processor=DynamogramAIProcessor(
-                build_dynamogram_agent(),
-                model_name=settings.LLM_MODEL_NAME,
+            dynamogram_analyzer=build_dynamogram_analyzer(
+                session,
+                storage=storage,
+                processor=build_dynamogram_processor(),
             ),
             spo_processor=SPOAIProcessor(
                 build_spo_agent(),
@@ -461,7 +462,6 @@ class FillRepairAnalytics:
                 build_overall_agent(),
                 model_name=settings.LLM_MODEL_NAME,
             ),
-            dynamogram_ai_repo=deps.dynamogram_ai_repo,
             spo_ai_repo=deps.spo_ai_repo,
             overall_ai_repo=deps.overall_ai_repo,
             file_repo=deps.file_repo,
@@ -633,7 +633,6 @@ class _Dependencies:
     file_repo: FileRepository
     well_repo: WellRepository
     measure_repo: KbrsMeasureRepository
-    dynamogram_ai_repo: RepairDynamogramAIResultRepository
     spo_ai_repo: RepairSPOAIResultRepository
     overall_ai_repo: RepairAIAnalysisRepository
     kpi_repo: RepairKPIRepository
@@ -654,7 +653,6 @@ class _Dependencies:
             file_repo=FileRepository(session),
             well_repo=WellRepository(session),
             measure_repo=KbrsMeasureRepository(session),
-            dynamogram_ai_repo=RepairDynamogramAIResultRepository(session),
             spo_ai_repo=RepairSPOAIResultRepository(session),
             overall_ai_repo=RepairAIAnalysisRepository(session),
             kpi_repo=RepairKPIRepository(session),

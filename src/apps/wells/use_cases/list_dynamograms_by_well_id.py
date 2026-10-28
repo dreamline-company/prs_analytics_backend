@@ -1,9 +1,10 @@
-"""Все динамограммы скважины со ссылками на файлы."""
+"""Все динамограммы скважины со ссылками на файлы и ИИ-разборами."""
 
 from datetime import UTC, datetime, timedelta
 
 from apps.files.repositories.file import FileRepository
-from apps.wells.dto.internal.dynamogram import WellDynamogramDTO
+from apps.repairs.repositories.ai_results import RepairDynamogramAIResultRepository
+from apps.wells.dto.internal.dynamogram import WellDynamogramAIDTO, WellDynamogramDTO
 from apps.wells.dto.queries.well import ListWellDynamogramsQuery
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.well import WellRepository
@@ -18,11 +19,13 @@ class ListDynamogramsByWellIdUseCase:
         well_repository: WellRepository,
         dynamogram_repository: DynamogramRepository,
         file_repository: FileRepository,
+        dynamogram_ai_repository: RepairDynamogramAIResultRepository,
         storage: AiobotoFileStorage,
     ) -> None:
         self.well_repository = well_repository
         self.dynamogram_repository = dynamogram_repository
         self.file_repository = file_repository
+        self.dynamogram_ai_repository = dynamogram_ai_repository
         self.storage = storage
 
     async def execute(
@@ -50,6 +53,19 @@ class ListDynamogramsByWellIdUseCase:
             expires_in=query.expires_in,
         )
         expires_at = datetime.now(UTC) + timedelta(seconds=query.expires_in)
+        ai_by_dynamogram_id = {
+            row.dynamogram_id: WellDynamogramAIDTO.from_result(
+                status=row.status,
+                prompt_version=row.prompt_version,
+                model_name=row.model_name,
+                processed_at=row.processed_at,
+                error=row.error,
+                result=row.result,
+            )
+            for row in await self.dynamogram_ai_repository.list_by_dynamogram_ids(
+                [dynamogram.id for dynamogram in dynamograms],
+            )
+        }
 
         return [
             WellDynamogramDTO(
@@ -62,6 +78,7 @@ class ListDynamogramsByWellIdUseCase:
                 expires_at=(
                     expires_at if dynamogram.file_id in keys_by_file_id else None
                 ),
+                ai=ai_by_dynamogram_id.get(dynamogram.id),
             )
             for dynamogram in dynamograms
         ]
