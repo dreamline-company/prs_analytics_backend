@@ -5,6 +5,7 @@ from sqlalchemy import (
     ColumnElement,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Text,
     and_,
@@ -24,6 +25,14 @@ class RepairType(AppBaseModel, IntPkMixin, AbaiIdMixin):
 
 class Repair(AppBaseModel, IntPkMixin, AbaiIdMixin):
     __tablename__ = "repairs_repair"
+    __table_args__ = (
+        # Ремонты одной скважины по времени: хронология событий, МРП.
+        Index(
+            "ix_repairs_repair_abai_well_id_start_time",
+            "abai_well_id",
+            "start_time",
+        ),
+    )
 
     well_id: Mapped[int] = mapped_column(
         BigInteger,

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.detectors.repositories import (
     DetectorIncidentRepository,
     DetectorRepository,
+    DetectorVerificationRepository,
 )
 from apps.detectors.services import WellIncidentStatusService
 from apps.files.repositories.file import FileRepository
@@ -30,11 +31,13 @@ from apps.wells.dto.internal.well_card import WellCardDTO
 from apps.wells.dto.internal.well_coords import WellCoordMapPointDTO
 from apps.wells.dto.internal.well_matrix import WellMatrixItemDTO
 from apps.wells.dto.internal.well_matrix_incidents import WellMatrixIncidentDTO
+from apps.wells.dto.internal.well_timeline import WellTimelineDTO
 from apps.wells.dto.queries.well import (
     GetWellCardQuery,
     GetWellCoordsQuery,
     GetWellMatrixIncidentsQuery,
     GetWellsMatrixQuery,
+    GetWellTimelineQuery,
     ListWellDynamogramsQuery,
     SearchWellsByNameQuery,
 )
@@ -45,6 +48,7 @@ from apps.wells.dto.responses.well import (
     WellDynamogramsResponseDTO,
     WellMatrixIncidentsResponseDTO,
     WellsMatrixResponseDTO,
+    WellTimelineResponseDTO,
 )
 from apps.wells.repositories.coords import WellCoordRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
@@ -61,6 +65,7 @@ from apps.wells.repositories.well_state import (
     WellStateRepository,
     WellStateRunRepository,
 )
+from apps.wells.repositories.well_status import WellStatusRepository
 from apps.wells.services import CoordPointService, NGDUWellsService, WellGdisService
 from apps.wells.services.well_state.read import WellStateReadService
 from apps.wells.use_cases.get_well_card import GetWellCardUseCase
@@ -68,6 +73,7 @@ from apps.wells.use_cases.get_well_coords import GetWellCoordsUseCase
 from apps.wells.use_cases.get_well_matrix_incidents import (
     GetWellMatrixIncidentsUseCase,
 )
+from apps.wells.use_cases.get_well_timeline import GetWellTimelineUseCase
 from apps.wells.use_cases.get_wells_matrix import GetWellsMatrixUseCase
 from apps.wells.use_cases.list_dynamograms_by_well_id import (
     ListDynamogramsByWellIdUseCase,
@@ -248,6 +254,34 @@ async def get_well_card(
     )
     card = await use_case.execute(GetWellCardQuery(well_id=well_id))
     return WellCardResponseDTO(data=card)
+
+
+@router.get("/{well_id}/timeline", response_model=AppResponse[WellTimelineDTO])
+async def get_well_timeline(
+    session: Annotated[AsyncSession, Depends(get_app_session)],
+    well_id: Annotated[int, Path(ge=1, description="Well ID (wells_well.id)")],
+    days: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=3 * 365,
+            description="Period, days: cases whose repair (or breakdown) is newer.",
+        ),
+    ] = 365,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> WellTimelineResponseDTO:
+    use_case = GetWellTimelineUseCase(
+        well_repository=WellRepository(session=session),
+        well_status_repository=WellStatusRepository(session=session),
+        repair_repository=RepairRepository(session=session),
+        incident_repository=DetectorIncidentRepository(session=session),
+        detector_repository=DetectorRepository(session=session),
+        verification_repository=DetectorVerificationRepository(session=session),
+    )
+    timeline = await use_case.execute(
+        GetWellTimelineQuery(well_id=well_id, days=days, limit=limit),
+    )
+    return WellTimelineResponseDTO(data=timeline)
 
 
 @router.get(
