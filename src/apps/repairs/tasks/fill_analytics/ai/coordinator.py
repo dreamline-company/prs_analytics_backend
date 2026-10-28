@@ -4,7 +4,6 @@ Encapsulates the read-existing → skip-if-current → run-processor → upsert
 loop so ``FillRepairAnalytics`` stays about orchestration, not persistence.
 """
 
-import mimetypes
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -12,10 +11,8 @@ from apps.files.repositories.file import FileRepository
 from apps.org.repositories import UniqueBrigadeRepository
 from apps.repairs.dto.internal.repositories.ai_results import (
     CreateRepairAIAnalysisDTO,
-    CreateRepairDynamogramAIResultDTO,
     CreateRepairSPOAIResultDTO,
     UpdateRepairAIAnalysisDTO,
-    UpdateRepairDynamogramAIResultDTO,
     UpdateRepairSPOAIResultDTO,
 )
 from apps.repairs.models.analytics import (
@@ -28,7 +25,6 @@ from apps.repairs.models.analytics import (
 from apps.repairs.models.repair import Repair
 from apps.repairs.repositories.ai_results import (
     RepairAIAnalysisRepository,
-    RepairDynamogramAIResultRepository,
     RepairSPOAIResultRepository,
 )
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
@@ -45,7 +41,7 @@ from shared.integrations.cm.repositories.brigade_error_screens import (
 from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
 
 from .base import TokenUsage
-from .dynamogram_processor import DynamogramAIProcessor, DynamogramProcessingInput
+from .dynamogram_analyzer import DynamogramAnalyzer
 from .overall_processor import (
     OverallAIProcessor,
     OverallProcessingInput,
@@ -63,10 +59,9 @@ SPO_AI_RETRY_AFTER = timedelta(hours=6)
 class AICoordinator:
     """Runs the three processors and stores results."""
 
-    dynamogram_processor: DynamogramAIProcessor
+    dynamogram_analyzer: DynamogramAnalyzer
     spo_processor: SPOAIProcessor
     overall_processor: OverallAIProcessor
-    dynamogram_ai_repo: RepairDynamogramAIResultRepository
     spo_ai_repo: RepairSPOAIResultRepository
     overall_ai_repo: RepairAIAnalysisRepository
     file_repo: FileRepository
@@ -81,51 +76,15 @@ class AICoordinator:
         self,
         *,
         dynamogram: Dynamogram,
-        role: str,
+        abai_well_id: int | None,
         repair_id: int,
     ) -> RepairDynamogramAIResult:
-        existing = await self.dynamogram_ai_repo.get_by_dynamogram_id(dynamogram.id)
-        if self._is_current(existing, self.dynamogram_processor.prompt_version):
-            return existing
-
-        s3_key = await self._resolve_s3_key(dynamogram.file_id)
-        image_bytes = await self._download_bytes(s3_key)
-        image_mime = self._guess_mime(s3_key, default="image/png")
-        result = await self.dynamogram_processor.process(
-            DynamogramProcessingInput(
-                dynamogram=dynamogram,
-                role=role,
-                s3_key=s3_key or "",
-                repair_id=repair_id,
-                image_bytes=image_bytes,
-                image_mime=image_mime,
-            ),
+        row, usage = await self.dynamogram_analyzer.analyze(
+            dynamogram,
+            abai_well_id=abai_well_id,
         )
-        self._record_usage(repair_id, result.usage)
-
-        if existing is None:
-            return await self.dynamogram_ai_repo.create(
-                CreateRepairDynamogramAIResultDTO(
-                    dynamogram_id=dynamogram.id,
-                    status=result.status,
-                    model_name=result.model_name,
-                    prompt_version=result.prompt_version,
-                    result=result.result,
-                    error=result.error,
-                    processed_at=result.processed_at,
-                ),
-            )
-        return await self.dynamogram_ai_repo.update_by_dynamogram_id(
-            dynamogram_id=dynamogram.id,
-            data=UpdateRepairDynamogramAIResultDTO(
-                status=result.status,
-                model_name=result.model_name,
-                prompt_version=result.prompt_version,
-                result=result.result,
-                error=result.error,
-                processed_at=result.processed_at,
-            ),
-        )
+        self._record_usage(repair_id, usage)
+        return row
 
     async def process_spo(
         self,
@@ -304,13 +263,6 @@ class AICoordinator:
         if payload is None:
             return None
         return payload.decode(encoding, errors="replace")
-
-    @staticmethod
-    def _guess_mime(s3_key: str | None, *, default: str) -> str:
-        if not s3_key:
-            return default
-        guessed, _ = mimetypes.guess_type(s3_key)
-        return guessed or default
 
     def _record_usage(self, repair_id: int, usage: TokenUsage) -> None:
         bucket = self._usage_by_repair.setdefault(repair_id, TokenUsage())

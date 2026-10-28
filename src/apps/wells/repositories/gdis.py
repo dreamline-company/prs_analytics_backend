@@ -70,6 +70,18 @@ class GdisMetricRepository(
         )
         return set(result.scalars().all())
 
+    async def map_abai_ids_by_codes(self, codes: Sequence[str]) -> dict[str, int]:
+        """ABAI id метрик по ``code``: код ASCII и не правится, в отличие от
+        имени (в именах латинская «K» вперемешку с кириллицей)."""
+        if not codes:
+            return {}
+        result = await self.session.execute(
+            select(GdisMetric.code, GdisMetric.abai_id).where(
+                GdisMetric.code.in_(codes),
+            ),
+        )
+        return dict(result.tuples().all())
+
     async def upsert_many(self, data: Sequence[CreateGdisMetricDTO]) -> None:
         await _upsert_by_abai_id(self, data)
 
@@ -104,6 +116,22 @@ class GdisCurrentRepository(
                 filters=(GdisCurrent.abai_well_id == abai_well_id,),
                 order_by=(GdisCurrent.meas_date.desc(), GdisCurrent.abai_id.desc()),
                 limit=limit,
+            ),
+        )
+
+    async def list_by_abai_well_id_and_date(
+        self,
+        abai_well_id: int,
+        meas_date: date,
+    ) -> Sequence[GdisCurrent]:
+        """Исследования скважины за день, поздние (по ABAI id) сверху."""
+        return await self.get_list(
+            QuerySpec(
+                filters=(
+                    GdisCurrent.abai_well_id == abai_well_id,
+                    GdisCurrent.meas_date == meas_date,
+                ),
+                order_by=(GdisCurrent.abai_id.desc(),),
             ),
         )
 

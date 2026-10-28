@@ -116,7 +116,12 @@ class RepairDynamogramAIResult(
     TimedMixinModel,
     _AIResultMixin,
 ):
-    """AI analysis of a single dynamogram (before or after repair)."""
+    """ИИ-разбор одной динамограммы.
+
+    Одна строка на динамограмму, общая для аналитики ремонта (пары до/после)
+    и прохода по всему фонду (``wells.dynamograms.analyze``); префикс
+    ``repairs_`` исторический, как у самой ``repairs_dynamogram``.
+    """
 
     __tablename__ = "repairs_dynamogram_ai_result"
 

@@ -12,6 +12,7 @@ from apps.files.repositories.file import FileRepository
 from apps.org.repositories.brigade import UniqueBrigadeRepository
 from apps.org.repositories.oil_field import OilFieldRepository
 from apps.org.repositories.org import OrgRepository
+from apps.repairs.repositories.ai_results import RepairDynamogramAIResultRepository
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.repair import RepairRepository
 from apps.repairs.services import CurrentRepairService
@@ -262,6 +263,7 @@ async def get_well_dynamograms(
         well_repository=WellRepository(session=session),
         dynamogram_repository=DynamogramRepository(session=session),
         file_repository=FileRepository(session=session),
+        dynamogram_ai_repository=RepairDynamogramAIResultRepository(session=session),
         storage=storage,
     )
     dynamograms = await use_case.execute(
