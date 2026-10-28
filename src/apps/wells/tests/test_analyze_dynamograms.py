@@ -127,6 +127,18 @@ def test_limit_stops_pass_and_marks_it_deferred() -> None:
     assert result.deferred is True
 
 
+def test_concurrency_defaults_to_setting_and_is_capped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        module,
+        "get_settings",
+        lambda: SimpleNamespace(DYNAMOGRAM_AI_FUND_CONCURRENCY=2),
+    )
+    assert AnalyzeDynamograms()._concurrency == 2  # noqa: SLF001
+    assert AnalyzeDynamograms(concurrency=50)._concurrency == module.MAX_CONCURRENCY  # noqa: SLF001
+
+
 def test_exhausted_budget_defers_without_analysis() -> None:
     result = asyncio.run(AnalyzeDynamograms(time_budget_sec=0).run())
 

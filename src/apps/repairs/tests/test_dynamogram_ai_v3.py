@@ -179,6 +179,16 @@ def test_prompt_has_gdis_values_and_no_repair_role() -> None:
     assert "НРН" not in prompt
 
 
+def test_prompt_names_number_sources_and_repair_kind() -> None:
+    prompt = build_prompt(_item(_gdis()))
+    # Цифры с картинки модель называла «данными ГДИС».
+    assert "«по данным ГДИС» — только значения из" in prompt
+    assert "«по данным на динамограмме»" in prompt
+    # Для замены клапанов модель советовала КРС, а это ПРС.
+    assert "клапанов, ликвидация обрыва" in prompt
+    assert "подземный ремонт (ПРС)" in prompt
+
+
 def test_prompt_without_gdis() -> None:
     assert "Исследования ГДИС за этот день нет" in build_prompt(_item())
 

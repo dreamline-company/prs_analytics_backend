@@ -49,9 +49,9 @@ LOCK_TTL_SEC = 30 * 60
 # Проход останавливается за 5 минут до soft-лимита celery (25 минут).
 TIME_BUDGET_SEC = 20 * 60
 PAGE_SIZE = 100
-# Каждая динамограмма держит сессию БД на время вызова LLM, а пул app-движка —
+# Параллельность по умолчанию — DYNAMOGRAM_AI_FUND_CONCURRENCY. Потолок: каждая
+# динамограмма держит сессию БД на время вызова LLM, а пул app-движка —
 # pool_size 5 + max_overflow 10; выше — упрёмся в пул, а не ускоримся.
-DEFAULT_CONCURRENCY = 4
 MAX_CONCURRENCY = 10
 
 
@@ -75,11 +75,13 @@ class AnalyzeDynamograms:
         *,
         well_id: int | None = None,
         limit: int | None = None,
-        concurrency: int = DEFAULT_CONCURRENCY,
+        concurrency: int | None = None,
         time_budget_sec: float | None = None,
     ) -> None:
         self._well_id = well_id
         self._limit = limit
+        if concurrency is None:
+            concurrency = get_settings().DYNAMOGRAM_AI_FUND_CONCURRENCY
         self._concurrency = max(1, min(concurrency, MAX_CONCURRENCY))
         self._time_budget_sec = time_budget_sec
         self._started = 0.0
@@ -245,7 +247,7 @@ async def main(
     *,
     well_id: int | None = None,
     limit: int | None = None,
-    concurrency: int = DEFAULT_CONCURRENCY,
+    concurrency: int | None = None,
 ) -> None:
     await AnalyzeDynamograms(
         well_id=well_id,
@@ -263,8 +265,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=DEFAULT_CONCURRENCY,
-        help=f"Parallel LLM calls (max {MAX_CONCURRENCY}).",
+        help=(
+            "Parallel LLM calls (default DYNAMOGRAM_AI_FUND_CONCURRENCY, "
+            f"max {MAX_CONCURRENCY})."
+        ),
     )
     args = parser.parse_args()
     asyncio.run(
