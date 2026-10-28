@@ -33,22 +33,18 @@ from apps.org.services import well_name_prefix
 from apps.telemetry.repositories.sdmo import SdmoFcDataRepository
 from apps.telemetry.repositories.tech_regime import TechRegimeRepository
 from apps.telemetry.repositories.telemetry import TelemetryRepository
+from apps.telemetry.services.drive import vlt_running
+from apps.telemetry.services.well_rates import FRESH_TELEMETRY_DAYS
 from apps.wells.models.well import Well
 from apps.wells.services import NGDUWellsService
 from core.settings import get_settings
 from shared.constants.ngdu import KMG_ONLY_OIL_FIELD_PREFIX, AbaiNGDUIDsEnum
 
-# Замер дебита идёт не каждый день (в среднем раз в 2–3 суток), поэтому
-# «текущая добыча» — сумма последних замеров не старше этого окна; более
-# старый замер считается отсутствующим, а не нулевым.
-FRESH_TELEMETRY_DAYS: Final = 7
 # Техрежимы месячные и приезжают с лагом: пока нового нет, план берётся из
 # режима, закончившегося не раньше чем столько дней назад.
 PLAN_GRACE_DAYS: Final = 31
 # Недобор (losses) — по скважинам, где факт ниже плана больше чем на эту долю.
 DEVIATION_THRESHOLD: Final = 0.10
-# Регистр 1999 «Статус (VLT SALT)»: 1 — станция онлайн.
-VLT_ONLINE: Final = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +54,7 @@ class WellSummaryInput:
     well_id: int
     oil_fact: float | None  # свежий замер, т/сут
     oil_plan: float | None  # действующий техрежим, т/сут
-    is_active: bool  # станция СДМО онлайн
+    is_active: bool  # привод работает по коду статуса СДМО (регистр 1999)
     # Худший уровень активных эпизодов детекторов — alarm (как в матрице).
     is_alarm: bool = False
 
@@ -172,7 +168,9 @@ class GetNgduSummaryUseCase:
                     well_id=well.id,
                     oil_fact=last.qm_oil if fresh and last.qm_oil is not None else None,
                     oil_plan=regime.oil if regime is not None else None,
-                    is_active=vlt_statuses.get(well.id) == VLT_ONLINE,
+                    # Привод работает по коду статуса — общая классификация
+                    # с состоянием скважины и ИИ-чатом.
+                    is_active=vlt_running(vlt_statuses.get(well.id)) is True,
                     is_alarm=incident_statuses[well.id].level == INCIDENT_LEVEL_ALARM,
                 ),
             )

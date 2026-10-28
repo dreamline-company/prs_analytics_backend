@@ -6,6 +6,7 @@ from apps.detectors.dto.internal.well_status import WellIncidentStatusDTO
 from apps.repairs.dto.internal.repair import CurrentRepairDTO
 from apps.telemetry.dto.internal.well_rates import WellRatesDTO
 from apps.wells.dto.internal.coord_point import WellCoordPointDTO
+from apps.wells.dto.internal.well_state import WellStateDTO
 
 
 class WellCardStatusDTO(BaseModel):
@@ -56,8 +57,11 @@ class WellCardDTO(BaseModel):
     device: str | None
     # Ручной статус из wells_well_status_history: работает / не работает.
     status: WellCardStatusDTO | None
+    # Итоговое состояние скважины (ремонт, ABAI, привод СДМО, детекторы) —
+    # то же, что в строке матрицы; None — скважина ещё не посчитана.
+    state: WellStateDTO | None = None
     # Что видят детекторы прямо сейчас; при отсутствии активных эпизодов —
-    # level="normal" и «Работает в штатном режиме».
+    # level="normal" и «Нарушений не выявлено».
     incident_status: WellIncidentStatusDTO
     # Идущий ремонт (начат, не закрыт) или None, если скважина не в ремонте.
     current_repair: CurrentRepairDTO | None

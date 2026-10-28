@@ -57,7 +57,12 @@ from apps.wells.repositories.status_history import WellStatusHistoryRepository
 from apps.wells.repositories.well import WellRepository
 from apps.wells.repositories.well_expl import WellExplRepository
 from apps.wells.repositories.well_org import WellOrgRepository
+from apps.wells.repositories.well_state import (
+    WellStateRepository,
+    WellStateRunRepository,
+)
 from apps.wells.services import CoordPointService, NGDUWellsService, WellGdisService
+from apps.wells.services.well_state.read import WellStateReadService
 from apps.wells.use_cases.get_well_card import GetWellCardUseCase
 from apps.wells.use_cases.get_well_coords import GetWellCoordsUseCase
 from apps.wells.use_cases.get_well_matrix_incidents import (
@@ -175,6 +180,10 @@ async def get_well_matrix_incidents(
             tech_regime_repository=TechRegimeRepository(session=app_session),
         ),
         sdmo_fc_data_repository=SdmoFcDataRepository(session=app_session),
+        well_state_read_service=WellStateReadService(
+            state_repository=WellStateRepository(session=app_session),
+            run_repository=WellStateRunRepository(session=app_session),
+        ),
     )
     incidents = await use_case.execute(
         GetWellMatrixIncidentsQuery(ngdu_id=ngdu_id, oil_field_id=oil_field_id),
@@ -231,6 +240,10 @@ async def get_well_card(
         well_gdis_service=WellGdisService(
             gdis_metric_repository=GdisMetricRepository(session=session),
             gdis_current_value_repository=GdisCurrentValueRepository(session=session),
+        ),
+        well_state_read_service=WellStateReadService(
+            state_repository=WellStateRepository(session=session),
+            run_repository=WellStateRunRepository(session=session),
         ),
     )
     card = await use_case.execute(GetWellCardQuery(well_id=well_id))

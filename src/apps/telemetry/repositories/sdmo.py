@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy import (
     BigInteger,
+    DateTime,
     RowMapping,
     case,
     cast,
@@ -36,8 +37,8 @@ from shared.repository.sqlalchemy import (
 # Регистры параметров СДМО для API (type_1900 = 1/6/16; имена из
 # telemetry_sdmo_fc_reg): 1998 «Скорость ротора», 1991 «Момент штанги/на валу»,
 # 1614 «Ток двигателя», 1997 «Относительное заполнение насоса»,
-# 1999 «Статус (VLT SALT)» — код состояния привода: 1/2/4 — работает под
-# нагрузкой, 0/512/4096/16384/1048576 — без тока (сверено на проде 06.10.2026).
+# 1999 «Статус (VLT SALT)» — код состояния привода; какие коды значат «работает»,
+# а какие «без тока» — apps.telemetry.services.drive (сверено на проде 28.10.2026).
 ROTOR_SPEED_REGISTER = 1998
 PUMP_MOMENT_REGISTER = 1991
 ENGINE_CURRENT_REGISTER = 1614
@@ -114,6 +115,16 @@ class SdmoStationRepository(
         return await self.get_list(
             QuerySpec(
                 filters=(SdmoStation.well_id == well_id,),
+                order_by=(SdmoStation.id,),
+            ),
+        )
+
+    async def list_by_well_ids(self, well_ids: Sequence[int]) -> Sequence[SdmoStation]:
+        if not well_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(SdmoStation.well_id.in_(well_ids),),
                 order_by=(SdmoStation.id,),
             ),
         )
@@ -254,6 +265,76 @@ class SdmoFcDataRepository(
         )
         result = await self.session.execute(stmt)
         return {row[0]: (row[1], row[2]) for row in result.all()}
+
+    async def list_new_rows_by_stations(
+        self,
+        since_by_station: dict[int, datetime],
+        *,
+        limit_per_station: int,
+    ) -> Sequence[RowMapping]:
+        """Отсчёты каждой станции новее её ``since``: ``station_id, savetime,
+        r_1999, r_1998`` — по времени внутри станции.
+
+        Курсор — время последнего виденного отсчёта станции: LATERAL с
+        ``LIMIT`` идёт по индексу ``(station_id, savetime)``, читаются только
+        новые строки, чужие НГДУ и история не просматриваются — и во время сбоя
+        СДМО, когда новых строк нет. Догруженные задним числом отсчёты старше
+        курсора не читаются: автомат привода их всё равно пропускает.
+        """
+        if not since_by_station:
+            return ()
+        station_ids = list(since_by_station)
+        requested = select(
+            func.unnest(cast(station_ids, ARRAY(BigInteger))).label("station_id"),
+            func.unnest(
+                cast([since_by_station[sid] for sid in station_ids], ARRAY(DateTime)),
+            ).label("since"),
+        ).subquery("requested")
+        rows = (
+            select(SdmoFcData.savetime, SdmoFcData.r_1999, SdmoFcData.r_1998)
+            .where(
+                SdmoFcData.station_id == requested.c.station_id,
+                SdmoFcData.savetime > requested.c.since,
+            )
+            .order_by(SdmoFcData.savetime)
+            .limit(limit_per_station)
+            .lateral("rows")
+        )
+        stmt = (
+            select(
+                requested.c.station_id,
+                rows.c.savetime,
+                rows.c.r_1999,
+                rows.c.r_1998,
+            )
+            .select_from(requested)
+            .join(rows, true())
+        )
+        return await self.fetch_all(stmt)
+
+    async def list_station_rows_before(
+        self,
+        station_id: int,
+        *,
+        before: datetime | None,
+        since: datetime,
+        limit: int,
+    ) -> Sequence[RowMapping]:
+        """Отсчёты станции от новых к старым: ``savetime, r_1999, r_1998``.
+
+        Порция для поиска последней смены привода: обратный index scan по
+        ``(station_id, savetime)``, глубина ограничена ``since``.
+        """
+        filters = [SdmoFcData.station_id == station_id, SdmoFcData.savetime >= since]
+        if before is not None:
+            filters.append(SdmoFcData.savetime < before)
+        stmt = (
+            select(SdmoFcData.savetime, SdmoFcData.r_1999, SdmoFcData.r_1998)
+            .where(*filters)
+            .order_by(SdmoFcData.savetime.desc())
+            .limit(limit)
+        )
+        return await self.fetch_all(stmt)
 
     async def copy_rows(self, records: Sequence[tuple]) -> None:
         """Массовая вставка через asyncpg COPY (быстрее executemany в разы).

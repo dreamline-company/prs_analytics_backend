@@ -13,6 +13,11 @@ from apps.wells.repositories.well_expl import (
     WellExplTypeRepository,
 )
 from apps.wells.repositories.well_org import WellOrgRepository
+from apps.wells.repositories.well_state import (
+    WellDriveStateRepository,
+    WellStateRepository,
+    WellStateRunRepository,
+)
 from apps.wells.repositories.well_status import (
     WellStatusReasonRepository,
     WellStatusRepository,
@@ -27,10 +32,13 @@ __all__ = (
     "GdisMetricRepository",
     "SPORepository",
     "WellCoordRepository",
+    "WellDriveStateRepository",
     "WellExplRepository",
     "WellExplTypeRepository",
     "WellOrgRepository",
     "WellRepository",
+    "WellStateRepository",
+    "WellStateRunRepository",
     "WellStatusHistoryRepository",
     "WellStatusReasonRepository",
     "WellStatusRepository",
