@@ -240,11 +240,18 @@ celery_app.conf.beat_schedule = {
     # ИИ-разбор динамограмм фонда, от свежих к старым: каждые полчаса с
     # бюджетом 20 минут — история (~100 тыс.) догоняется за несколько суток,
     # новые разбираются в ближайший проход. Пары до/после ремонта разбирает
-    # и аналитика ремонта — через тот же анализатор.
-    "wells-dynamograms-analyze": {
-        "task": "wells.dynamograms.analyze",
-        "schedule": crontab(minute="10,40"),
-    },
+    # и аналитика ремонта — через тот же анализатор. В расписании — только с
+    # DYNAMOGRAM_AI_FUND_ENABLED (включается после пилота).
+    **(
+        {
+            "wells-dynamograms-analyze": {
+                "task": "wells.dynamograms.analyze",
+                "schedule": crontab(minute="10,40"),
+            },
+        }
+        if settings.DYNAMOGRAM_AI_FUND_ENABLED
+        else {}
+    ),
     # Ежедневная синхронизация оргструктуры из ABAI: типы организаций ->
     # организации -> бригады -> дедупликация бригад (порядок внутри таска).
     "org-sync-daily": {

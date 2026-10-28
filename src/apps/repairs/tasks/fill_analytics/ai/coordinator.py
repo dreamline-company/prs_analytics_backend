@@ -78,12 +78,25 @@ class AICoordinator:
         dynamogram: Dynamogram,
         abai_well_id: int | None,
         repair_id: int,
-    ) -> RepairDynamogramAIResult:
-        row, usage = await self.dynamogram_analyzer.analyze(
-            dynamogram,
-            abai_well_id=abai_well_id,
-        )
+    ) -> RepairDynamogramAIResult | None:
+        try:
+            row, usage = await self.dynamogram_analyzer.analyze(
+                dynamogram,
+                abai_well_id=abai_well_id,
+            )
+        except FileNotExistError:
+            # Сбой S3 (а не «объекта нет») — не повод откатывать весь ремонт:
+            # считаем с тем разбором, что есть, повтор — следующим прогоном.
+            logger.warning(
+                "Dynamogram id=%s: S3 unavailable, analysis postponed.",
+                dynamogram.id,
+                exc_info=True,
+            )
+            return await self.dynamogram_analyzer.current(dynamogram.id)
         self._record_usage(repair_id, usage)
+        if row is None:
+            # Замок дольше LOCK_WAIT_SEC держит проход по фонду.
+            return await self.dynamogram_analyzer.current(dynamogram.id)
         return row
 
     async def process_spo(

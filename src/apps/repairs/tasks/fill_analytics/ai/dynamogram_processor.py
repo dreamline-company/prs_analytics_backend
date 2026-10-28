@@ -62,9 +62,11 @@ _STATE_HINTS: Final[dict[str, str]] = {
 # Коэффициенты ГДИС — в долях; часть записей внесена сразу в процентах. На
 # проде (27.10.2026) значения 1.2–5 — ни доли, ни проценты (3,6 тыс. у K
 # подачи), а ноль — почти всегда заглушка «не измерено» (9,8 тыс. нулей
-# K подачи, заключение оператора есть у 213 из них).
+# K подачи, заключение оператора есть у 213 из них). Доли 1.0–1.2 — 100 %:
+# КПД и наполнение выше 100 % экран и KPI не показывают.
 _MAX_COEF_FRACTION = 1.2
 _MIN_COEF_PERCENT = 5
+_MAX_PCT = 100.0
 
 _OUTPUT_SCHEMA_HINT = {
     "state": "строка — ровно один код состояния из списка",
@@ -103,6 +105,15 @@ class DynamogramAIProcessor(BaseAIProcessor[DynamogramProcessingInput]):
             # Без JSON экрану показывать нечего; сырой ответ — для разбора.
             result.status = AI_STATUS_FAILED
             result.error = "Ответ модели — не JSON-объект"
+            return result
+        if (
+            _recognized_state(parsed.get("state")) is None
+            and _text(parsed.get("verdict")) is None
+        ):
+            # JSON не по схеме ({"error": ...}, ответ по схеме v2): сохранить
+            # его как «Другое отклонение» без вывода — навсегда закрепить мусор.
+            result.status = AI_STATUS_FAILED
+            result.error = "Ответ модели не по схеме: нет state и verdict"
             return result
         result.result = {
             "raw": payload.get("raw"),
@@ -214,8 +225,8 @@ def coef_to_pct(value: float | None) -> float | None:
     if value is None or value <= 0:
         return None
     if value <= _MAX_COEF_FRACTION:
-        return round(value * 100, 2)
-    if _MIN_COEF_PERCENT < value <= 100:  # noqa: PLR2004
+        return min(round(value * 100, 2), _MAX_PCT)
+    if _MIN_COEF_PERCENT < value <= _MAX_PCT:
         return round(value, 2)
     return None
 
@@ -231,9 +242,13 @@ def _pick(
     return None, None
 
 
-def _state(value: Any) -> str:  # noqa: ANN401
+def _recognized_state(value: Any) -> str | None:  # noqa: ANN401
     code = value.strip().lower() if isinstance(value, str) else ""
-    return code if code in DYNAMOGRAM_STATES else "other"
+    return code if code in DYNAMOGRAM_STATES else None
+
+
+def _state(value: Any) -> str:  # noqa: ANN401
+    return _recognized_state(value) or "other"
 
 
 def _pct(value: Any) -> float | None:  # noqa: ANN401

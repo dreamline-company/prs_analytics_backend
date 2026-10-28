@@ -15,7 +15,8 @@ from PIL import Image
 
 from apps.repairs.models.analytics import AI_STATUS_COMPLETED, AI_STATUS_FAILED
 from apps.repairs.repositories.ai_results import version_number
-from apps.repairs.tasks.fill_analytics.ai import dynamogram_image
+from apps.repairs.tasks.fill_analytics.ai import dynamogram_analyzer, dynamogram_image
+from apps.repairs.tasks.fill_analytics.ai.coordinator import AICoordinator
 from apps.repairs.tasks.fill_analytics.ai.dynamogram_analyzer import (
     FAILED_RETRY_AFTER,
     INPUT_REJECTED_PREFIX,
@@ -150,7 +151,7 @@ def test_huge_pdf_page_is_rendered_within_limit() -> None:
 
     rendered, _mime = prepare_image(buffer.getvalue())
     with Image.open(BytesIO(rendered)) as image:
-        assert max(image.size) <= dynamogram_image.PDF_MAX_SIDE_PX
+        assert max(image.size) <= dynamogram_image.MAX_SIDE_PX
 
 
 # --- промпт и ответ -------------------------------------------------------------
@@ -234,7 +235,7 @@ def test_build_parsed_guards_model_output() -> None:
 
 @pytest.mark.parametrize(
     ("coef", "pct"),
-    [(0.859, 85.9), (1.1, 110.0), (85.9, 85.9), (13.2, 13.2)],
+    [(0.859, 85.9), (1.0, 100.0), (1.1, 100.0), (85.9, 85.9), (13.2, 13.2)],
 )
 def test_coef_to_pct(coef: float, pct: float) -> None:
     assert coef_to_pct(coef) == pct
@@ -338,16 +339,17 @@ class _AIRepo:
         self,
         existing: SimpleNamespace | None = None,
         *,
-        locked: bool = False,
+        busy_tries: int = 0,
     ) -> None:
         self.existing = existing
-        self.locked = locked
+        # Сколько попыток подряд замок держит другой писатель.
+        self.busy_tries = busy_tries
+        self.lock_tries = 0
         self.upserted: list = []
-        self.lock_waits: list[bool] = []
 
-    async def lock_dynamogram(self, _dynamogram_id: int, *, wait: bool) -> bool:
-        self.lock_waits.append(wait)
-        return wait or not self.locked
+    async def try_lock_dynamogram(self, _dynamogram_id: int) -> bool:
+        self.lock_tries += 1
+        return self.lock_tries > self.busy_tries
 
     async def get_by_dynamogram_id(self, _dynamogram_id: int) -> SimpleNamespace | None:
         return self.existing
@@ -387,10 +389,10 @@ def _analyzer(
     payload: bytes | str,
     *,
     existing: SimpleNamespace | None = None,
-    locked: bool = False,
+    busy_tries: int = 0,
 ) -> tuple[DynamogramAnalyzer, _AIRepo, _Agent, _Gdis]:
     agent = _Agent(json.dumps(MODEL_OUTPUT))
-    repo, gdis = _AIRepo(existing, locked=locked), _Gdis()
+    repo, gdis = _AIRepo(existing, busy_tries=busy_tries), _Gdis()
     analyzer = DynamogramAnalyzer(
         processor=DynamogramAIProcessor(agent, "m"),
         ai_repo=repo,
@@ -460,24 +462,75 @@ def test_analyzer_does_not_persist_s3_outage(code: str) -> None:
 
 
 def test_fund_pass_skips_dynamogram_locked_by_repair_analytics() -> None:
-    analyzer, repo, agent, _gdis_service = _analyzer(_png(), locked=True)
+    analyzer, repo, agent, _gdis_service = _analyzer(_png(), busy_tries=1)
     row, usage = asyncio.run(
-        analyzer.analyze(DYNAMOGRAM, abai_well_id=9980, wait_for_lock=False),
+        analyzer.analyze(DYNAMOGRAM, abai_well_id=9980, lock_wait_sec=0),
     )
 
     assert row is None
+    assert repo.lock_tries == 1
     assert usage.total_tokens == 0
     assert agent.calls == 0
     assert repo.upserted == []
 
 
-def test_repair_analytics_waits_for_lock() -> None:
-    analyzer, repo, agent, _gdis_service = _analyzer(_png(), locked=True)
+def test_repair_analytics_waits_for_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dynamogram_analyzer, "LOCK_POLL_SEC", 0)
+    analyzer, repo, agent, _gdis_service = _analyzer(_png(), busy_tries=2)
     row, _usage = asyncio.run(analyzer.analyze(DYNAMOGRAM, abai_well_id=9980))
 
-    assert repo.lock_waits == [True]
+    assert repo.lock_tries == 3
     assert row.status == AI_STATUS_COMPLETED
     assert agent.calls == 1
+
+
+class _BrokenS3Analyzer:
+    """Анализатор, у которого S3 недоступен (403/5xx, не «нет объекта»)."""
+
+    def __init__(self, current: SimpleNamespace) -> None:
+        self.current_row = current
+
+    async def analyze(self, *_args: object, **_kwargs: object) -> object:
+        raise FileNotExistError
+
+    async def current(self, _dynamogram_id: int) -> SimpleNamespace:
+        return self.current_row
+
+
+def test_repair_analytics_survives_s3_outage() -> None:
+    # Раньше сбой S3 при разборе динамограммы откатывал весь ремонт: СПО, KPI
+    # и общий вердикт этого прогона. Теперь ремонт считается с тем, что есть.
+    current = _row(prompt_version="v2")
+    coordinator = AICoordinator.__new__(AICoordinator)
+    coordinator.dynamogram_analyzer = _BrokenS3Analyzer(current)
+    coordinator._usage_by_repair = {}  # noqa: SLF001
+
+    row = asyncio.run(
+        coordinator.process_dynamogram(
+            dynamogram=DYNAMOGRAM,
+            abai_well_id=9980,
+            repair_id=1,
+        ),
+    )
+    assert row is current
+
+
+def test_processor_fails_on_off_schema_json() -> None:
+    processor = DynamogramAIProcessor(_Agent(json.dumps({"error": "нет"})), "m")
+    result = asyncio.run(processor.process(_item()))
+
+    assert result.status == AI_STATUS_FAILED
+    assert "нет state и verdict" in result.error
+
+
+def test_large_raster_is_downscaled() -> None:
+    buffer = BytesIO()
+    Image.new("RGB", (4000, 1000), "white").save(buffer, format="JPEG")
+    payload, mime = prepare_image(buffer.getvalue())
+
+    assert mime == "image/jpeg"
+    with Image.open(BytesIO(payload)) as image:
+        assert image.size == (2000, 500)
 
 
 # --- ГДИС на день динамограммы ------------------------------------------------------
@@ -511,6 +564,10 @@ class _Values:
             (3, 20, 331, 0.7),
             (4, 20, 332, None),
             (5, 20, 999, 1.0),
+            # Ноль-заглушка в позднем исследовании не перекрывает замер раннего.
+            (6, 20, 319, 0.0),
+            (7, 10, 332, 0.67),
+            (8, 20, 332, 0.0),
         ]
         return [
             SimpleNamespace(
@@ -532,8 +589,8 @@ def test_gdis_service_merges_studies_of_the_day() -> None:
     gdis = asyncio.run(service.get_for_dynamogram(9980, SNAPSHOT.date()))
 
     assert gdis.fill_coef == 0.7  # из позднего исследования
-    assert gdis.stroke_length_m == 2.1  # есть только в раннем
-    assert gdis.pump_feed_coef is None
+    assert gdis.stroke_length_m == 2.1  # в позднем — ноль-заглушка
+    assert gdis.pump_feed_coef == 0.67  # в позднем — пусто и ноль
     assert gdis.operator_conclusion == "Влияние газа"
 
 

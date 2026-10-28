@@ -5,8 +5,9 @@
     python -m apps.wells.tasks.analyze_dynamograms.analyze_dynamograms --limit 200
 
 Celery: ``wells.dynamograms.analyze`` каждые полчаса, под замком и с бюджетом
-времени — недоделанное ждёт следующего прохода. Порядок — от свежих к
-старым: новые динамограммы разбираются первыми, история догоняется в фоне.
+времени — недоделанное ждёт следующего прохода. В расписании beat — только с
+``DYNAMOGRAM_AI_FUND_ENABLED``. Порядок — от свежих к старым: новые
+динамограммы разбираются первыми, история догоняется в фоне.
 
 Второй писатель тех же строк — аналитика ремонта (пары до/после). Оба идут
 через ``DynamogramAnalyzer``: правила «разбирать ли» общие, одновременную
@@ -189,7 +190,7 @@ class AnalyzeDynamograms:
                     row, usage = await analyzer.analyze(
                         dynamogram,
                         abai_well_id=abai_well_id,
-                        wait_for_lock=False,
+                        lock_wait_sec=0,
                     )
                     await session.commit()
             except Exception:

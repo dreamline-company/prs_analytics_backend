@@ -6,6 +6,8 @@
 ``repairs_dynamogram_ai_result`` — в одном месте и не расходятся.
 """
 
+import asyncio
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -53,6 +55,11 @@ INPUT_REJECTED_PREFIX = "unsupported input: "
 # Коды ClientError, означающие «объекта нет»; остальные (403, 5xx) — сбой S3,
 # а не свойство файла: такая строка не пишется и разбор повторится.
 _MISSING_KEY_CODES = frozenset({"404", "NoSuchKey", "NotFound"})
+# Сколько аналитика ремонта ждёт замок, который держит проход по фонду (его
+# разбор обычно — секунды-десятки секунд). Не дождалась — считает ремонт с
+# тем разбором, что есть; новый подхватит следующий прогон.
+LOCK_WAIT_SEC = 90
+LOCK_POLL_SEC = 1.0
 
 
 def needs_analysis(
@@ -90,20 +97,16 @@ class DynamogramAnalyzer:
         dynamogram: Dynamogram,
         *,
         abai_well_id: int | None,
-        wait_for_lock: bool = True,
+        lock_wait_sec: float = LOCK_WAIT_SEC,
     ) -> tuple[RepairDynamogramAIResult | None, TokenUsage]:
         """Разобрать, если разбор не актуален; вернуть строку и расход токенов.
 
         Сначала — транзакционный замок динамограммы: второй писатель не платит
-        за тот же вызов LLM и видит уже записанный разбор. Аналитика ремонта
-        ждёт замок (транзакция прохода по фонду короткая); проход по фонду
-        (``wait_for_lock=False``) занятую динамограмму пропускает — ``None``:
-        аналитика ремонта держит транзакцию минутами.
+        за тот же вызов LLM и видит уже записанный разбор. Замок не взят за
+        ``lock_wait_sec`` — ``(None, …)``: проход по фонду (ждёт 0 с) такую
+        динамограмму пропускает, аналитика ремонта берёт текущую строку.
         """
-        if not await self.ai_repo.lock_dynamogram(
-            dynamogram.id,
-            wait=wait_for_lock,
-        ):
+        if not await self._acquire_lock(dynamogram.id, wait_sec=lock_wait_sec):
             return None, TokenUsage()
         existing = await self.ai_repo.get_by_dynamogram_id(dynamogram.id)
         now = _local_now()
@@ -128,6 +131,17 @@ class DynamogramAnalyzer:
         )
         return row, result.usage
 
+    async def current(self, dynamogram_id: int) -> RepairDynamogramAIResult | None:
+        return await self.ai_repo.get_by_dynamogram_id(dynamogram_id)
+
+    async def _acquire_lock(self, dynamogram_id: int, *, wait_sec: float) -> bool:
+        deadline = time.monotonic() + wait_sec
+        while not await self.ai_repo.try_lock_dynamogram(dynamogram_id):
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(LOCK_POLL_SEC)
+        return True
+
     async def _run(
         self,
         dynamogram: Dynamogram,
@@ -145,7 +159,9 @@ class DynamogramAnalyzer:
                 raise
             return self._rejected("missing in S3", now=now)
         try:
-            image, mime = prepare_image(payload)
+            # Рендер PDF и уменьшение картинки — CPU: не держим event loop
+            # параллельных разборов.
+            image, mime = await asyncio.to_thread(prepare_image, payload)
         except UnsupportedDynamogramFileError as exc:
             kind = exc.kind
         except Exception:

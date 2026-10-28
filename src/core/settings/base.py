@@ -254,6 +254,10 @@ class Settings(CoreSettings):
     LLM_BASE_URL: str | None = None
     LLM_API_KEY: SecretStr
     LLM_MODEL_NAME: str
+    # Проход ИИ-разбора по всем динамограммам фонда в расписании beat
+    # (wells.dynamograms.analyze). Выключен, пока пилот не подтвердит, что
+    # модель отвечает по схеме v3; ручной запуск модуля работает и без флага.
+    DYNAMOGRAM_AI_FUND_ENABLED: bool = False
 
     # SMTP — рассылка суточных ведомостей. Пустой SMTP_HOST выключает отправку:
     # таск рассылки логирует письмо и выходит, ничего не падает.

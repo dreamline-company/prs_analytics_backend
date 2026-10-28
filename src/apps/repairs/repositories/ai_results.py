@@ -2,7 +2,17 @@ import re
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import ColumnElement, Integer, and_, cast, func, or_, select, tuple_
+from sqlalchemy import (
+    ColumnElement,
+    Integer,
+    and_,
+    case,
+    cast,
+    func,
+    or_,
+    select,
+    tuple_,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from apps.repairs.dto.internal.repositories.ai_results import (
@@ -55,11 +65,15 @@ class RepairDynamogramAIResultRepository(
         self,
         dynamogram_id: int,
     ) -> RepairDynamogramAIResult | None:
-        return await self.get_one(
-            QuerySpec(
-                filters=(RepairDynamogramAIResult.dynamogram_id == dynamogram_id,),
-            ),
+        """Строка как она сейчас в таблице, а не из кэша сессии: аналитика
+        ремонта держит одну сессию на весь проход, а строку между ремонтами
+        может переписать проход по фонду."""
+        stmt = (
+            select(RepairDynamogramAIResult)
+            .where(RepairDynamogramAIResult.dynamogram_id == dynamogram_id)
+            .execution_options(populate_existing=True)
         )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def list_by_dynamogram_ids(
         self,
@@ -82,27 +96,38 @@ class RepairDynamogramAIResultRepository(
 
         Писателей двое — аналитика ремонта и проход по фонду, — и к одной
         динамограмме они могут прийти одновременно: конфликт по
-        ``dynamogram_id`` решается здесь, а не исключением. Не перезаписываются:
-        строка более новой версии промпта (старый код не откатит её, начиная с
-        v3 — у кода v2 этой защиты нет) и готовый разбор той же версии упавшим
-        (сбой LLM у второго писателя не затрёт результат первого).
+        ``dynamogram_id`` решается здесь, а не исключением.
+
+        * Строка более новой версии промпта не перезаписывается: старый код её
+          не откатит (начиная с v3 — у кода v2 этой защиты нет).
+        * Готовый разбор той же версии не перезаписывается упавшим: сбой LLM у
+          второго писателя не затрёт результат первого.
+        * Упавший разбор поверх строки с готовым разбором (``result.parsed``)
+          пишет статус, ошибку, версию и время попытки (повтор — по правилу
+          повторов), но ``result`` и ``model_name`` оставляет прежними: KPI,
+          общий вердикт и экраны не теряют последний готовый разбор — ни при
+          первом сбое v3 поверх v2, ни при следующих.
         """
         table = RepairDynamogramAIResult
         values = data.model_dump()
         stmt = pg_insert(table).values(**values)
         old_version = _version_number_sql(table.prompt_version)
         new_version = _version_number_sql(stmt.excluded.prompt_version)
+        keep_previous = and_(
+            stmt.excluded.status != AI_STATUS_COMPLETED,
+            table.result["parsed"].is_not(None),
+        )
+        set_ = {key: stmt.excluded[key] for key in values if key != "dynamogram_id"}
+        for key in ("result", "model_name"):
+            set_[key] = case(
+                (keep_previous, getattr(table, key)),
+                else_=stmt.excluded[key],
+            )
+        set_["updated_at"] = func.now()
         stmt = (
             stmt.on_conflict_do_update(
                 index_elements=["dynamogram_id"],
-                set_={
-                    **{
-                        key: stmt.excluded[key]
-                        for key in values
-                        if key != "dynamogram_id"
-                    },
-                    "updated_at": func.now(),
-                },
+                set_=set_,
                 where=or_(
                     old_version < new_version,
                     and_(
@@ -122,21 +147,20 @@ class RepairDynamogramAIResultRepository(
             return row
         return await self.get_by_dynamogram_id(data.dynamogram_id)
 
-    async def lock_dynamogram(self, dynamogram_id: int, *, wait: bool) -> bool:
-        """Транзакционный замок разбора динамограммы (до commit/rollback).
+    async def try_lock_dynamogram(self, dynamogram_id: int) -> bool:
+        """Взять транзакционный замок разбора динамограммы (держится до
+        commit/rollback); ``False`` — его держит другой писатель.
 
-        ``wait=False`` — не ждать: ``False``, если замок держит другой
-        писатель.
+        Без ожидания на стороне БД: ждать (с пределом) решает вызывающий —
+        ошибка lock_timeout оборвала бы всю транзакцию аналитики ремонта.
         """
-        args = (
-            cast(_DYNAMOGRAM_LOCK_NAMESPACE, Integer),
-            cast(dynamogram_id, Integer),
-        )
-        if wait:
-            await self.session.execute(select(func.pg_advisory_xact_lock(*args)))
-            return True
         result = await self.session.execute(
-            select(func.pg_try_advisory_xact_lock(*args)),
+            select(
+                func.pg_try_advisory_xact_lock(
+                    cast(_DYNAMOGRAM_LOCK_NAMESPACE, Integer),
+                    cast(dynamogram_id, Integer),
+                ),
+            ),
         )
         return bool(result.scalar_one())
 

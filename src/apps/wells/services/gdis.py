@@ -91,7 +91,9 @@ class DynamogramGdisService:
     Файл динамограммы в ABAI привязан к дате замера без времени, исследование
     ГДИС — тоже; связь — (скважина, дата). За день бывает несколько
     исследований: значение каждой метрики берётся из самого позднего, где оно
-    есть, заключение оператора — тоже.
+    есть, заключение оператора — тоже. Ноль и отрицательные значения — в ABAI
+    это заглушка «не измерено»: они не перекрывают замер из другого
+    исследования того же дня и в промпт не идут.
     """
 
     def __init__(
@@ -129,7 +131,12 @@ class DynamogramGdisService:
             key=lambda v: (study_rank[v.gdis_current_abai_id], -v.abai_id),
         ):
             field = field_by_metric_id.get(value.metric_abai_id)
-            if field is None or value.value_double is None or field in fields:
+            if (
+                field is None
+                or value.value_double is None
+                or value.value_double <= 0
+                or field in fields
+            ):
                 continue
             fields[field] = value.value_double
         conclusion = next(
