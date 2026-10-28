@@ -27,6 +27,7 @@ from apps.wells.dto.queries.well import GetWellCardQuery
 from apps.wells.repositories.status_history import WellStatusHistoryRepository
 from apps.wells.repositories.well import WellRepository
 from apps.wells.services import CoordPointService, WellGdisService
+from apps.wells.services.well_state.read import WellStateReadService
 from shared.errors import HttpError
 
 # «Дней с дебитом 0» пока не считается — источника нет, отдаём 0.
@@ -53,6 +54,7 @@ class GetWellCardUseCase:
         well_incident_status_service: WellIncidentStatusService,
         current_repair_service: CurrentRepairService,
         well_gdis_service: WellGdisService,
+        well_state_read_service: WellStateReadService,
     ) -> None:
         self.well_repository = well_repository
         self.well_rates_service = well_rates_service
@@ -64,6 +66,7 @@ class GetWellCardUseCase:
         self.well_incident_status_service = well_incident_status_service
         self.current_repair_service = current_repair_service
         self.well_gdis_service = well_gdis_service
+        self.well_state_read_service = well_state_read_service
 
     async def execute(self, query: GetWellCardQuery) -> WellCardDTO:
         well = await self.well_repository.get_by_id(id_=query.well_id)
@@ -115,6 +118,7 @@ class GetWellCardUseCase:
         )
         coord = await self.coord_point_service.resolve(well.coords_id)
         incident_status = await self.well_incident_status_service.get_for_well(well.id)
+        state = await self.well_state_read_service.get_for_well(well.id)
         current_repair = await self.current_repair_service.get_for_well(well.abai_id)
         dynamic_level = await self.well_gdis_service.get_last_dynamic_level(
             well.abai_id,
@@ -127,6 +131,7 @@ class GetWellCardUseCase:
             status=(
                 WellCardStatusDTO.model_validate(last_status) if last_status else None
             ),
+            state=state,
             incident_status=incident_status,
             current_repair=current_repair,
             coord=coord,

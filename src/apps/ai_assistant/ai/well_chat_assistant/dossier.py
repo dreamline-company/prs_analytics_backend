@@ -42,7 +42,6 @@ from apps.ai_assistant.ai.well_chat_assistant.tools.status import (
     status_brief,
 )
 from apps.ai_assistant.ai.well_chat_assistant.tools.telemetry import (
-    DRIVE_WORK_CODES,
     LIFT_BY_STATION_TYPE,
     unwrap_moment,
 )
@@ -88,6 +87,7 @@ from apps.telemetry.repositories.sdmo import (
 from apps.telemetry.repositories.tech_regime import TechRegimeRepository
 from apps.telemetry.repositories.telemetry import TelemetryRepository
 from apps.telemetry.services import WellRatesService
+from apps.telemetry.services.drive import vlt_running
 from apps.wells.dto.internal.well_card import WellCardDTO
 from apps.wells.dto.queries.well import GetWellCardQuery
 from apps.wells.models.well import Well
@@ -99,7 +99,12 @@ from apps.wells.repositories.gdis import (
 )
 from apps.wells.repositories.status_history import WellStatusHistoryRepository
 from apps.wells.repositories.well import WellRepository
+from apps.wells.repositories.well_state import (
+    WellStateRepository,
+    WellStateRunRepository,
+)
 from apps.wells.services import CoordPointService, NGDUWellsService, WellGdisService
+from apps.wells.services.well_state.read import WellStateReadService
 from apps.wells.use_cases.get_well_card import GetWellCardUseCase
 from core import get_logger
 from shared.database.sql.setup import session_makers
@@ -212,12 +217,14 @@ def _render_drive(card: WellCardDTO | None, station_type: int | None) -> list[st
     else:
         if p.sdmo_vlt_status is None:
             drive = "статус станции неизвестен"
-        elif p.sdmo_vlt_status in DRIVE_WORK_CODES:
+        elif vlt_running(p.sdmo_vlt_status) is True:
             drive = f"статус станции {p.sdmo_vlt_status} — работает"
-        else:
+        elif vlt_running(p.sdmo_vlt_status) is False:
             drive = (
                 f"статус станции {p.sdmo_vlt_status} — без тока (остановлен или авария)"
             )
+        else:
+            drive = f"статус станции {p.sdmo_vlt_status} — код неизвестен"
         units = f" {p.pump_speed_units}" if p.pump_speed_units else ""
         values = (
             "момент и скорость в нём не заполнены (динамика — get_drive_telemetry)"
@@ -391,6 +398,10 @@ async def _load_card(session: AsyncSession, well: Well) -> WellCardDTO:
             gdis_current_value_repository=GdisCurrentValueRepository(
                 session=session,
             ),
+        ),
+        well_state_read_service=WellStateReadService(
+            state_repository=WellStateRepository(session=session),
+            run_repository=WellStateRunRepository(session=session),
         ),
     ).execute(GetWellCardQuery(well_id=well.id))
 

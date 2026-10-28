@@ -15,6 +15,9 @@ class WellRatesDTO(BaseModel):
     liquid_rate: float | None  # Дебит жидкости — Telemetry.qv_liquid
     water_cut: float | None  # Обводнённость, % — считается из дебитов
     telemetry_time: datetime | None  # Время замера — Telemetry.date_time
+    # Замер старше FRESH_TELEMETRY_DAYS суток или его нет: дебиты выше могут
+    # не отражать текущую добычу.
+    telemetry_stale: bool = True
     # TechRegime (последний режим по скважине).
     plan_oil_rate: float | None  # План Qн — TechRegime.oil
     plan_liquid_rate: float | None  # План Qж — TechRegime.liquid

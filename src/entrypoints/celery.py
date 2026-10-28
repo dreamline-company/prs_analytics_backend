@@ -114,6 +114,11 @@ from apps.wells.tasks.load_well_orgs.load_well_orgs import (  # noqa: F401
 from apps.wells.tasks.load_well_status.load_well_status import (  # noqa: F401
     load_well_status_incremental,
 )
+
+# Импорт регистрирует таску итогового состояния скважин (матрица и карточка).
+from apps.wells.tasks.refresh_well_state.refresh_well_state import (  # noqa: F401
+    refresh_well_state,
+)
 from core.settings import get_settings
 
 settings = get_settings()
@@ -225,6 +230,20 @@ celery_app.conf.beat_schedule = {
         "task": "wells.well_status.incremental_load",
         "schedule": crontab(minute=10),
     },
+    # Итоговое состояние скважин (ремонт, ABAI, привод СДМО, детекторы) —
+    # каждые 5 минут со сдвигом на 2 минуты после загрузки СДМО (*/5). В
+    # расписании — только с WELL_STATE_REFRESH_ENABLED (после первого ручного
+    # прогона).
+    **(
+        {
+            "wells-state-refresh": {
+                "task": "wells.state.refresh",
+                "schedule": crontab(minute="2-59/5"),
+            },
+        }
+        if settings.WELL_STATE_REFRESH_ENABLED
+        else {}
+    ),
     # Контур компенсации: доноры под стоящие скважины — раз в час, после
     # статусов ABAI (:10). Открытые пары не перетасовываются.
     "compensation-assign-donors": {
