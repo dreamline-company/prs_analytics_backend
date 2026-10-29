@@ -49,6 +49,20 @@ class WellCardPassportDTO(WellRatesDTO):
     h_din_m: float | None
     h_din_date: date | None
     zero_rate_days: int  # Дней с дебитом 0 — пока заглушка
+    # Факт нефти с начала месяца (под месячный план техрежима), с учётом
+    # простоев: медиана замеров ЦИТС в работе × доля времени работы
+    # (WellMonthProductionService). None — нет замеров в работе или доли
+    # работы не узнать.
+    oil_rate_month: float | None = None
+    # Та же медиана без учёта простоев — дебит, когда скважина работает.
+    oil_rate_month_working: float | None = None
+    # Доля времени работы с 1-го числа (0…1) и откуда она: sdmo / abai.
+    work_share_month: float | None = None
+    work_share_month_source: str | None = None
+    # Сколько замеров в медиане и с какого (меньше трёх в месяце — берутся
+    # три последних, первый может быть из прошлого месяца).
+    month_measurements: int = 0
+    month_period_from: datetime | None = None
 
 
 class WellCardDTO(BaseModel):

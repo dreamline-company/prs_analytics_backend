@@ -5,6 +5,7 @@ from sqlalchemy import (
     BigInteger,
     DateTime,
     RowMapping,
+    and_,
     case,
     cast,
     func,
@@ -311,6 +312,48 @@ class SdmoFcDataRepository(
             .join(rows, true())
         )
         return await self.fetch_all(stmt)
+
+    async def count_drive_running(
+        self,
+        station_id: int,
+        *,
+        since: datetime,
+        until: datetime,
+        running_codes: Sequence[int],
+        stopped_codes: Sequence[int],
+    ) -> tuple[int, int]:
+        """(пригодных отсчётов, из них с работающим приводом) за [since, until).
+
+        Классификация — как ``apps.telemetry.services.drive.drive_running``:
+        код статуса 1999, без него или при неизвестном коде — обороты 1998.
+        NaN и бесконечность отсекаются диапазоном (в PostgreSQL NaN больше
+        любого числа). Отсчёты станции идут равномерно, поэтому доля отсчётов
+        — доля времени.
+        """
+        status = getattr(SdmoFcData, f"r_{VLT_STATUS_REGISTER}")
+        speed = getattr(SdmoFcData, f"r_{ROTOR_SPEED_REGISTER}")
+        code = case(
+            (status.between(-(2**31), 2**31 - 1), func.round(status)),
+            else_=None,
+        )
+        speed_ok = speed.between(-1e9, 1e9)
+        running = case(
+            (code.in_(running_codes), 1),
+            (code.in_(stopped_codes), 0),
+            (and_(speed_ok, speed > 0), 1),
+            (speed_ok, 0),
+            else_=None,
+        )
+        row = (
+            await self.session.execute(
+                select(func.count(running), func.coalesce(func.sum(running), 0)).where(
+                    SdmoFcData.station_id == station_id,
+                    SdmoFcData.savetime >= since,
+                    SdmoFcData.savetime < until,
+                ),
+            )
+        ).one()
+        return int(row[0]), int(row[1])
 
     async def list_station_rows_before(
         self,
