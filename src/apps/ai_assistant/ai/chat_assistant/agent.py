@@ -5,6 +5,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 
 from apps.ai_assistant.ai.chat_assistant.tools import CHAT_ASSISTANT_TOOLS
+from apps.ai_assistant.ai.middleware import NO_REASONING, strip_model_thinking
 from core.settings import get_settings
 
 settings = get_settings()
@@ -50,12 +51,14 @@ chat_agent_model = ChatOpenAI(
     base_url=settings.LLM_BASE_URL,
     api_key=settings.LLM_API_KEY,
     model=settings.LLM_MODEL_NAME,
+    extra_body=NO_REASONING,
 )
 
 chat_assistant_agent = create_agent(
     model=chat_agent_model,
     tools=CHAT_ASSISTANT_TOOLS,
     system_prompt=CHAT_ASSISTANT_SYSTEM_PROMPT,
+    middleware=[strip_model_thinking],
     checkpointer=InMemorySaver(),
 )
 

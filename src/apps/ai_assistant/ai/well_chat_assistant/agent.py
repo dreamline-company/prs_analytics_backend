@@ -15,6 +15,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.runtime import Runtime
 
+from apps.ai_assistant.ai.middleware import NO_REASONING, strip_model_thinking
 from apps.ai_assistant.ai.well_chat_assistant.prompt import render_system_prompt
 from apps.ai_assistant.ai.well_chat_assistant.tools import WELL_CHAT_ASSISTANT_TOOLS
 from core.settings import get_settings
@@ -98,12 +99,13 @@ well_chat_agent_model = ChatOpenAI(
     base_url=settings.LLM_BASE_URL,
     api_key=settings.LLM_API_KEY,
     model=settings.LLM_MODEL_NAME,
+    extra_body=NO_REASONING,
 )
 
 well_chat_assistant_agent = create_agent(
     model=well_chat_agent_model,
     tools=WELL_CHAT_ASSISTANT_TOOLS,
-    middleware=[trim_thread_history, well_system_prompt],
+    middleware=[trim_thread_history, well_system_prompt, strip_model_thinking],
     context_schema=WellChatContext,
     checkpointer=InMemorySaver(),
 )

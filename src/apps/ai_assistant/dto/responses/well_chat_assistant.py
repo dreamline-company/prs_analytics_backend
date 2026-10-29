@@ -7,6 +7,8 @@ class WellChatAssistantResponseDTO(BaseModel):
     type: Literal["message"] = "message"
     chat_id: str
     text: str
+    # Разметка ``text``: фронт рисует Markdown (без сырого HTML).
+    format: Literal["markdown"] = "markdown"
 
 
 class WellSetAckDTO(BaseModel):

@@ -85,7 +85,12 @@ def test_rejected_request_resets_thread_and_answers() -> None:
     ws, session, thread_before = _ask(WellChatModelRejectedError("context length"))
 
     assert ws.sent == [
-        {"type": "message", "chat_id": "c1", "text": ws_module.THREAD_RESET_TEXT},
+        {
+            "type": "message",
+            "chat_id": "c1",
+            "text": ws_module.THREAD_RESET_TEXT,
+            "format": "markdown",
+        },
     ]
     assert session.thread_id != thread_before
     assert session.well_id == 6086
@@ -95,7 +100,12 @@ def test_other_errors_keep_thread_and_connection() -> None:
     ws, session, thread_before = _ask(RuntimeError("db down"))
 
     assert ws.sent == [
-        {"type": "message", "chat_id": "c1", "text": ws_module.ANSWER_FAILED_TEXT},
+        {
+            "type": "message",
+            "chat_id": "c1",
+            "text": ws_module.ANSWER_FAILED_TEXT,
+            "format": "markdown",
+        },
     ]
     assert session.thread_id == thread_before
 
