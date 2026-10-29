@@ -44,15 +44,32 @@ MEASUREMENTS = [
     ("2026-09-04", 25.40, 7.97),
     ("2026-09-01", 34.86, 24.50),
 ]
-MOMENTS = [69, 71, 71, 72, 71.4, 71.8, 71.7, 72, 73, 73, 73, 73, 72, 71, 73]
+# Медианы момента по суткам 15.10–28.10 (полные сутки до «сегодня»).
+MOMENTS = [69, 71, 71, 72, 71.4, 71.8, 71.7, 72, 73, 73, 73, 73, 72, 71]
 
-WORKING = WellStateDTO(
-    code="working",
-    title_ru="Работает",
-    reason_ru="Работает в штатном режиме",
-    since=datetime(2026, 10, 15, 12, 37),
-    source="sdmo",
-)
+REPAIRS = [
+    ("2020-07-07", "2020-07-11", "Промывка песчаной пробки"),
+    ("2021-01-01", "2021-01-06", "Промывка песчаной пробки"),
+    ("2021-05-19", "2021-05-24", "Замена винтовой пары"),
+    ("2022-05-29", "2022-05-29", "Замена привода"),
+    ("2022-07-13", "2022-07-16", "Промывка песчаной пробки"),
+    ("2023-04-24", "2023-04-27", "Промывка песчаной пробки"),
+    ("2025-01-15", "2025-01-19", "TP 4-2 Устранение обрыва штанг"),
+    ("2026-05-02T17:20", "2026-05-07T10:05", "TP 8-7 Промывка забоя"),
+]
+
+
+def _state(code: str, title: str, reason: str) -> WellStateDTO:
+    return WellStateDTO(
+        code=code,
+        title_ru=title,
+        reason_ru=reason,
+        since=datetime(2026, 10, 15, 12, 37),
+        source="sdmo",
+    )
+
+
+WORKING = _state("working", "Работает", "Работает в штатном режиме")
 
 
 def _measurements() -> list[Measurement]:
@@ -66,59 +83,34 @@ def _measurements() -> list[Measurement]:
     ]
 
 
+def _repairs() -> list[RepairFact]:
+    return [
+        RepairFact(datetime.fromisoformat(start), datetime.fromisoformat(end), name)
+        for start, end, name in REPAIRS
+    ]
+
+
+def _drive_days(start: date, moments: list[float]) -> list[DriveDay]:
+    return [
+        DriveDay(day=start + timedelta(days=i), moment=moment)
+        for i, moment in enumerate(moments)
+    ]
+
+
 def _vmb_1252(**overrides: object) -> OverviewInputs:
     values = {
         "now": NOW,
         "state": WORKING,
         "drive_running": True,
         "drive_since": datetime(2026, 9, 28, 16, 59, 36),  # граница поиска
+        "speed": 160.0,
         "speed_units": "об/мин",
-        "drive_days": [
-            DriveDay(day=date(2026, 10, 15) + timedelta(days=i), speed=160, moment=m)
-            for i, m in enumerate(MOMENTS)
-        ],
+        "drive_days": _drive_days(date(2026, 10, 15), MOMENTS),
         "plan_oil": 2.27,
         "plan_liquid": 25,
         "measurements": _measurements(),
         "dynamic_level": (46.0, date(2026, 10, 27)),
-        "repairs": [
-            RepairFact(
-                datetime(2020, 7, 7),
-                datetime(2020, 7, 11),
-                "Промывка песчаной пробки",
-            ),
-            RepairFact(
-                datetime(2021, 1, 1),
-                datetime(2021, 1, 6),
-                "Промывка песчаной пробки",
-            ),
-            RepairFact(
-                datetime(2021, 5, 19),
-                datetime(2021, 5, 24),
-                "Замена винтовой пары",
-            ),
-            RepairFact(datetime(2022, 5, 29), datetime(2022, 5, 29), "Замена привода"),
-            RepairFact(
-                datetime(2022, 7, 13),
-                datetime(2022, 7, 16),
-                "Промывка песчаной пробки",
-            ),
-            RepairFact(
-                datetime(2023, 4, 24),
-                datetime(2023, 4, 27),
-                "Промывка песчаной пробки",
-            ),
-            RepairFact(
-                datetime(2025, 1, 15),
-                datetime(2025, 1, 19),
-                "TP 4-2 Устранение обрыва штанг",
-            ),
-            RepairFact(
-                datetime(2026, 5, 2, 17, 20),
-                datetime(2026, 5, 7, 10, 5),
-                "TP 8-7 Промывка забоя",
-            ),
-        ],
+        "repairs": _repairs(),
         "donor": DonorFact(
             speed=140,
             step_percent=7,
@@ -158,7 +150,7 @@ def test_vmb_1252_items() -> None:
         "25,8 (+6 %); обводнённость 73 % → 80 % (медианы замеров)",
         "attention",
     )
-    # +2 % неделя к неделе — меньше 3 %: «без заметных изменений».
+    # Неделя к неделе +2 % — меньше 3 %: «без заметных изменений».
     assert items["drive"] == ("Момент 69–73 за 14 суток, без заметных изменений", "ok")
     assert items["gdis"] == ("Динамический уровень 46 м на 27.10", "info")
     assert items["repairs"][0] == (
@@ -198,10 +190,7 @@ def test_vmb_1252_observations() -> None:
 def test_stale_measurement_and_moment_rise() -> None:
     inputs = _vmb_1252(
         now=datetime(2026, 11, 10, 10, 0),
-        drive_days=[
-            DriveDay(day=date(2026, 10, 27) + timedelta(days=i), speed=160, moment=m)
-            for i, m in enumerate([70] * 7 + [80] * 7)
-        ],
+        drive_days=_drive_days(date(2026, 10, 27), [70] * 7 + [80] * 7),
     )
     items = _items(inputs)
     observations = _observations(inputs)
@@ -214,24 +203,118 @@ def test_stale_measurement_and_moment_rise() -> None:
     assert observations["moment_rising"] == "Момент растёт: +14 % за неделю (70 → 80)"
 
 
-def test_stopped_well_without_sdmo_and_open_repair() -> None:
+def test_drive_needs_three_working_days_each_week() -> None:
+    # Первая неделя — стоянка: таких суток в выборке нет (их отсекает сборщик).
+    inputs = _vmb_1252(drive_days=_drive_days(date(2026, 10, 22), [72] * 7))
+    assert "drive" not in _items(inputs)
+
+
+def test_repair_state_without_sdmo_and_open_repair() -> None:
     inputs = OverviewInputs(
         now=NOW,
-        state=WellStateDTO(
-            code="repair",
-            title_ru="Ремонт",
-            reason_ru="Ремонт: Смена насоса",
-            since=datetime(2026, 10, 27, 9, 0),
-            source="repair",
-        ),
+        state=_state("repair", "Ремонт", "Ремонт: Смена насоса"),
         repairs=[RepairFact(datetime(2026, 10, 27, 9, 0), None, "Смена насоса")],
     )
     items = _items(inputs)
-    assert items["work"] == ("Ремонт: Ремонт: Смена насоса", "attention")
+    assert items["work"] == ("Ремонт: Смена насоса", "attention")
     assert items["production"] == ("Замеров ЦИТС за 60 суток нет", "attention")
     assert items["repairs"] == ("Идёт ремонт: Смена насоса, с 27.10", "attention")
     assert "production_trend" not in items
     assert "drive" not in items
+
+
+def test_hanging_open_repair_on_working_well() -> None:
+    inputs = _vmb_1252(
+        repairs=[
+            *_repairs(),
+            RepairFact(datetime(2024, 1, 14, 17, 40), None, "Промывка"),
+        ],
+    )
+    # Висящая запись 2024 года в середине истории не ломает текущий межремонтный.
+    assert _items(inputs)["repairs"] == _items(_vmb_1252())["repairs"]
+    hanging = _vmb_1252(
+        repairs=[RepairFact(datetime(2024, 1, 14, 17, 40), None, "Промывка")],
+    )
+    assert _items(hanging)["repairs"] == (
+        "Ремонт «Промывка» с 14.01.2024 не закрыт в ABAI",
+        "info",
+    )
+
+
+def test_split_repair_records_are_one_repair() -> None:
+    inputs = _vmb_1252(
+        repairs=[
+            RepairFact(datetime(2026, 3, 1), datetime(2026, 3, 5), "Смена насоса"),
+            RepairFact(datetime(2026, 3, 4), datetime(2026, 3, 8), "Смена насоса"),
+            RepairFact(datetime(2026, 3, 8, 12), datetime(2026, 3, 9), "Смена насоса"),
+        ],
+    )
+    text, _ = _items(inputs)["repairs"]
+    assert text.startswith("234 сут без ремонта. Последний ремонт")
+    assert "−" not in text
+    assert "frequent_repair" not in _observations(inputs)
+
+
+def test_no_link_well_does_not_claim_running_drive() -> None:
+    inputs = _vmb_1252(
+        state=_state("no_link", "Нет связи", "Нет данных СДМО с 25.10 08:40"),
+        drive_running=None,
+    )
+    items = _items(inputs)
+    assert items["work"] == ("Нет данных СДМО с 25.10 08:40", "attention")
+    assert items["compensation"] == (
+        "В пуле доноров, но сейчас не может быть донором: нет связи",
+        "info",
+    )
+    assert "donor_pool_stale" not in _observations(inputs)
+
+
+def test_applied_pair_compares_with_target_speed() -> None:
+    inputs = _vmb_1252(
+        donor=DonorFact(
+            speed=140,
+            step_percent=15,
+            gain=0.5,
+            risk="low",
+            loss_well_name="VMB_2051",
+            pair_status="applied",
+            speed_to=161,
+        ),
+    )
+    assert "donor_pool_stale" not in _observations(inputs)
+
+
+def test_fractional_shgn_speed_is_not_rounded_away() -> None:
+    inputs = _vmb_1252(
+        speed=4.9,
+        speed_units="кач/мин",
+        donor=DonorFact(speed=4.6, step_percent=10, gain=0.2, risk="medium"),
+    )
+    assert _observations(inputs)["donor_pool_stale"] == (
+        "В пуле доноров скорость привода 4,6 кач/мин, фактически 4,9 — "
+        "рекомендацию разгона нужно пересчитать"
+    )
+
+
+def test_unscaled_speed_skips_donor_check() -> None:
+    assert "donor_pool_stale" not in _observations(_vmb_1252(speed=None))
+
+
+def test_trend_needs_three_measurements_per_window() -> None:
+    inputs = _vmb_1252(measurements=_measurements()[:4])
+    assert "production_trend" not in _items(inputs)
+
+
+def test_zero_plan_and_zero_previous_oil() -> None:
+    measurements = [
+        Measurement(NOW - timedelta(days=day), oil=oil, liquid=20.0)
+        for day, oil in ((1, 1.0), (5, 1.0), (9, 1.0), (31, 0.0), (35, 0.0), (40, 0.0))
+    ]
+    inputs = _vmb_1252(measurements=measurements, plan_oil=0)
+    items = _items(inputs)
+    assert items["production"][0].startswith("Нефть 1 т/сут; жидкость")
+    assert "(" not in items["production_trend"][0].split(";")[0]  # без процента
+    assert "plan_outdated" not in _observations(inputs)
 
 
 def test_dynamogram_and_closed_incidents() -> None:
@@ -268,3 +351,8 @@ def test_dynamogram_and_closed_incidents() -> None:
         "За 90 суток эпизодов: 2, все закрыты; ложных по проверке: 1",
         "info",
     )
+
+
+def test_old_dates_carry_year() -> None:
+    inputs = _vmb_1252(dynamic_level=(120.0, date(2025, 3, 1)))
+    assert _items(inputs)["gdis"][0] == "Динамический уровень 120 м на 01.03.2025"

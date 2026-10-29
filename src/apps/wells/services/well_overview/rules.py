@@ -3,7 +3,9 @@
 Строки с цифрами считает код; наблюдения — мягкие сигналы ниже порогов
 детекторов: за чем следить у скважины без аварий. Тренды — по медианам:
 в замерах ЦИТС бывают выбросы (нефть в 2–4 раза выше соседних замеров), и по
-последнему замеру сводка прыгала бы.
+последнему замеру сводка прыгала бы. Сводка не спорит с итоговым состоянием
+скважины: «привод работает» и «идёт ремонт» пишутся, только когда это же
+говорит состояние.
 """
 
 from collections import Counter
@@ -11,6 +13,16 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from statistics import median
 
+from apps.compensation.constants import (
+    RECOMMENDATION_ACCEPTED,
+    RECOMMENDATION_APPLIED,
+    RECOMMENDATION_PENDING,
+    RISK_HIGH,
+    RISK_LOW,
+    RISK_MEDIUM,
+)
+from apps.detectors.models.verification import VERDICT_FALSE_ALARM
+from apps.repairs.services.mrp import MERGE_GAP, RepairSpan, compute_well_mrp
 from apps.telemetry.services.well_rates import FRESH_TELEMETRY_DAYS, water_cut
 from apps.wells.dto.internal.well_overview import (
     MARK_ATTENTION,
@@ -20,13 +32,18 @@ from apps.wells.dto.internal.well_overview import (
     WellOverviewObservationDTO,
 )
 from apps.wells.dto.internal.well_state import WellStateDTO
-from apps.wells.models.well_state import STATE_INACTIVE, STATE_WORKING
+from apps.wells.models.well_state import STATE_INACTIVE, STATE_REPAIR, STATE_WORKING
 
 # Окна.
 TREND_WINDOW = timedelta(days=30)  # месяц к предыдущему месяцу
+MEASUREMENTS_WINDOW = 2 * TREND_WINDOW
 TREND_MIN_MEASUREMENTS = 3  # меньше замеров в окне — тренд не считается
-DRIVE_WINDOW_DAYS = 14  # медианы привода по суткам; неделя к неделе
-DRIVE_MIN_DAYS = 7
+DRIVE_WEEK_DAYS = 7  # момент: последняя неделя к предыдущей, полные сутки
+DRIVE_WINDOW_DAYS = 2 * DRIVE_WEEK_DAYS
+DRIVE_MIN_DAYS_PER_WEEK = 3
+# Сутки, когда привод вращался меньше этой доли отсчётов, в момент не идут:
+# медиана по стоянке — не нагрузка насоса.
+DRIVE_MIN_ROTATING_SHARE = 0.9
 INCIDENTS_WINDOW_DAYS = 90
 RECENT_REPAIRS = 8  # частая причина — среди стольких последних ремонтов
 # Поиск начала состояния привода по истории не глубже 30 суток: «с» на
@@ -44,11 +61,11 @@ FREQUENT_REPAIR_MIN = 3  # одинаковых ремонтов среди по
 MOMENT_FLAT_SHARE = 0.03  # меньше — «без заметных изменений»
 
 PAIR_STATUS_RU = {
-    "pending": "на согласовании",
-    "accepted": "согласован",
-    "applied": "применён",
+    RECOMMENDATION_PENDING: "на согласовании",
+    RECOMMENDATION_ACCEPTED: "согласован",
+    RECOMMENDATION_APPLIED: "применён",
 }
-RISK_RU = {"low": "низкий", "medium": "средний", "high": "высокий"}
+RISK_RU = {RISK_LOW: "низкий", RISK_MEDIUM: "средний", RISK_HIGH: "высокий"}
 SEVERITY_MARK = {"ok": MARK_OK, "warning": MARK_ATTENTION, "critical": MARK_ATTENTION}
 
 
@@ -61,8 +78,9 @@ class Measurement:
 
 @dataclass(frozen=True, slots=True)
 class DriveDay:
+    """Медианы привода за полные сутки, когда он почти всё время вращался."""
+
     day: date
-    speed: float | None
     moment: float | None
 
 
@@ -79,7 +97,7 @@ class IncidentFact:
     level: str
     opened_at: datetime
     active: bool
-    verdict: str | None  # отметка проверки R2: false_alarm / failure_confirmed …
+    verdict: str | None  # отметка проверки R2
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +108,7 @@ class DonorFact:
     risk: str
     loss_well_name: str | None = None  # открытая пара
     pair_status: str | None = None
+    speed_to: float | None = None  # скорость после разгона по паре
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,8 +123,13 @@ class DynamogramFact:
 class OverviewInputs:
     now: datetime
     state: WellStateDTO | None = None
+    # Привод — только если его состояние свежее и подтверждено (как в
+    # итоговом состоянии); иначе None.
     drive_running: bool | None = None
     drive_since: datetime | None = None
+    # Скорость по последнему отсчёту; None — нет отсчёта или не приведена
+    # к единицам (у станции нет типа — сырое значение сравнивать нельзя).
+    speed: float | None = None
     speed_units: str | None = None
     drive_days: list[DriveDay] = field(default_factory=list)
     plan_oil: float | None = None
@@ -123,7 +147,14 @@ class _Overview:
     items: list[WellOverviewItemDTO] = field(default_factory=list)
     observations: list[WellOverviewObservationDTO] = field(default_factory=list)
 
-    def item(self, code: str, title: str, text: str, mark: str, as_of=None) -> None:  # noqa: ANN001
+    def item(
+        self,
+        code: str,
+        title: str,
+        text: str,
+        mark: str,
+        as_of: datetime | date | None = None,
+    ) -> None:
         self.items.append(
             WellOverviewItemDTO(
                 code=code,
@@ -139,19 +170,27 @@ class _Overview:
 
 
 def _num(value: float, digits: int = 1) -> str:
-    """Число для текста: запятая, без хвостовых нулей."""
+    """Число для текста: запятая, без хвостовых нулей, минус — «−»."""
     text = f"{value:.{digits}f}"
     if "." in text:
         text = text.rstrip("0").rstrip(".")
-    return text.replace(".", ",")
+    if text in ("-0", "0"):
+        return "0"
+    return text.replace(".", ",").replace("-", "−")
 
 
 def _pct(share: float) -> str:
-    return f"{share * 100:+.0f} %".replace("-", "−")
+    rounded = round(share * 100)
+    if rounded == 0:
+        return "0 %"
+    return f"{rounded:+d} %".replace("-", "−")
 
 
-def _days(count: int) -> str:
-    return f"{count} сут"
+def _date(moment: datetime | date, now: datetime) -> str:
+    """Дата для текста; год — только если не текущий."""
+    if moment.year == now.year:
+        return moment.strftime("%d.%m")
+    return moment.strftime("%d.%m.%Y")
 
 
 def build_overview(
@@ -170,27 +209,37 @@ def build_overview(
     return overview.items, overview.observations
 
 
+def _is_working(inputs: OverviewInputs) -> bool:
+    return inputs.state is not None and inputs.state.code == STATE_WORKING
+
+
+def _speed_text(inputs: OverviewInputs) -> str:
+    if inputs.speed is None:
+        return ""
+    units = f" {inputs.speed_units}" if inputs.speed_units else ""
+    return f"; {_num(inputs.speed)}{units}"
+
+
 # --- Блоки ---
 
 
 def _work(inputs: OverviewInputs, overview: _Overview) -> None:
     state = inputs.state
-    if inputs.drive_running is True and inputs.drive_since is not None:
+    if state is None:
+        overview.item("work", "Работа", "Состояние ещё не посчитано", MARK_INFO)
+        return
+    if _is_working(inputs) and inputs.drive_running and inputs.drive_since:
         if inputs.now - inputs.drive_since >= DRIVE_SINCE_HORIZON:
             text = "Привод работает без остановок не меньше 30 суток"
         else:
-            text = f"Привод работает с {inputs.drive_since:%d.%m %H:%M}"
-        speed = _last_speed(inputs)
-        if speed is not None:
-            units = f" {inputs.speed_units}" if inputs.speed_units else ""
-            text += f"; {_num(speed, 0)}{units}"
-    elif state is not None:
-        text = f"{state.title_ru}: {state.reason_ru}"
+            text = (
+                f"Привод работает с {_date(inputs.drive_since, inputs.now)} "
+                f"{inputs.drive_since:%H:%M}"
+            )
+        text += _speed_text(inputs)
     else:
-        text = "Состояние ещё не посчитано"
-    if state is None:
-        mark = MARK_INFO
-    elif state.code == STATE_WORKING:
+        text = state.reason_ru
+    if state.code == STATE_WORKING:
         mark = MARK_OK
     elif state.code == STATE_INACTIVE:
         mark = MARK_INFO
@@ -200,18 +249,21 @@ def _work(inputs: OverviewInputs, overview: _Overview) -> None:
 
 
 def _deduplicated(measurements: list[Measurement]) -> list[Measurement]:
-    """В telemetry_well бывают дубли замера — по одному на момент."""
-    by_time = {item.time: item for item in measurements}
-    return [by_time[moment] for moment in sorted(by_time)]
+    """В telemetry_well бывают дубли замера — по одному на минуту."""
+    by_minute = {
+        item.time.replace(second=0, microsecond=0): item for item in measurements
+    }
+    return [by_minute[moment] for moment in sorted(by_minute)]
 
 
 def _production(inputs: OverviewInputs, overview: _Overview) -> None:
     measurements = _deduplicated(inputs.measurements)
     if not measurements:
+        days = MEASUREMENTS_WINDOW.days
         overview.item(
             "production",
             "Добыча",
-            "Замеров ЦИТС за 60 суток нет",
+            f"Замеров ЦИТС за {days} суток нет",
             MARK_ATTENTION,
         )
         return
@@ -231,10 +283,10 @@ def _production(inputs: OverviewInputs, overview: _Overview) -> None:
     if cut is not None:
         parts.append(f"обводнённость {_num(cut, 0)} %")
     text = "; ".join(parts) or "В замере нет дебитов"
-    text = text[0].upper() + text[1:] + f". Замер {last.time:%d.%m}"
+    text = text[0].upper() + text[1:] + f". Замер {_date(last.time, inputs.now)}"
     stale = inputs.now - last.time > timedelta(days=FRESH_TELEMETRY_DAYS)
     below = (
-        inputs.plan_oil is not None
+        bool(inputs.plan_oil)
         and last.oil is not None
         and last.oil < inputs.plan_oil * PLAN_BELOW_SHARE
     )
@@ -244,7 +296,7 @@ def _production(inputs: OverviewInputs, overview: _Overview) -> None:
         overview.observe(
             "measurement_stale",
             f"Замер дебита старше {FRESH_TELEMETRY_DAYS} суток "
-            f"(последний {last.time:%d.%m})",
+            f"(последний {_date(last.time, inputs.now)})",
         )
 
 
@@ -259,6 +311,9 @@ def _window_medians(
 
 
 def _trend(inputs: OverviewInputs, overview: _Overview) -> None:
+    """Обводнённость — из медиан нефти и жидкости, а не медианой обводнённостей
+    замеров: так она согласована с показанными медианами и тоже не боится
+    выбросов."""
     measurements = _deduplicated(inputs.measurements)
     recent_from = inputs.now - TREND_WINDOW
     previous_from = recent_from - TREND_WINDOW
@@ -271,14 +326,14 @@ def _trend(inputs: OverviewInputs, overview: _Overview) -> None:
     (oil, liquid), (oil_before, liquid_before) = recent, previous
     cut = water_cut(liquid_rate=liquid, oil_rate=oil)
     cut_before = water_cut(liquid_rate=liquid_before, oil_rate=oil_before)
-    parts = [f"Нефть {_num(oil)} т/сут против {_num(oil_before)} месяцем раньше"]
+    oil_part = f"Нефть {_num(oil)} т/сут против {_num(oil_before)} месяцем раньше"
     oil_change = oil / oil_before - 1 if oil_before > 0 else None
     if oil_change is not None:
-        parts[0] += f" ({_pct(oil_change)})"
+        oil_part += f" ({_pct(oil_change)})"
     liquid_part = f"жидкость {_num(liquid)} против {_num(liquid_before)}"
     if liquid_before > 0:
         liquid_part += f" ({_pct(liquid / liquid_before - 1)})"
-    parts.append(liquid_part)
+    parts = [oil_part, liquid_part]
     if cut is not None and cut_before is not None:
         parts.append(f"обводнённость {_num(cut_before, 0)} % → {_num(cut, 0)} %")
     falling = oil_change is not None and oil_change <= -OIL_DROP_SHARE
@@ -287,12 +342,11 @@ def _trend(inputs: OverviewInputs, overview: _Overview) -> None:
         and cut_before is not None
         and cut - cut_before >= WATER_CUT_RISE_PP
     )
-    mark = MARK_ATTENTION if falling or watering else MARK_OK
     overview.item(
         "production_trend",
         "Добыча за месяц",
         "; ".join(parts) + " (медианы замеров)",
-        mark,
+        MARK_ATTENTION if falling or watering else MARK_OK,
     )
     if watering:
         overview.observe(
@@ -314,20 +368,28 @@ def _trend(inputs: OverviewInputs, overview: _Overview) -> None:
         )
 
 
-def _last_speed(inputs: OverviewInputs) -> float | None:
-    speeds = [day.speed for day in inputs.drive_days if day.speed is not None]
-    return speeds[-1] if speeds else None
-
-
 def _drive(inputs: OverviewInputs, overview: _Overview) -> None:
+    """Момент — последняя календарная неделя к предыдущей, по полным суткам
+    работы привода."""
+    today = inputs.now.date()
+    week_start = today - timedelta(days=DRIVE_WEEK_DAYS)
     days = [day for day in inputs.drive_days if day.moment is not None]
-    if len(days) < DRIVE_MIN_DAYS:
+    last_week = [day.moment for day in days if week_start <= day.day < today]
+    week_before = [day.moment for day in days if day.day < week_start]
+    if (
+        len(last_week) < DRIVE_MIN_DAYS_PER_WEEK
+        or len(week_before) < DRIVE_MIN_DAYS_PER_WEEK
+    ):
         return
-    moments = [day.moment for day in days]
-    first = median(moments[: len(moments) // 2])
-    second = median(moments[len(moments) // 2 :])
-    change = second / first - 1 if first > 0 else 0.0
-    text = f"Момент {_num(min(moments), 0)}–{_num(max(moments), 0)} за 14 суток"
+    first, second = median(week_before), median(last_week)
+    if first <= 0:
+        return
+    moments = week_before + last_week
+    change = second / first - 1
+    text = (
+        f"Момент {_num(min(moments), 0)}–{_num(max(moments), 0)} "
+        f"за {DRIVE_WINDOW_DAYS} суток"
+    )
     if abs(change) < MOMENT_FLAT_SHARE:
         text += ", без заметных изменений"
     else:
@@ -349,7 +411,7 @@ def _dynamogram(inputs: OverviewInputs, overview: _Overview) -> None:
     text = f"Последний ИИ-разбор: {fact.condition or 'без оценки'}"
     if fact.fill_pct is not None:
         text += f", наполнение ~{_num(fact.fill_pct, 0)} %"
-    text += f", {fact.time:%d.%m}"
+    text += f", {_date(fact.time, inputs.now)}"
     mark = SEVERITY_MARK.get(fact.severity or "", MARK_INFO)
     overview.item("dynamogram", "Динамограмма", text, mark, fact.time)
 
@@ -361,43 +423,83 @@ def _gdis(inputs: OverviewInputs, overview: _Overview) -> None:
     overview.item(
         "gdis",
         "ГДИС",
-        f"Динамический уровень {_num(level, 0)} м на {measured:%d.%m}",
+        f"Динамический уровень {_num(level, 0)} м на {_date(measured, inputs.now)}",
         MARK_INFO,
         measured,
     )
 
 
+def _repair_groups(repairs: list[RepairFact]) -> list[RepairFact]:
+    """Первая запись каждого ремонта: записи встык или внахлёст (разрыв
+    меньше суток) — один ремонт, как в расчёте МРП."""
+    groups: list[RepairFact] = []
+    end: datetime | None = None
+    for repair in repairs:
+        if groups and end is not None and repair.start - end < MERGE_GAP:
+            end = None if repair.end is None else max(end, repair.end)
+            continue
+        groups.append(repair)
+        end = repair.end
+    return groups
+
+
 def _repairs(inputs: OverviewInputs, overview: _Overview) -> None:
-    repairs = sorted(inputs.repairs, key=lambda item: item.start)
+    now = inputs.now
+    repairs = sorted(
+        (item for item in inputs.repairs if item.start <= now),
+        key=lambda item: item.start,
+    )
     if not repairs:
         overview.item("repairs", "Ремонты", "Ремонтов в истории нет", MARK_INFO)
         return
+    mrp = compute_well_mrp(
+        [
+            RepairSpan(id=index, start=item.start, end=item.end)
+            for index, item in enumerate(repairs)
+        ],
+        now=now,
+    )
     last = repairs[-1]
+    last_mrp = mrp.repairs[-1]
     name = last.type_name or "вид работ не указан"
-    if last.end is None:
-        overview.item(
-            "repairs",
-            "Ремонты",
-            f"Идёт ремонт: {name}, с {last.start:%d.%m}",
-            MARK_ATTENTION,
-            last.start,
-        )
+    if mrp.last_end is None:
+        if inputs.state is not None and inputs.state.code == STATE_REPAIR:
+            overview.item(
+                "repairs",
+                "Ремонты",
+                f"Идёт ремонт: {name}, с {_date(last.start, now)}",
+                MARK_ATTENTION,
+                last.start,
+            )
+        else:
+            # Ремонт открыт в ABAI, но состояние говорит, что он кончился
+            # (после него уже был статус работы) — висящая запись.
+            overview.item(
+                "repairs",
+                "Ремонты",
+                f"Ремонт «{name}» с {_date(last.start, now)} не закрыт в ABAI",
+                MARK_INFO,
+                last.start,
+            )
     else:
-        text = f"{_days((inputs.now - last.end).days)} без ремонта"
-        previous = repairs[-2] if len(repairs) > 1 else None
-        if previous is not None and previous.end is not None:
-            interval = (last.start - previous.end).days
-            text += f"; прошлый межремонтный период — {_days(interval)}"
-        text += f". Последний ремонт — {name}, {last.start:%d.%m}–{last.end:%d.%m.%Y}"
-        overview.item("repairs", "Ремонты", text, MARK_INFO, last.end)
+        text = f"{int(last_mrp.running_days or 0)} сут без ремонта"
+        if last_mrp.before_days is not None:
+            text += f"; прошлый межремонтный период — {int(last_mrp.before_days)} сут"
+        end = mrp.last_end
+        text += f". Последний ремонт — {name}, {_date(last.start, now)}–{end:%d.%m.%Y}"
+        overview.item("repairs", "Ремонты", text, MARK_INFO, end)
 
-    recent = [item.type_name for item in repairs[-RECENT_REPAIRS:] if item.type_name]
+    recent = [
+        item.type_name
+        for item in _repair_groups(repairs)[-RECENT_REPAIRS:]
+        if item.type_name
+    ]
     if recent:
-        name, count = Counter(recent).most_common(1)[0]
+        frequent, count = Counter(recent).most_common(1)[0]
         if count >= FREQUENT_REPAIR_MIN:
             overview.observe(
                 "frequent_repair",
-                f"Частый ремонт: «{name}» — {count} из {len(recent)} последних",
+                f"Частый ремонт: «{frequent}» — {count} из {len(recent)} последних",
             )
 
 
@@ -416,7 +518,9 @@ def _detectors(inputs: OverviewInputs, overview: _Overview) -> None:
             MARK_OK,
         )
         return
-    false_alarms = sum(1 for item in inputs.incidents if item.verdict == "false_alarm")
+    false_alarms = sum(
+        1 for item in inputs.incidents if item.verdict == VERDICT_FALSE_ALARM
+    )
     text = f"За {INCIDENTS_WINDOW_DAYS} суток эпизодов: {count}, все закрыты"
     if false_alarms:
         text += f"; ложных по проверке: {false_alarms}"
@@ -431,16 +535,31 @@ def _compensation(inputs: OverviewInputs, overview: _Overview) -> None:
         f"разгон на {donor.step_percent} % даст +{_num(donor.gain, 2)} т/сут нефти, "
         f"риск {RISK_RU.get(donor.risk, donor.risk)}"
     )
+    if not _is_working(inputs):
+        state = inputs.state.title_ru.lower() if inputs.state else "нет состояния"
+        overview.item(
+            "compensation",
+            "Контур компенсации",
+            f"В пуле доноров, но сейчас не может быть донором: {state}",
+            MARK_INFO,
+        )
+        return
     if donor.loss_well_name is not None:
         status = PAIR_STATUS_RU.get(donor.pair_status or "", donor.pair_status or "")
         text = f"Донор для {donor.loss_well_name} ({status}): {gain}"
     else:
         text = f"В пуле доноров, свободен: {gain}"
-    speed = _last_speed(inputs)
+    # После применения пары привод уже разогнан — сверять с целевой скоростью.
+    expected = (
+        donor.speed_to
+        if donor.pair_status == RECOMMENDATION_APPLIED and donor.speed_to
+        else donor.speed
+    )
     stale = (
-        speed is not None
-        and donor.speed > 0
-        and abs(speed - donor.speed) / donor.speed > DONOR_SPEED_MISMATCH
+        inputs.speed is not None
+        and inputs.speed > 0
+        and expected > 0
+        and abs(inputs.speed - expected) / expected > DONOR_SPEED_MISMATCH
     )
     overview.item(
         "compensation",
@@ -452,6 +571,7 @@ def _compensation(inputs: OverviewInputs, overview: _Overview) -> None:
         units = f" {inputs.speed_units}" if inputs.speed_units else ""
         overview.observe(
             "donor_pool_stale",
-            f"В пуле доноров скорость привода {_num(donor.speed, 0)}{units}, "
-            f"фактически {_num(speed, 0)} — рекомендацию разгона нужно пересчитать",
+            f"В пуле доноров скорость привода {_num(expected)}{units}, "
+            f"фактически {_num(inputs.speed)} — рекомендацию разгона нужно "
+            "пересчитать",
         )
