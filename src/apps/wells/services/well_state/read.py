@@ -42,6 +42,7 @@ def build_well_state(
         code=row.state,
         title_ru=STATE_TITLES_RU.get(row.state, row.state),
         reason_ru=row.reason_ru,
+        reason_detail_ru=row.reason_detail_ru,
         since=row.started_at,
         source=row.source,
         stale=stale_reason is not None,

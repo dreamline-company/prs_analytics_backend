@@ -57,6 +57,9 @@ ABAI_KNOWN_CODES = frozenset(
     },
 )  # fmt: skip
 
+# Причина у работающей скважины без особенностей.
+WORKING_TEXT = "Работает в штатном режиме"
+
 KIND_WORK = "work"
 KIND_PERIODIC = "periodic"
 KIND_IDLE = "idle"
@@ -132,9 +135,12 @@ class Decision:
     state: str
     source: str
     reason_code: str
+    # Текст для оператора, без источников (источник — в ``source``).
     reason_ru: str
     started_at: datetime | None  # начало по данным; None — неизвестно
     evidence: dict
+    # Тот же вывод с источниками (СДМО, ABAI) — для разбора и подсказки.
+    reason_detail_ru: str | None = None
 
 
 def _fmt(moment: datetime) -> str:
@@ -144,6 +150,27 @@ def _fmt(moment: datetime) -> str:
 def _latest(*moments: datetime | None) -> datetime | None:
     known = [moment for moment in moments if moment is not None]
     return max(known) if known else None
+
+
+def _conflict_texts(
+    repair: RepairInput | None,
+    abai: AbaiStatusInput | None,
+) -> tuple[str, str]:
+    """Привод работает, а в ABAI ремонт, простой или вне эксплуатации:
+    текст для оператора и текст с источниками."""
+    if repair is not None:
+        name = repair.type_name or "вид работ не указан"
+        return (
+            f"Привод работает, хотя числится в ремонте: {name}",
+            f"В ABAI ремонт «{name}», привод работает",
+        )
+    if abai.kind == KIND_IDLE:
+        text = f"Привод работает, хотя числится в простое: {abai.label}"
+        label = abai.label
+    else:
+        text = f"Привод работает, хотя числится: {abai.name}"
+        label = abai.name
+    return text, f"В ABAI «{label}», привод работает"
 
 
 def decide(inputs: WellInputs, now: datetime) -> Decision:  # noqa: C901, PLR0911, PLR0912
@@ -179,14 +206,15 @@ def decide(inputs: WellInputs, now: datetime) -> Decision:  # noqa: C901, PLR091
         else:
             lost_since = sdmo.last_seen_at
 
-    def make(
+    def make(  # noqa: PLR0913
         state: str,
         source: str,
         code: str,
         text: str,
         started: datetime | None,
+        detail: str | None = None,
     ) -> Decision:
-        return Decision(state, source, code, text, started, evidence)
+        return Decision(state, source, code, text, started, evidence, detail or text)
 
     if repair is not None and not drive_on:
         name = repair.type_name or "вид работ не указан"
@@ -203,8 +231,9 @@ def decide(inputs: WellInputs, now: datetime) -> Decision:  # noqa: C901, PLR091
             STATE_INACTIVE,
             SOURCE_ABAI,
             "abai_inactive",
-            f"{abai.name} (ABAI)",
+            abai.name,
             abai.since,
+            f"{abai.name} (ABAI)",
         )
 
     # Начало по приводу, но не раньше смены статуса ABAI: скважина, которую
@@ -212,32 +241,36 @@ def decide(inputs: WellInputs, now: datetime) -> Decision:  # noqa: C901, PLR091
     # смены статуса, а не с начала истории станции.
     status_since = abai.since if abai is not None and kind != KIND_IDLE else None
     if drive_off and kind != KIND_PERIODIC:
-        text = "Привод остановлен (СДМО)"
+        text, detail = "Привод остановлен", "Привод остановлен (СДМО)"
         if abai is not None and kind == KIND_IDLE:
-            text += f", в ABAI «{abai.label}»"
+            text = f"Остановлена: {abai.label}"
+            detail += f", в ABAI «{abai.label}»"
         started = _latest(drive.since, status_since)
-        return make(STATE_STOPPED, SOURCE_SDMO, "drive_off", text, started)
+        return make(STATE_STOPPED, SOURCE_SDMO, "drive_off", text, started, detail)
     if drive is None and abai is not None and kind == KIND_IDLE:
         return make(
             STATE_STOPPED,
             SOURCE_ABAI,
             "abai_idle",
-            f"Простой: {abai.label} (ABAI)",
+            f"Простой: {abai.label}",
             abai.since,
+            f"Простой: {abai.label} (ABAI)",
         )
 
     if incident is not None and incident.level != INCIDENT_LEVEL_WARNING:
         # Эпизоды без данных сами не закрываются: при умершей станции авария
         # скрыла бы «нет связи» — пишем это в причине.
-        text = incident.title
+        text = detail = incident.title
         if silent_since is not None:
-            text += f"; нет данных СДМО с {_fmt(silent_since)}"
+            text += f"; нет связи со станцией с {_fmt(silent_since)}"
+            detail += f"; нет данных СДМО с {_fmt(silent_since)}"
         return make(
             STATE_ALARM,
             SOURCE_DETECTOR,
             "detector_alarm",
             text,
             incident.since,
+            detail,
         )
 
     if silent_since is not None and kind in (KIND_WORK, KIND_PERIODIC, None):
@@ -245,33 +278,27 @@ def decide(inputs: WellInputs, now: datetime) -> Decision:  # noqa: C901, PLR091
             STATE_NO_LINK,
             SOURCE_SDMO,
             "sdmo_silent",
-            f"Нет данных СДМО с {_fmt(silent_since)}",
+            f"Нет связи со станцией с {_fmt(silent_since)}",
             silent_since,
+            f"Нет данных СДМО с {_fmt(silent_since)}",
         )
     if abai is None and drive is None:
         return make(
             STATE_NO_LINK,
             SOURCE_ABAI,
             "no_data",
-            "Нет ни статуса ABAI, ни данных СДМО",
+            "Нет данных о работе скважины",
             None,
+            "Нет ни статуса ABAI, ни данных СДМО",
         )
 
     if drive_on and (repair is not None or kind in (KIND_IDLE, KIND_INACTIVE)):
         if repair is not None:
-            what = f"ремонт «{repair.type_name or 'вид работ не указан'}»"
             source, started = SOURCE_REPAIR, _latest(drive.since, repair.since)
         else:
-            label = abai.label if kind == KIND_IDLE else abai.name
-            what = f"«{label}»"
             source, started = SOURCE_ABAI, _latest(drive.since, abai.since)
-        return make(
-            STATE_WARNING,
-            source,
-            "abai_conflict",
-            f"В ABAI {what}, привод работает",
-            started,
-        )
+        text, detail = _conflict_texts(repair, abai)
+        return make(STATE_WARNING, source, "abai_conflict", text, started, detail)
     if incident is not None:
         return make(
             STATE_WARNING,
@@ -291,11 +318,19 @@ def decide(inputs: WellInputs, now: datetime) -> Decision:  # noqa: C901, PLR091
         )
     if drive_on:
         started = _latest(drive.since, status_since)
-        return make(STATE_WORKING, SOURCE_SDMO, "drive_on", "Привод работает", started)
-    text = f"{abai.name} (ABAI)"
+        return make(
+            STATE_WORKING,
+            SOURCE_SDMO,
+            "drive_on",
+            WORKING_TEXT,
+            started,
+            "Привод работает",
+        )
+    text, detail = WORKING_TEXT, f"{abai.name} (ABAI)"
     if lost_since is not None:
-        text += f"; СДМО молчит с {_fmt(lost_since)}"
-    return make(STATE_WORKING, SOURCE_ABAI, "abai_work", text, abai.since)
+        text = f"Работает, нет связи со станцией с {_fmt(lost_since)}"
+        detail += f"; СДМО молчит с {_fmt(lost_since)}"
+    return make(STATE_WORKING, SOURCE_ABAI, "abai_work", text, abai.since, detail)
 
 
 def _iso(moment: datetime | None) -> str | None:
