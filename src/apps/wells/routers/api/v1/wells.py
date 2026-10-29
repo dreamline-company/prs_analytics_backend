@@ -69,6 +69,7 @@ from apps.wells.repositories.well_state import (
 )
 from apps.wells.repositories.well_status import WellStatusRepository
 from apps.wells.services import CoordPointService, NGDUWellsService, WellGdisService
+from apps.wells.services.month_production import WellMonthProductionService
 from apps.wells.services.well_state.read import WellStateReadService
 from apps.wells.use_cases.get_well_card import GetWellCardUseCase
 from apps.wells.use_cases.get_well_coords import GetWellCoordsUseCase
@@ -253,6 +254,11 @@ async def get_well_card(
         well_state_read_service=WellStateReadService(
             state_repository=WellStateRepository(session=session),
             run_repository=WellStateRunRepository(session=session),
+        ),
+        well_month_production_service=WellMonthProductionService(
+            telemetry_repository=TelemetryRepository(session=session),
+            sdmo_fc_data_repository=SdmoFcDataRepository(session=session),
+            well_status_repository=WellStatusRepository(session=session),
         ),
     )
     card = await use_case.execute(GetWellCardQuery(well_id=well_id))

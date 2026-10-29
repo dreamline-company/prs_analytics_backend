@@ -91,7 +91,11 @@ from apps.telemetry.services.drive import vlt_running
 from apps.wells.dto.internal.well_card import WellCardDTO
 from apps.wells.dto.queries.well import GetWellCardQuery
 from apps.wells.models.well import Well
-from apps.wells.repositories import WellExplRepository, WellOrgRepository
+from apps.wells.repositories import (
+    WellExplRepository,
+    WellOrgRepository,
+    WellStatusRepository,
+)
 from apps.wells.repositories.coords import WellCoordRepository
 from apps.wells.repositories.gdis import (
     GdisCurrentValueRepository,
@@ -104,6 +108,7 @@ from apps.wells.repositories.well_state import (
     WellStateRunRepository,
 )
 from apps.wells.services import CoordPointService, NGDUWellsService, WellGdisService
+from apps.wells.services.month_production import WellMonthProductionService
 from apps.wells.services.well_state.read import WellStateReadService
 from apps.wells.use_cases.get_well_card import GetWellCardUseCase
 from core import get_logger
@@ -402,6 +407,11 @@ async def _load_card(session: AsyncSession, well: Well) -> WellCardDTO:
         well_state_read_service=WellStateReadService(
             state_repository=WellStateRepository(session=session),
             run_repository=WellStateRunRepository(session=session),
+        ),
+        well_month_production_service=WellMonthProductionService(
+            telemetry_repository=TelemetryRepository(session=session),
+            sdmo_fc_data_repository=SdmoFcDataRepository(session=session),
+            well_status_repository=WellStatusRepository(session=session),
         ),
     ).execute(GetWellCardQuery(well_id=well.id))
 
