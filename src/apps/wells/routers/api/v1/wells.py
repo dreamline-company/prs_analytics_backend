@@ -31,6 +31,7 @@ from apps.wells.dto.internal.well_card import WellCardDTO
 from apps.wells.dto.internal.well_coords import WellCoordMapPointDTO
 from apps.wells.dto.internal.well_matrix import WellMatrixItemDTO
 from apps.wells.dto.internal.well_matrix_incidents import WellMatrixIncidentDTO
+from apps.wells.dto.internal.well_overview import WellOverviewDTO
 from apps.wells.dto.internal.well_timeline import WellTimelineDTO
 from apps.wells.dto.queries.well import (
     GetWellCardQuery,
@@ -47,6 +48,7 @@ from apps.wells.dto.responses.well import (
     WellCoordsResponseDTO,
     WellDynamogramsResponseDTO,
     WellMatrixIncidentsResponseDTO,
+    WellOverviewResponseDTO,
     WellsMatrixResponseDTO,
     WellTimelineResponseDTO,
 )
@@ -73,6 +75,7 @@ from apps.wells.use_cases.get_well_coords import GetWellCoordsUseCase
 from apps.wells.use_cases.get_well_matrix_incidents import (
     GetWellMatrixIncidentsUseCase,
 )
+from apps.wells.use_cases.get_well_overview import GetWellOverviewUseCase
 from apps.wells.use_cases.get_well_timeline import GetWellTimelineUseCase
 from apps.wells.use_cases.get_wells_matrix import GetWellsMatrixUseCase
 from apps.wells.use_cases.list_dynamograms_by_well_id import (
@@ -254,6 +257,16 @@ async def get_well_card(
     )
     card = await use_case.execute(GetWellCardQuery(well_id=well_id))
     return WellCardResponseDTO(data=card)
+
+
+@router.get("/{well_id}/overview", response_model=AppResponse[WellOverviewDTO])
+async def get_well_overview(
+    session: Annotated[AsyncSession, Depends(get_app_session)],
+    well_id: Annotated[int, Path(ge=1, description="Well ID (wells_well.id)")],
+) -> WellOverviewResponseDTO:
+    """Сводка по скважине для обычного режима: строки с цифрами и наблюдения."""
+    overview = await GetWellOverviewUseCase(session).execute(well_id)
+    return WellOverviewResponseDTO(data=overview)
 
 
 @router.get("/{well_id}/timeline", response_model=AppResponse[WellTimelineDTO])

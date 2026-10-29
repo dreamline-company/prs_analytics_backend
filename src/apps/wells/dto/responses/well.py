@@ -4,6 +4,7 @@ from apps.wells.dto.internal.well_card import WellCardDTO
 from apps.wells.dto.internal.well_coords import WellCoordMapPointDTO
 from apps.wells.dto.internal.well_matrix import WellMatrixItemDTO
 from apps.wells.dto.internal.well_matrix_incidents import WellMatrixIncidentDTO
+from apps.wells.dto.internal.well_overview import WellOverviewDTO
 from apps.wells.dto.internal.well_timeline import WellTimelineDTO
 from shared.dto.api import AppResponse
 
@@ -27,3 +28,6 @@ class WellDynamogramsResponseDTO(AppResponse[list[WellDynamogramDTO]]): ...
 
 
 class WellTimelineResponseDTO(AppResponse[WellTimelineDTO]): ...
+
+
+class WellOverviewResponseDTO(AppResponse[WellOverviewDTO]): ...
