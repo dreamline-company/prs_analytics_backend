@@ -10,6 +10,7 @@ class CreateWellStateDTO(RepositoryDTO):
     source: str
     reason_code: str
     reason_ru: str
+    reason_detail_ru: str | None = None
     started_at: datetime
     ended_at: datetime | None = None
     evidence: dict | None = None
@@ -22,6 +23,7 @@ class UpdateWellStateDTO(RepositoryDTO):
     source: str | None = None
     reason_code: str | None = None
     reason_ru: str | None = None
+    reason_detail_ru: str | None = None
     ended_at: datetime | None = None
     evidence: dict | None = None
     updated_at: datetime | None = None

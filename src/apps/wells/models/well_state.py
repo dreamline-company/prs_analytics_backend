@@ -80,7 +80,11 @@ class WellState(AppBaseModel, IntPkMixin):
     state: Mapped[str] = mapped_column(String(20), nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False)
     reason_code: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Текст для оператора, без источников (источник — в ``source``).
     reason_ru: Mapped[str] = mapped_column(Text, nullable=False)
+    # Тот же вывод с источниками (СДМО, ABAI) — для разбора и подсказки.
+    # NULL у строк, закрытых до появления колонки.
+    reason_detail_ru: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Начало по данным (первый отсчёт смены привода, начало статуса ABAI,
     # начало ремонта, эскалация эпизода), не время прогона.
     started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

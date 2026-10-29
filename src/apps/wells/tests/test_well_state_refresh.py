@@ -117,7 +117,8 @@ def test_escalated_alarm_starts_at_escalation() -> None:
 def _row(evidence: dict | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         state="stopped",
-        reason_ru="Привод остановлен (СДМО)",
+        reason_ru="Привод остановлен",
+        reason_detail_ru="Привод остановлен (СДМО)",
         started_at=datetime(2026, 10, 19, 16, 19, 19),
         source="sdmo",
         abai_ngdu_id=12,
@@ -134,6 +135,8 @@ def test_read_state_is_fresh() -> None:
     state = build_well_state(_row(), {12: _run(NOW - timedelta(minutes=4))}, NOW)
     assert state.code == "stopped"
     assert state.title_ru == "Остановлена"
+    assert state.reason_ru == "Привод остановлен"
+    assert state.reason_detail_ru == "Привод остановлен (СДМО)"
     assert state.since == datetime(2026, 10, 19, 16, 19, 19)
     assert state.stale is False
 

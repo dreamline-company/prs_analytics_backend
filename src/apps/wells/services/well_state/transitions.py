@@ -1,7 +1,8 @@
 """Как решение ложится в журнал состояний — чистая логика, без базы.
 
 1. Новая строка открывается только при смене ``state``. Смена источника или
-   причины при том же ``state`` обновляет открытую строку на месте.
+   причины (кода или любого из текстов) при том же ``state`` обновляет
+   открытую строку на месте.
 2. Начало нового состояния — по данным (``Decision.started_at``), не позже
    «сейчас»; неизвестно — «сейчас».
 3. Без наложений: открытая строка закрывается моментом начала новой.
@@ -38,6 +39,7 @@ class OpenState:
     reason_code: str
     reason_ru: str
     started_at: datetime
+    reason_detail_ru: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,10 +68,16 @@ def plan_transition(
     if open_state is None:
         return Transition(KIND_OPEN, data_start or now)
     if open_state.state == decision.state:
-        same = (open_state.source, open_state.reason_code, open_state.reason_ru) == (
+        same = (
+            open_state.source,
+            open_state.reason_code,
+            open_state.reason_ru,
+            open_state.reason_detail_ru,
+        ) == (
             decision.source,
             decision.reason_code,
             decision.reason_ru,
+            decision.reason_detail_ru,
         )
         return Transition(KIND_NONE if same else KIND_UPDATE)
 

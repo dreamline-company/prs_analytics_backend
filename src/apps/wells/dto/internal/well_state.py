@@ -15,7 +15,10 @@ class WellStateDTO(BaseModel):
 
     code: str
     title_ru: str
+    # Текст для оператора, без источников (источник — в ``source``).
     reason_ru: str
+    # Тот же вывод с источниками (СДМО, ABAI) — для подсказки и разбора.
+    reason_detail_ru: str | None = None
     since: datetime
     source: str  # sdmo / abai / repair / detector
     stale: bool = False

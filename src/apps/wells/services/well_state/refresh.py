@@ -240,6 +240,7 @@ def _open_of(row: WellState) -> OpenState:
         reason_code=row.reason_code,
         reason_ru=row.reason_ru,
         started_at=row.started_at,
+        reason_detail_ru=row.reason_detail_ru,
     )
 
 
@@ -614,6 +615,7 @@ class WellStateRefresher:
             "source": decision.source,
             "reason_code": decision.reason_code,
             "reason_ru": decision.reason_ru,
+            "reason_detail_ru": decision.reason_detail_ru,
             "evidence": decision.evidence,
             "updated_at": self.now,
         }
@@ -628,6 +630,7 @@ class WellStateRefresher:
                 source=decision.source,
                 reason_code=decision.reason_code,
                 reason_ru=decision.reason_ru,
+                reason_detail_ru=decision.reason_detail_ru,
             )
         if kind == KIND_REPLACE:
             await self.state_repository.update_by_id(

@@ -74,6 +74,23 @@ def test_same_state_same_reason_does_nothing() -> None:
     assert transition.kind == KIND_NONE
 
 
+def test_same_state_new_detail_text_updates_in_place() -> None:
+    # Строки, записанные до появления reason_detail_ru, переписываются на месте
+    # первым же прогоном — без новой строки в журнале.
+    started = datetime(2026, 10, 27)
+    open_state = _open(STATE_WORKING, started, text="Привод работает")
+    decision = Decision(
+        STATE_WORKING,
+        SOURCE_SDMO,
+        "x",
+        "Работает в штатном режиме",
+        started,
+        {},
+        "Привод работает",
+    )
+    assert plan_transition(open_state, decision, NOW).kind == KIND_UPDATE
+
+
 def test_reason_change_updates_in_place() -> None:
     # SDMO-стоп в 10:00, ABAI внёс простой в 15:10 — причина дополняется.
     open_state = _open(

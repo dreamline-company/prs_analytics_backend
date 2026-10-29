@@ -81,7 +81,9 @@ def test_vmb_2058_stopped_by_sdmo_with_abai_reason() -> None:
     assert decision.state == STATE_STOPPED
     assert decision.source == SOURCE_SDMO
     assert decision.started_at == stop
-    assert decision.reason_ru == "Привод остановлен (СДМО), в ABAI «Нет подачи»"
+    # Оператору — без источников, источники — в подробностях.
+    assert decision.reason_ru == "Остановлена: Нет подачи"
+    assert decision.reason_detail_ru == "Привод остановлен (СДМО), в ABAI «Нет подачи»"
 
 
 def test_vmb_2775_abai_repair_status_but_drive_running_is_warning() -> None:
@@ -96,7 +98,8 @@ def test_vmb_2775_abai_repair_status_but_drive_running_is_warning() -> None:
     )
     assert decision.state == STATE_WARNING
     assert decision.reason_code == "abai_conflict"
-    assert decision.reason_ru == "В ABAI «ПРС», привод работает"
+    assert decision.reason_ru == "Привод работает, хотя числится в простое: ПРС"
+    assert decision.reason_detail_ru == "В ABAI «ПРС», привод работает"
     assert decision.started_at == datetime(2026, 10, 26, 9, 0)
 
 
@@ -128,7 +131,10 @@ def test_repair_with_running_drive_is_warning() -> None:
     )
     assert decision.state == STATE_WARNING
     assert decision.source == SOURCE_REPAIR
-    assert decision.reason_ru == "В ABAI ремонт «Смена насоса», привод работает"
+    assert decision.reason_ru == (
+        "Привод работает, хотя числится в ремонте: Смена насоса"
+    )
+    assert decision.reason_detail_ru == "В ABAI ремонт «Смена насоса», привод работает"
 
 
 def test_repair_without_sdmo_is_repair() -> None:
@@ -139,6 +145,7 @@ def test_repair_without_sdmo_is_repair() -> None:
     )
     assert decision.state == STATE_REPAIR
     assert decision.reason_ru == "Ремонт: вид работ не указан"
+    assert decision.reason_detail_ru == decision.reason_ru
 
 
 def test_conservation_with_stopped_drive_is_inactive() -> None:
@@ -151,7 +158,8 @@ def test_conservation_with_stopped_drive_is_inactive() -> None:
         NOW,
     )
     assert decision.state == STATE_INACTIVE
-    assert decision.reason_ru == "В консервации (ABAI)"
+    assert decision.reason_ru == "В консервации"
+    assert decision.reason_detail_ru == "В консервации (ABAI)"
     assert decision.started_at == since
 
 
@@ -164,7 +172,8 @@ def test_conservation_with_running_drive_is_warning() -> None:
         NOW,
     )
     assert decision.state == STATE_WARNING
-    assert decision.reason_ru == "В ABAI «В консервации», привод работает"
+    assert decision.reason_ru == "Привод работает, хотя числится: В консервации"
+    assert decision.reason_detail_ru == "В ABAI «В консервации», привод работает"
 
 
 def test_unknown_and_empty_status_codes_are_inactive() -> None:
@@ -193,7 +202,8 @@ def test_dmg_idle_without_sdmo_is_stopped_by_abai() -> None:
     decision = decide(WellInputs(abai=_dwn("Ожидание ГИС", since)), NOW)
     assert decision.state == STATE_STOPPED
     assert decision.source == SOURCE_ABAI
-    assert decision.reason_ru == "Простой: Ожидание ГИС (ABAI)"
+    assert decision.reason_ru == "Простой: Ожидание ГИС"
+    assert decision.reason_detail_ru == "Простой: Ожидание ГИС (ABAI)"
     assert decision.started_at == since
 
 
@@ -201,7 +211,8 @@ def test_work_without_sdmo_is_working_by_abai() -> None:
     decision = decide(WellInputs(abai=_wrk()), NOW)
     assert decision.state == STATE_WORKING
     assert decision.source == SOURCE_ABAI
-    assert decision.reason_ru == "В работе (ABAI)"
+    assert decision.reason_ru == "Работает в штатном режиме"
+    assert decision.reason_detail_ru == "В работе (ABAI)"
 
 
 def test_station_silent_two_hours_is_no_link() -> None:
@@ -209,7 +220,8 @@ def test_station_silent_two_hours_is_no_link() -> None:
     decision = decide(WellInputs(abai=_wrk(), sdmo=_silent(last)), NOW)
     assert decision.state == STATE_NO_LINK
     assert decision.started_at == last
-    assert decision.reason_ru == f"Нет данных СДМО с {last:%d.%m %H:%M}"
+    assert decision.reason_ru == f"Нет связи со станцией с {last:%d.%m %H:%M}"
+    assert decision.reason_detail_ru == f"Нет данных СДМО с {last:%d.%m %H:%M}"
 
 
 def test_station_silent_eight_days_falls_back_to_abai() -> None:
@@ -217,7 +229,10 @@ def test_station_silent_eight_days_falls_back_to_abai() -> None:
     decision = decide(WellInputs(abai=_wrk(), sdmo=_silent(last)), NOW)
     assert decision.state == STATE_WORKING
     assert decision.source == SOURCE_ABAI
-    assert decision.reason_ru.endswith(f"СДМО молчит с {last:%d.%m %H:%M}")
+    assert decision.reason_ru == (
+        f"Работает, нет связи со станцией с {last:%d.%m %H:%M}"
+    )
+    assert decision.reason_detail_ru.endswith(f"СДМО молчит с {last:%d.%m %H:%M}")
 
 
 def test_silent_station_with_abai_idle_is_stopped_not_no_link() -> None:
@@ -294,6 +309,8 @@ def test_no_status_and_no_sdmo_is_no_link() -> None:
     decision = decide(WellInputs(), NOW)
     assert decision.state == STATE_NO_LINK
     assert decision.reason_code == "no_data"
+    assert decision.reason_ru == "Нет данных о работе скважины"
+    assert decision.reason_detail_ru == "Нет ни статуса ABAI, ни данных СДМО"
     assert decision.started_at is None
 
 
@@ -304,6 +321,8 @@ def test_no_status_uses_sdmo() -> None:
     )
     assert decision.state == STATE_WORKING
     assert decision.source == SOURCE_SDMO
+    assert decision.reason_ru == "Работает в штатном режиме"
+    assert decision.reason_detail_ru == "Привод работает"
 
 
 def test_alarm_beats_no_link_and_mentions_silence() -> None:
@@ -318,7 +337,12 @@ def test_alarm_beats_no_link_and_mentions_silence() -> None:
     )
     assert decision.state == STATE_ALARM
     assert decision.source == SOURCE_DETECTOR
-    assert decision.reason_ru == f"Обрыв штанги; нет данных СДМО с {last:%d.%m %H:%M}"
+    assert decision.reason_ru == (
+        f"Обрыв штанги; нет связи со станцией с {last:%d.%m %H:%M}"
+    )
+    assert decision.reason_detail_ru == (
+        f"Обрыв штанги; нет данных СДМО с {last:%d.%m %H:%M}"
+    )
 
 
 def test_unknown_incident_level_is_alarm() -> None:
@@ -365,3 +389,16 @@ def test_wrk_after_conservation_stopped_since_status_change() -> None:
     )
     assert decision.state == STATE_STOPPED
     assert decision.started_at == wrk_since
+
+
+def test_drive_stopped_without_abai_idle_has_no_abai_reason() -> None:
+    decision = decide(
+        WellInputs(
+            abai=_wrk(),
+            sdmo=_sdmo(running=False, since=NOW - timedelta(hours=3)),
+        ),
+        NOW,
+    )
+    assert decision.state == STATE_STOPPED
+    assert decision.reason_ru == "Привод остановлен"
+    assert decision.reason_detail_ru == "Привод остановлен (СДМО)"
