@@ -22,6 +22,21 @@ class DynamogramRepository(
             ),
         )
 
+    async def list_latest_by_well_id(
+        self,
+        well_id: int,
+        *,
+        limit: int,
+    ) -> Sequence[Dynamogram]:
+        """Последние ``limit`` динамограмм скважины, свежие первыми."""
+        return await self.get_list(
+            QuerySpec(
+                filters=(Dynamogram.well_id == well_id,),
+                order_by=(Dynamogram.snapshot_time.desc(),),
+                limit=limit,
+            ),
+        )
+
     async def get_closest_before(
         self,
         well_id: int,
