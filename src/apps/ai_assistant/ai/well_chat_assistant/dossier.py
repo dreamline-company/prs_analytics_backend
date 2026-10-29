@@ -108,7 +108,7 @@ from apps.wells.repositories.well_state import (
     WellStateRunRepository,
 )
 from apps.wells.services import CoordPointService, NGDUWellsService, WellGdisService
-from apps.wells.services.month_production import WellMonthProductionService
+from apps.wells.services.production_profile import WellProductionProfileService
 from apps.wells.services.well_state.read import WellStateReadService
 from apps.wells.use_cases.get_well_card import GetWellCardUseCase
 from core import get_logger
@@ -408,8 +408,10 @@ async def _load_card(session: AsyncSession, well: Well) -> WellCardDTO:
             state_repository=WellStateRepository(session=session),
             run_repository=WellStateRunRepository(session=session),
         ),
-        well_month_production_service=WellMonthProductionService(
+        production_profile_service=WellProductionProfileService(
             telemetry_repository=TelemetryRepository(session=session),
+            tech_regime_repository=TechRegimeRepository(session=session),
+            sdmo_station_repository=SdmoStationRepository(session=session),
             sdmo_fc_data_repository=SdmoFcDataRepository(session=session),
             well_status_repository=WellStatusRepository(session=session),
         ),

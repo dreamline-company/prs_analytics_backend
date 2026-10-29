@@ -32,6 +32,10 @@ from apps.wells.dto.internal.well_coords import WellCoordMapPointDTO
 from apps.wells.dto.internal.well_matrix import WellMatrixItemDTO
 from apps.wells.dto.internal.well_matrix_incidents import WellMatrixIncidentDTO
 from apps.wells.dto.internal.well_overview import WellOverviewDTO
+from apps.wells.dto.internal.well_production_profile import (
+    ProfilePeriod,
+    WellProductionProfileDTO,
+)
 from apps.wells.dto.internal.well_timeline import WellTimelineDTO
 from apps.wells.dto.queries.well import (
     GetWellCardQuery,
@@ -49,6 +53,7 @@ from apps.wells.dto.responses.well import (
     WellDynamogramsResponseDTO,
     WellMatrixIncidentsResponseDTO,
     WellOverviewResponseDTO,
+    WellProductionProfileResponseDTO,
     WellsMatrixResponseDTO,
     WellTimelineResponseDTO,
 )
@@ -69,7 +74,7 @@ from apps.wells.repositories.well_state import (
 )
 from apps.wells.repositories.well_status import WellStatusRepository
 from apps.wells.services import CoordPointService, NGDUWellsService, WellGdisService
-from apps.wells.services.month_production import WellMonthProductionService
+from apps.wells.services.production_profile import WellProductionProfileService
 from apps.wells.services.well_state.read import WellStateReadService
 from apps.wells.use_cases.get_well_card import GetWellCardUseCase
 from apps.wells.use_cases.get_well_coords import GetWellCoordsUseCase
@@ -77,6 +82,9 @@ from apps.wells.use_cases.get_well_matrix_incidents import (
     GetWellMatrixIncidentsUseCase,
 )
 from apps.wells.use_cases.get_well_overview import GetWellOverviewUseCase
+from apps.wells.use_cases.get_well_production_profile import (
+    GetWellProductionProfileUseCase,
+)
 from apps.wells.use_cases.get_well_timeline import GetWellTimelineUseCase
 from apps.wells.use_cases.get_wells_matrix import GetWellsMatrixUseCase
 from apps.wells.use_cases.list_dynamograms_by_well_id import (
@@ -255,14 +263,41 @@ async def get_well_card(
             state_repository=WellStateRepository(session=session),
             run_repository=WellStateRunRepository(session=session),
         ),
-        well_month_production_service=WellMonthProductionService(
-            telemetry_repository=TelemetryRepository(session=session),
-            sdmo_fc_data_repository=SdmoFcDataRepository(session=session),
-            well_status_repository=WellStatusRepository(session=session),
-        ),
+        production_profile_service=_production_profile_service(session),
     )
     card = await use_case.execute(GetWellCardQuery(well_id=well_id))
     return WellCardResponseDTO(data=card)
+
+
+def _production_profile_service(session: AsyncSession) -> WellProductionProfileService:
+    return WellProductionProfileService(
+        telemetry_repository=TelemetryRepository(session=session),
+        tech_regime_repository=TechRegimeRepository(session=session),
+        sdmo_station_repository=SdmoStationRepository(session=session),
+        sdmo_fc_data_repository=SdmoFcDataRepository(session=session),
+        well_status_repository=WellStatusRepository(session=session),
+    )
+
+
+@router.get(
+    "/{well_id}/production-profile",
+    response_model=AppResponse[WellProductionProfileDTO],
+)
+async def get_well_production_profile(
+    session: Annotated[AsyncSession, Depends(get_app_session)],
+    well_id: Annotated[int, Path(ge=1, description="Well ID (wells_well.id)")],
+    period: Annotated[
+        ProfilePeriod,
+        Query(description="day / 3d — by hour, week / month (from the 1st) — by day."),
+    ] = ProfilePeriod.THREE_DAYS,
+) -> WellProductionProfileResponseDTO:
+    """Профиль добычи за период: план, факт с учётом простоев, точки графика."""
+    use_case = GetWellProductionProfileUseCase(
+        well_repository=WellRepository(session=session),
+        production_profile_service=_production_profile_service(session),
+    )
+    profile = await use_case.execute(well_id, period)
+    return WellProductionProfileResponseDTO(data=profile)
 
 
 @router.get("/{well_id}/overview", response_model=AppResponse[WellOverviewDTO])

@@ -183,7 +183,7 @@ class TechRegimeRepository(
         return await self.get_list(
             QuerySpec(
                 filters=tuple(filters),
-                order_by=(TechRegime.start_date.asc(),),
+                order_by=(TechRegime.start_date.asc(), TechRegime.id.asc()),
             ),
         )
 
