@@ -24,11 +24,12 @@ from apps.wells.dto.internal.well_card import (
     WellCardPassportDTO,
     WellCardStatusDTO,
 )
+from apps.wells.dto.internal.well_production_profile import ProfilePeriod
 from apps.wells.dto.queries.well import GetWellCardQuery
 from apps.wells.repositories.status_history import WellStatusHistoryRepository
 from apps.wells.repositories.well import WellRepository
 from apps.wells.services import CoordPointService, WellGdisService
-from apps.wells.services.month_production import WellMonthProductionService
+from apps.wells.services.production_profile import WellProductionProfileService
 from apps.wells.services.well_state.read import WellStateReadService
 from core.settings import get_settings
 from shared.errors import HttpError
@@ -58,7 +59,7 @@ class GetWellCardUseCase:
         current_repair_service: CurrentRepairService,
         well_gdis_service: WellGdisService,
         well_state_read_service: WellStateReadService,
-        well_month_production_service: WellMonthProductionService,
+        production_profile_service: WellProductionProfileService,
     ) -> None:
         self.well_repository = well_repository
         self.well_rates_service = well_rates_service
@@ -71,7 +72,7 @@ class GetWellCardUseCase:
         self.current_repair_service = current_repair_service
         self.well_gdis_service = well_gdis_service
         self.well_state_read_service = well_state_read_service
-        self.well_month_production_service = well_month_production_service
+        self.production_profile_service = production_profile_service
 
     async def execute(self, query: GetWellCardQuery) -> WellCardDTO:
         well = await self.well_repository.get_by_id(id_=query.well_id)
@@ -124,11 +125,11 @@ class GetWellCardUseCase:
         coord = await self.coord_point_service.resolve(well.coords_id)
         incident_status = await self.well_incident_status_service.get_for_well(well.id)
         state = await self.well_state_read_service.get_for_well(well.id)
-        # Доля работы — по станции последнего отсчёта, как параметры насоса.
-        month = await self.well_month_production_service.get_oil_fact(
+        # Тот же расчёт, что профиль добычи за месяц: одно число везде.
+        month = await self.production_profile_service.get(
             well_id=well.id,
             abai_well_id=well.abai_id,
-            station_id=pump["station_id"] if pump is not None else None,
+            period=ProfilePeriod.MONTH,
             now=datetime.now(get_settings().ZONE_INFO).replace(tzinfo=None),
         )
         current_repair = await self.current_repair_service.get_for_well(well.abai_id)
@@ -160,11 +161,11 @@ class GetWellCardUseCase:
                 h_din_m=dynamic_level.h_din_m if dynamic_level else None,
                 h_din_date=dynamic_level.meas_date if dynamic_level else None,
                 zero_rate_days=ZERO_RATE_DAYS_STUB,
-                oil_rate_month=month.oil_rate,
+                oil_rate_month=month.fact_oil,
                 oil_rate_month_working=month.oil_rate_working,
                 work_share_month=month.work_share,
                 work_share_month_source=month.work_share_source,
-                month_measurements=month.measurements,
+                month_measurements=month.measurements_count,
                 month_period_from=month.period_from,
             ),
         )

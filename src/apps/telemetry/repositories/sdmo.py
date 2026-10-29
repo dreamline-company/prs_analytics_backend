@@ -9,6 +9,7 @@ from sqlalchemy import (
     case,
     cast,
     func,
+    literal_column,
     select,
     text,
     true,
@@ -313,16 +314,17 @@ class SdmoFcDataRepository(
         )
         return await self.fetch_all(stmt)
 
-    async def count_drive_running(
+    async def drive_running_by_hour(
         self,
-        station_id: int,
+        station_ids: Sequence[int],
         *,
         since: datetime,
         until: datetime,
         running_codes: Sequence[int],
         stopped_codes: Sequence[int],
-    ) -> tuple[int, int]:
-        """(пригодных отсчётов, из них с работающим приводом) за [since, until).
+    ) -> dict[datetime, tuple[int, int]]:
+        """По часам за [since, until): начало часа → (пригодных отсчётов, из
+        них с работающим приводом).
 
         Классификация — как ``apps.telemetry.services.drive.drive_running``:
         код статуса 1999, без него или при неизвестном коде — обороты 1998.
@@ -330,6 +332,8 @@ class SdmoFcDataRepository(
         любого числа). Отсчёты станции идут равномерно, поэтому доля отсчётов
         — доля времени.
         """
+        if not station_ids:
+            return {}
         status = getattr(SdmoFcData, f"r_{VLT_STATUS_REGISTER}")
         speed = getattr(SdmoFcData, f"r_{ROTOR_SPEED_REGISTER}")
         code = case(
@@ -344,16 +348,19 @@ class SdmoFcDataRepository(
             (speed_ok, 0),
             else_=None,
         )
-        row = (
-            await self.session.execute(
-                select(func.count(running), func.coalesce(func.sum(running), 0)).where(
-                    SdmoFcData.station_id == station_id,
-                    SdmoFcData.savetime >= since,
-                    SdmoFcData.savetime < until,
-                ),
+        # Литерал, а не параметр: иначе date_trunc в SELECT и GROUP BY получит
+        # разные параметры, и PostgreSQL не признает их одним выражением.
+        start = func.date_trunc(literal_column("'hour'"), SdmoFcData.savetime)
+        rows = await self.session.execute(
+            select(start, func.count(running), func.coalesce(func.sum(running), 0))
+            .where(
+                SdmoFcData.station_id.in_(station_ids),
+                SdmoFcData.savetime >= since,
+                SdmoFcData.savetime < until,
             )
-        ).one()
-        return int(row[0]), int(row[1])
+            .group_by(start),
+        )
+        return {row[0]: (int(row[1]), int(row[2])) for row in rows}
 
     async def list_station_rows_before(
         self,
