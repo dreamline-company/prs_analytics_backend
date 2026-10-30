@@ -113,6 +113,7 @@ def test_kainar_wells_only_from_vmb_in_any_scope() -> None:
         tech_regime_repository=None,
         sdmo_fc_data_repository=None,
         well_incident_status_service=None,
+        well_status_repository=None,
     )
 
     all_ngdu = asyncio.run(use_case._drop_kmg_outside_vmb([*KMG_WELLS, ZHMG_WELL]))  # noqa: SLF001
@@ -120,3 +121,53 @@ def test_kainar_wells_only_from_vmb_in_any_scope() -> None:
 
     assert [well.name for well in all_ngdu] == ["VMB_0001", "UZK_0003"]
     assert [well.name for well in kmg_only] == ["VMB_0001"]
+
+
+class _Statuses:
+    def __init__(self, codes: dict[int, str]) -> None:
+        self.codes = codes
+        self.since: datetime | None = None
+
+    async def list_intervals_by_abai_well_ids(
+        self,
+        abai_well_ids: list[int],
+        *,
+        since: datetime,
+        until: datetime,  # noqa: ARG002
+    ) -> list[tuple]:
+        self.since = since
+        start, far = datetime(2026, 1, 1), datetime(3333, 12, 31)  # noqa: DTZ001
+        return [
+            (abai_id, start, far, self.codes[abai_id], "", None)
+            for abai_id in abai_well_ids
+            if abai_id in self.codes
+        ]
+
+
+def test_fund_is_working_and_idle_wells_only() -> None:
+    codes = {
+        101: "WRK",  # в работе
+        102: "PEXP",  # периодика
+        103: "DWN",  # в простое
+        104: "NINF",  # нет подачи — простой
+        105: "LCV",  # ликвидирована
+        106: "CNS",  # в консервации
+        107: "SLP",  # бездействие
+    }
+    wells = [SimpleNamespace(id=abai_id, abai_id=abai_id) for abai_id in [*codes, 108]]
+    statuses = _Statuses(codes)
+    use_case = GetNgduSummaryUseCase(
+        ngdu_wells_service=None,
+        org_repository=None,
+        telemetry_repository=None,
+        tech_regime_repository=None,
+        sdmo_fc_data_repository=None,
+        well_incident_status_service=None,
+        well_status_repository=statuses,
+    )
+
+    fund = asyncio.run(use_case._operating_fund(wells, AS_OF))  # noqa: SLF001
+
+    # 108 — без статуса в ABAI, в фонд не входит.
+    assert [well.abai_id for well in fund] == [101, 102, 103, 104]
+    assert statuses.since == AS_OF
