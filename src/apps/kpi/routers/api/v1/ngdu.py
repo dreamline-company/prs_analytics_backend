@@ -17,6 +17,7 @@ from apps.org.repositories.org import OrgRepository
 from apps.telemetry.repositories.sdmo import SdmoFcDataRepository
 from apps.telemetry.repositories.tech_regime import TechRegimeRepository
 from apps.telemetry.repositories.telemetry import TelemetryRepository
+from apps.wells.repositories import WellStatusRepository
 from apps.wells.repositories.well import WellRepository
 from apps.wells.repositories.well_org import WellOrgRepository
 from apps.wells.services import NGDUWellsService
@@ -63,6 +64,7 @@ async def get_ngdu_summary(
             incident_repository=DetectorIncidentRepository(session=app_session),
             detector_repository=DetectorRepository(session=app_session),
         ),
+        well_status_repository=WellStatusRepository(session=app_session),
     )
     summary = await use_case.execute(
         GetNgduSummaryQuery(ngdu_id=ngdu_id, oil_field_id=oil_field_id),

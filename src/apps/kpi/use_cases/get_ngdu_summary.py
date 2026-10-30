@@ -1,10 +1,13 @@
 """Сводка по НГДУ: фонд, добыча нефти, выполнение плана, отклонения.
 
-Все четыре показателя считаются на одном наборе скважин — всех НГДУ, одного
-НГДУ или одного месторождения (см. ``NGDUWellsService.list_wells``) — и из
-тех же источников, что паспорт матрицы: факт из
-``telemetry_well``, план из техрежима ABAI, статус станции из СДМО, уровень
-эпизодов детекторов — как ``incident_status.level`` в матрице инцидентов.
+Все четыре показателя считаются на одном наборе скважин — фонде всех НГДУ,
+одного НГДУ или одного месторождения (см. ``NGDUWellsService.list_wells``).
+Фонд — только скважины в работе и в простое по текущему статусу ABAI (группы
+кодов — как в состоянии скважины): ликвидированные, законсервированные,
+бездействующие, проектные и т. п. в него не входят (решение 30.10.2026).
+Цифры — из тех же источников, что паспорт матрицы: факт из ``telemetry_well``,
+план из техрежима ABAI, статус станции из СДМО, уровень эпизодов детекторов —
+как ``incident_status.level`` в матрице инцидентов.
 Свёртка чисел вынесена в чистую функцию ``summarize`` — правила порогов
 проверяются без базы.
 
@@ -36,7 +39,14 @@ from apps.telemetry.repositories.telemetry import TelemetryRepository
 from apps.telemetry.services.drive import vlt_running
 from apps.telemetry.services.well_rates import FRESH_TELEMETRY_DAYS
 from apps.wells.models.well import Well
+from apps.wells.repositories import WellStatusRepository
 from apps.wells.services import NGDUWellsService
+from apps.wells.services.well_state.refresh import current_statuses
+from apps.wells.services.well_state.rules import (
+    KIND_IDLE,
+    KIND_PERIODIC,
+    KIND_WORK,
+)
 from core.settings import get_settings
 from shared.constants.ngdu import KMG_ONLY_OIL_FIELD_PREFIX, AbaiNGDUIDsEnum
 
@@ -45,6 +55,9 @@ from shared.constants.ngdu import KMG_ONLY_OIL_FIELD_PREFIX, AbaiNGDUIDsEnum
 PLAN_GRACE_DAYS: Final = 31
 # Недобор (losses) — по скважинам, где факт ниже плана больше чем на эту долю.
 DEVIATION_THRESHOLD: Final = 0.10
+# Фонд: в работе (в т. ч. периодика, накопление) и в простое (в т. ч. нет
+# подачи, авария) — по текущему статусу ABAI.
+FUND_STATUS_KINDS: Final = frozenset({KIND_WORK, KIND_PERIODIC, KIND_IDLE})
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +129,7 @@ class GetNgduSummaryUseCase:
         tech_regime_repository: TechRegimeRepository,
         sdmo_fc_data_repository: SdmoFcDataRepository,
         well_incident_status_service: WellIncidentStatusService,
+        well_status_repository: WellStatusRepository,
     ) -> None:
         self.ngdu_wells_service = ngdu_wells_service
         self.org_repository = org_repository
@@ -123,6 +137,7 @@ class GetNgduSummaryUseCase:
         self.tech_regime_repository = tech_regime_repository
         self.sdmo_fc_data_repository = sdmo_fc_data_repository
         self.well_incident_status_service = well_incident_status_service
+        self.well_status_repository = well_status_repository
 
     async def execute(
         self,
@@ -138,6 +153,7 @@ class GetNgduSummaryUseCase:
             oil_field_id=query.oil_field_id,
         )
         wells = await self._drop_kmg_outside_vmb(wells)
+        wells = await self._operating_fund(wells, now)
         if not wells:
             return summarize([], as_of=now)
 
@@ -175,6 +191,24 @@ class GetNgduSummaryUseCase:
                 ),
             )
         return summarize(rows, as_of=now)
+
+    async def _operating_fund(self, wells: list[Well], now: datetime) -> list[Well]:
+        """Скважины в работе и в простое на ``now`` по статусу ABAI; без
+        статуса — не в фонде."""
+        if not wells:
+            return wells
+        intervals = await self.well_status_repository.list_intervals_by_abai_well_ids(
+            [well.abai_id for well in wells],
+            since=now,
+            until=now + timedelta(seconds=1),
+        )
+        statuses = current_statuses(intervals, now)
+        return [
+            well
+            for well in wells
+            if well.abai_id in statuses
+            and statuses[well.abai_id].kind in FUND_STATUS_KINDS
+        ]
 
     async def _drop_kmg_outside_vmb(self, wells: list[Well]) -> list[Well]:
         """Убрать скважины Кайнармунайгаза вне месторождения VMB."""
