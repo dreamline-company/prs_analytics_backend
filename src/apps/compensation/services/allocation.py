@@ -13,6 +13,15 @@
 С 27.10.2026 за потерей не больше ``MAX_DONORS_PER_LOSS`` доноров: пул
 меньше суммы потерь, и без лимита его целиком забирала крупнейшая. Лишние
 пары «на согласовании» закрываются, их доноры уходят следующим потерям.
+
+С 31.10.2026 крупная потеря перехватывает доноров у меньших
+(docs/compensation_preemption_plan.md): иначе потеря, вставшая позже, оставалась
+без доноров при разобранном пуле. Порядок поиска для потери: свободные низкого и
+среднего риска, перехват таких же, свободные высокого, перехват высокого.
+Перехват — только пары «на согласовании», у потери меньше в ``PREEMPT_RATIO``
+раза (без плана — всегда), если текущая стоит не меньше ``PREEMPT_AFTER`` и
+покрытие НГДУ не падает; жертвы — сначала самая мелкая потеря, у неё ближайший
+донор. Донор, взятый в прогоне, сразу числится за новой потерей.
 """
 
 import math
@@ -25,6 +34,7 @@ from apps.compensation.constants import (
     CLOSE_DONOR_UNAVAILABLE,
     CLOSE_LOSS_RESOLVED,
     MAX_DONORS_PER_LOSS,
+    PREEMPT_RATIO,
     RECOMMENDATION_PENDING,
     RISK_HIGH,
     RISK_LOW,
@@ -78,9 +88,9 @@ class LossInput:
     well_id: int
     field: str  # префикс месторождения (VMB в VMB_0220)
     value: float  # план Qн, т/сут
-    covered: float  # уже закрыто открытыми парами
     point: Point | None
-    donors: int = 0  # сколько открытых пар уже у потери
+    # Стоит не меньше PREEMPT_AFTER — может перехватывать доноров у меньших.
+    can_preempt: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,51 +103,186 @@ class DonorInput:
 
 
 @dataclass(frozen=True, slots=True)
+class HeldDonor:
+    """Донор открытой пары: занимает лимит и покрытие своей потери."""
+
+    pair_id: int
+    loss_well_id: int
+    donor: DonorInput
+    pending: bool  # «на согласовании» — можно перехватить
+
+
+@dataclass(frozen=True, slots=True)
 class NewPair:
     loss_well_id: int
     donor_id: int
     distance_m: int | None
+    preempted_pair_id: int | None = None  # донор перехвачен из этой пары
 
 
-def allocate(
-    losses: Sequence[LossInput],
-    free_donors: Sequence[DonorInput],
-    *,
-    excluded: frozenset[tuple[int, int]] = frozenset(),
-    max_donors: int = MAX_DONORS_PER_LOSS,
-) -> list[NewPair]:
-    """Закрепить свободных доноров за непокрытыми частями потерь.
+@dataclass(frozen=True, slots=True)
+class Allocation:
+    pairs: list[NewPair]
 
-    ``excluded`` — пары (скважина потери, донор), которые технолог отклонил:
-    этого донора этой потере больше не предлагаем. ``max_donors`` — сколько
-    доноров всего (с уже открытыми парами) может быть у одной потери.
-    """
-    used: set[int] = set()
-    pairs: list[NewPair] = []
-    for loss in sorted(losses, key=lambda item: (-item.value, item.well_id)):
-        remaining = loss.value - loss.covered
-        slots = max_donors - loss.donors
-        if remaining <= 0 or slots <= 0:
-            continue
-        candidates = [
-            donor
-            for donor in free_donors
-            if donor.donor_id not in used
-            and donor.field == loss.field
-            and (loss.well_id, donor.donor_id) not in excluded
+    @property
+    def preempted(self) -> list[int]:
+        """Пары, закрываемые с причиной «перехвачен»."""
+        return [
+            pair.preempted_pair_id
+            for pair in self.pairs
+            if pair.preempted_pair_id is not None
         ]
+
+
+# Погрешность сравнения тонн: приросты и планы — дроби с двумя знаками.
+_EPS = 1e-9
+
+
+class _Allocator:
+    """Состояние одного подбора: кто чей донор, покрытие и число доноров."""
+
+    def __init__(  # noqa: PLR0913
+        self,
+        losses: Sequence[LossInput],
+        free_donors: Sequence[DonorInput],
+        held: Sequence[HeldDonor],
+        *,
+        excluded: frozenset[tuple[int, int]],
+        max_donors: int,
+        preempt_ratio: float,
+    ) -> None:
+        self.values = {loss.well_id: loss.value for loss in losses}
+        self.free = list(free_donors)
+        self.excluded = excluded
+        self.max_donors = max_donors
+        self.preempt_ratio = preempt_ratio
+        self.used: set[int] = set()  # свободные, взятые в этом прогоне
+        self.sums: dict[int, float] = defaultdict(float)
+        self.counts: dict[int, int] = defaultdict(int)
+        # Можно перехватить: донор → его пара «на согласовании» (пока она цела).
+        self.preemptable: dict[int, HeldDonor] = {}
+        self.pairs: list[NewPair] = []
+        for item in held:
+            self.sums[item.loss_well_id] += item.donor.gain
+            self.counts[item.loss_well_id] += 1
+            if item.pending:
+                self.preemptable[item.donor.donor_id] = item
+
+    def run(self, losses: Sequence[LossInput]) -> Allocation:
+        for loss in sorted(losses, key=lambda item: (-item.value, item.well_id)):
+            for high in (False, True):
+                self._take_free(loss, high=high)
+                if loss.can_preempt:
+                    self._take_held(loss, high=high)
+        return Allocation(self.pairs)
+
+    def _remaining(self, loss: LossInput) -> float:
+        return loss.value - self.sums[loss.well_id]
+
+    def _open(self, loss: LossInput) -> bool:
+        return (
+            self._remaining(loss) > _EPS and self.counts[loss.well_id] < self.max_donors
+        )
+
+    def _fits(self, loss: LossInput, donor: DonorInput, *, high: bool) -> bool:
+        return (
+            (donor.risk == RISK_HIGH) == high
+            and donor.field == loss.field
+            and (loss.well_id, donor.donor_id) not in self.excluded
+        )
+
+    def _assign(
+        self,
+        loss: LossInput,
+        donor: DonorInput,
+        distance: int | None,
+        preempted_pair_id: int | None = None,
+    ) -> None:
+        self.sums[loss.well_id] += donor.gain
+        self.counts[loss.well_id] += 1
+        self.pairs.append(
+            NewPair(loss.well_id, donor.donor_id, distance, preempted_pair_id),
+        )
+
+    def _take_free(self, loss: LossInput, *, high: bool) -> None:
         ranked = sorted(
-            ((donor, distance_m(loss.point, donor.point)) for donor in candidates),
+            (
+                (donor, distance_m(loss.point, donor.point))
+                for donor in self.free
+                if donor.donor_id not in self.used
+                and self._fits(loss, donor, high=high)
+            ),
             key=lambda item: _donor_rank(item[0].risk, item[1], item[0].donor_id),
         )
         for donor, distance in ranked:
-            if remaining <= 0 or slots <= 0:
-                break
-            used.add(donor.donor_id)
-            pairs.append(NewPair(loss.well_id, donor.donor_id, distance))
-            remaining -= donor.gain
-            slots -= 1
-    return pairs
+            if not self._open(loss):
+                return
+            self.used.add(donor.donor_id)
+            self._assign(loss, donor, distance)
+
+    def _owner_loses(self, owner_id: int, gain: float) -> float:
+        """Сколько потерял бы владелец в покрытии (с потолком своей величины);
+        у потери без плана величина 0 — она не теряет ничего."""
+        value = self.values.get(owner_id, 0.0)
+        before = self.sums[owner_id]
+        return min(before, value) - min(before - gain, value)
+
+    def _take_held(self, loss: LossInput, *, high: bool) -> None:
+        candidates = [
+            (item, distance_m(loss.point, item.donor.point))
+            for item in self.preemptable.values()
+            if item.loss_well_id != loss.well_id
+            and self._fits(loss, item.donor, high=high)
+            and self.values.get(item.loss_well_id, 0.0) * self.preempt_ratio
+            <= loss.value + _EPS
+        ]
+        # Жертвы — сначала самая мелкая потеря, у неё ближайший донор.
+        candidates.sort(
+            key=lambda pair: (
+                self.values.get(pair[0].loss_well_id, 0.0),
+                pair[1] is None,
+                pair[1] or 0,
+                pair[0].donor.donor_id,
+            ),
+        )
+        for item, distance in candidates:
+            if not self._open(loss):
+                return
+            gain_here = min(item.donor.gain, self._remaining(loss))
+            if gain_here + _EPS < self._owner_loses(item.loss_well_id, item.donor.gain):
+                continue  # покрытие НГДУ упало бы
+            del self.preemptable[item.donor.donor_id]
+            self.sums[item.loss_well_id] -= item.donor.gain
+            self.counts[item.loss_well_id] -= 1
+            self._assign(loss, item.donor, distance, item.pair_id)
+
+
+def allocate(  # noqa: PLR0913
+    losses: Sequence[LossInput],
+    free_donors: Sequence[DonorInput],
+    *,
+    held: Sequence[HeldDonor] = (),
+    excluded: frozenset[tuple[int, int]] = frozenset(),
+    max_donors: int = MAX_DONORS_PER_LOSS,
+    preempt_ratio: float = PREEMPT_RATIO,
+) -> Allocation:
+    """Закрепить доноров за непокрытыми частями потерь.
+
+    ``held`` — доноры открытых пар (после закрытия недоступных и сверх
+    лимита): они занимают лимит и покрытие своих потерь, а пары «на
+    согласовании» могут перехватить потери крупнее. ``excluded`` — пары
+    (скважина потери, донор), которые технолог отклонил. Перехват закрывает
+    пару владельца (``Allocation.preempted``) — донор числится за новой
+    потерей сразу, повторно в этом прогоне его не забирают.
+    """
+    return _Allocator(
+        losses,
+        free_donors,
+        held,
+        excluded=excluded,
+        max_donors=max_donors,
+        preempt_ratio=preempt_ratio,
+    ).run(losses)
 
 
 @dataclass(frozen=True, slots=True)
