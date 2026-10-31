@@ -4,7 +4,10 @@ from datetime import datetime
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from apps.compensation.constants import RECOMMENDATION_REJECTED
+from apps.compensation.constants import (
+    RECOMMENDATION_PENDING,
+    RECOMMENDATION_REJECTED,
+)
 from apps.compensation.dto.internal.repositories.compensation import (
     CreateCompensationDonorDTO,
     CreateCompensationRecommendationDTO,
@@ -149,12 +152,19 @@ class CompensationRecommendationRepository(
         *,
         closed_at: datetime,
         reason: str,
-    ) -> None:
-        await self.session.execute(
+        pending_only: bool = False,
+    ) -> bool:
+        """Закрыть открытую пару; ``pending_only`` — только если она всё ещё
+        «на согласовании» (перехват не трогает принятые). True — закрыта."""
+        filters = [
+            CompensationRecommendation.id == pair_id,
+            CompensationRecommendation.closed_at.is_(None),
+        ]
+        if pending_only:
+            filters.append(CompensationRecommendation.status == RECOMMENDATION_PENDING)
+        result = await self.session.execute(
             update(CompensationRecommendation)
-            .where(
-                CompensationRecommendation.id == pair_id,
-                CompensationRecommendation.closed_at.is_(None),
-            )
+            .where(*filters)
             .values(closed_at=closed_at, close_reason=reason),
         )
+        return result.rowcount > 0
