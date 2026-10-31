@@ -180,11 +180,14 @@ class DonorAssigner:
             ],
         )
 
-        def donor_input(donor: CompensationDonor) -> DonorInput:
+        def donor_input(
+            donor: CompensationDonor,
+            gain: float | None = None,
+        ) -> DonorInput:
             return DonorInput(
                 donor.id,
                 well_name_prefix(wells[donor.well_id].name) or "",
-                donor.gain,
+                donor.gain if gain is None else gain,
                 donor.risk,
                 points[donor.well_id],
             )
@@ -206,7 +209,9 @@ class DonorAssigner:
                 HeldDonor(
                     pair.id,
                     pair.loss_well_id,
-                    donor_input(donor_by_id[pair.donor_id]),
+                    # Прирост — из пары, как «компенсировано» на экранах: пул
+                    # могли перезагрузить с другими приростами.
+                    donor_input(donor_by_id[pair.donor_id], pair.gain),
                     pending=pair.status == RECOMMENDATION_PENDING,
                 )
                 for pair in kept
@@ -234,11 +239,16 @@ class DonorAssigner:
                 reason=reason,
             )
         for pair_id in changes.allocation.preempted:
-            await self.pair_repository.close(
+            closed = await self.pair_repository.close(
                 pair_id,
                 closed_at=closed_at,
                 reason=CLOSE_DONOR_PREEMPTED,
+                pending_only=True,
             )
+            if not closed:
+                # Пару успели принять или закрыть — откат НГДУ, подбор через час.
+                msg = f"Preempted pair {pair_id} is no longer pending"
+                raise RuntimeError(msg)
         donor_by_id = changes.donor_by_id
         await self.pair_repository.bulk_create(
             [

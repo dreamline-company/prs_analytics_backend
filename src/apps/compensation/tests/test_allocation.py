@@ -434,3 +434,45 @@ def test_second_run_on_the_result_changes_nothing() -> None:
 
     assert first.pairs  # 100 перехватила
     assert second.pairs == []
+
+
+def test_victim_rejected_by_coverage_then_next_one_is_taken() -> None:
+    # У крупной не хватает 0,3. Самая мелкая (1,0) закрыта донором 2,37 целиком —
+    # перехват уронил бы покрытие на 0,7; следующая (1,5) отдаёт 0,3 без потерь.
+    result = allocate(
+        [_loss(100, 3.0, can_preempt=True), _loss(200, 1.5), _loss(300, 1.0)],
+        [],
+        held=[
+            _held(100, _donor(1, 2.7, 1), pending=False),
+            _held(300, _donor(2, 2.37, 2)),
+            _held(200, _donor(3, 0.3, 3)),
+        ],
+    )
+
+    assert [(pair.donor_id, pair.preempted_pair_id) for pair in result.pairs] == [
+        (3, 300),
+    ]
+
+
+def test_high_risk_donor_is_preempted_last() -> None:
+    result = allocate(
+        [_loss(100, 5.0, can_preempt=True), _loss(200, 1.0)],
+        [],
+        held=[
+            _held(200, _donor(1, 0.3, 1, risk=RISK_HIGH)),
+            _held(200, _donor(2, 0.3, 9, risk=RISK_LOW)),
+        ],
+    )
+
+    assert [pair.donor_id for pair in result.pairs] == [2, 1]
+
+
+def test_ratio_boundary_survives_float_rounding() -> None:
+    # 2,5 × 1,2 = 3,0000000000000004 — ровно 1,2 раза меньше, перехват есть.
+    result = allocate(
+        [_loss(100, 3.0, can_preempt=True), _loss(200, 2.5)],
+        [],
+        held=[_held(200, _donor(1, 0.3, 1))],
+    )
+
+    assert result.preempted == [100]
