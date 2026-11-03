@@ -21,6 +21,12 @@ from shared.integrations.abai.repositories.spatial_objects import (
 from shared.integrations.abai.repositories.tech_mode_prod_oil import (
     ABAITechModeProdOilRepository,
 )
+from shared.integrations.abai.repositories.techs import (
+    ABAITechHistoryRepository,
+    ABAITechRepository,
+    ABAITechTypeRepository,
+    ABAIWellTechRepository,
+)
 from shared.integrations.abai.repositories.well_expl_types import (
     ABAIWellExplTypeRepository,
 )
@@ -50,12 +56,16 @@ __all__ = (
     "ABAIReasonRepository",
     "ABAIRepairWorkTypeRepository",
     "ABAISpatialObjectRepository",
+    "ABAITechHistoryRepository",
     "ABAITechModeProdOilRepository",
+    "ABAITechRepository",
+    "ABAITechTypeRepository",
     "ABAIWellExplRepository",
     "ABAIWellExplTypeRepository",
     "ABAIWellOrgRepository",
     "ABAIWellRepository",
     "ABAIWellStatusRepository",
     "ABAIWellStatusTypeRepository",
+    "ABAIWellTechRepository",
     "ABAIWellWorkoverRepository",
 )

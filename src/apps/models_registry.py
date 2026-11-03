@@ -54,6 +54,7 @@ from apps.wells.models.gdis import GdisCurrent, GdisCurrentValue, GdisMetric
 from apps.wells.models.spo import SPO
 from apps.wells.models.spo_event import SPOEvent
 from apps.wells.models.status_history import WellStatusHistory
+from apps.wells.models.tech import Tech, TechHistory, TechType, WellTech
 from apps.wells.models.well import Well
 from apps.wells.models.well_expl import WellExpl, WellExplType
 from apps.wells.models.well_org import WellOrg
@@ -106,7 +107,10 @@ __all__ = (
     "SdmoFcData",
     "SdmoFcReg",
     "SdmoStation",
+    "Tech",
+    "TechHistory",
     "TechRegime",
+    "TechType",
     "Telemetry",
     "UniqueBrigade",
     "Well",
@@ -121,6 +125,7 @@ __all__ = (
     "WellStatusHistory",
     "WellStatusReason",
     "WellStatusType",
+    "WellTech",
 )
 
 from shared.database.sql.models import AppBaseModel

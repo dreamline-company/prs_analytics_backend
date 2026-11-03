@@ -7,6 +7,12 @@ from apps.wells.repositories.gdis import (
 )
 from apps.wells.repositories.spo import SPORepository
 from apps.wells.repositories.status_history import WellStatusHistoryRepository
+from apps.wells.repositories.tech import (
+    TechHistoryRepository,
+    TechRepository,
+    TechTypeRepository,
+    WellTechRepository,
+)
 from apps.wells.repositories.well import WellRepository
 from apps.wells.repositories.well_expl import (
     WellExplRepository,
@@ -31,6 +37,9 @@ __all__ = (
     "GdisCurrentValueRepository",
     "GdisMetricRepository",
     "SPORepository",
+    "TechHistoryRepository",
+    "TechRepository",
+    "TechTypeRepository",
     "WellCoordRepository",
     "WellDriveStateRepository",
     "WellExplRepository",
@@ -43,4 +52,5 @@ __all__ = (
     "WellStatusReasonRepository",
     "WellStatusRepository",
     "WellStatusTypeRepository",
+    "WellTechRepository",
 )
