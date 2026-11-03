@@ -104,6 +104,7 @@ class GetCompensationContourUseCase:
         contour.losses = CompensationContourLossDTO(
             value=round_rate(loss),
             plan_date=plan_date,
+            source=state.loss_sources.get(well.id),
         )
         contour.compensated = CompensationContourCompensatedDTO(
             value=round_rate(value),

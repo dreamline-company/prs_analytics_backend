@@ -165,11 +165,17 @@ def has_telemetry(item: PoolInput) -> bool:
 def _telemetry_fails(item: PoolInput, norms: FieldNorms) -> list[str]:
     tel = item.telemetry
     fails = []
+    # Не посчитанный показатель (нулевой момент, мёртвый датчик) — исправность
+    # не подтверждена, критерий не пройден.
     if item.lift == LIFT_SHGN:
         k_max = norms.k_max.get(item.field)
-        if tel.k is not None and k_max is not None and tel.k > k_max:
+        if tel.k is None:
+            fails.append("K не посчитан")
+        elif k_max is not None and tel.k > k_max:
             fails.append(f"K {tel.k:.2f} > P70 {k_max:.2f}")
     else:
+        if tel.moment_cv is None or tel.moment_drift is None:
+            fails.append("момент не посчитан")
         if tel.moment_cv is not None and tel.moment_cv > MOMENT_CV_MAX:
             fails.append(f"разброс момента {tel.moment_cv:.3f}")
         if tel.moment_drift is not None and tel.moment_drift > MOMENT_DRIFT_MAX:

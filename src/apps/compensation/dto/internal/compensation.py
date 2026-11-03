@@ -50,8 +50,10 @@ class CompensationPairDonorDTO(BaseModel):
 
 
 class CompensationContourLossDTO(BaseModel):
+    # Факт нефти за 10 сут до остановки, нет факта — план; plan_date — дата расчёта.
     value: float
     plan_date: date
+    source: str | None = None  # fact / plan
 
 
 class CompensationContourCompensatedDTO(BaseModel):

@@ -24,6 +24,9 @@ from apps.compensation.services.pool_data import (
     implied_density,
 )
 from apps.telemetry.repositories.tech_regime import TechRegimeRepository
+from core import get_logger
+
+logger = get_logger(__name__)
 
 LOSS_DAYS = 10
 MIN_FACT = 0.1  # т/сут: меньше — считаем, что факта нет
@@ -38,6 +41,9 @@ SQL_WINDOW = """
       cast(:w as bigint[]), cast(:s as timestamp[]), cast(:u as timestamp[])
     ) as x(well, since, until)
       on m.well = x.well and m.dend > x.since and m.dbeg < x.until
+    -- Условия на саму таблицу уходят в удалённый запрос FDW: без них
+    -- планировщик мог бы вытянуть весь meas_liq.
+    where m.well = any(cast(:w as bigint[])) and m.dend > :min_since
 """
 SQL_STOPPED = """
     select well_id, state, started_at, reason_ru from wells_well_state
@@ -91,6 +97,7 @@ async def _daily_oil_windows(
         "w": wells,
         "s": [windows[w][0] for w in wells],
         "u": [windows[w][1] for w in wells],
+        "min_since": min(since for since, _until in windows.values()),
     }
     for table, column, target in (
         ("meas_liq", "liquid", liquid),
@@ -128,7 +135,13 @@ async def compute_losses(
     for well_id, _state, since, _reason in states:
         days = loss_window(since)
         windows[by_id[well_id].abai_id] = (days[-1], days[0] + timedelta(days=1))
-    oil = await _daily_oil_windows(abai, windows, on_date=now)
+    try:
+        oil = await _daily_oil_windows(abai, windows, on_date=now)
+    except Exception:
+        # ABAI недоступен — потери по плану: закрытия пар не должны вставать.
+        logger.exception("ABAI daily oil unavailable, losses fall back to plan")
+        await abai.rollback()
+        oil = DailyOil({}, {}, {})
     regimes = await TechRegimeRepository(app).get_current_by_abai_well_ids(
         [by_id[well_id].abai_id for well_id, *_ in states],
         on_date=now.date(),

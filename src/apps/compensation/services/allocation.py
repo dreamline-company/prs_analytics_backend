@@ -33,6 +33,7 @@ from dataclasses import dataclass
 
 from apps.compensation.constants import (
     CLOSE_DONOR_LIMIT,
+    CLOSE_DONOR_OTHER_GZU,
     CLOSE_DONOR_UNAVAILABLE,
     CLOSE_LOSS_RESOLVED,
     MAX_DONORS_PER_LOSS,
@@ -74,15 +75,6 @@ def distance_m(a: Point | None, b: Point | None) -> int | None:
 def covered(loss: float, gains: Iterable[float]) -> float:
     """Сколько потери закрыто донорами: их прирост, но не больше самой потери."""
     return min(sum(gains), loss)
-
-
-def _donor_rank(
-    risk: str,
-    distance: int | None,
-    tiebreak: int,
-) -> tuple[bool, bool, int, int]:
-    """Кто из доноров потери лучше: низкий/средний риск, затем ближе."""
-    return (risk == RISK_HIGH, distance is None, distance or 0, tiebreak)
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,6 +284,10 @@ class OpenPair:
     status: str
     risk: str  # риск донора
     distance_m: int | None
+    gain: float = 0.0
+    # Группы подбора (ГЗУ) потери и донора; None — не проверять.
+    loss_group: str | None = None
+    donor_group: str | None = None
 
 
 def pairs_to_close(
@@ -301,20 +297,28 @@ def pairs_to_close(
     available_donor_well_ids: set[int],
     max_donors: int = MAX_DONORS_PER_LOSS,
 ) -> list[tuple[int, str]]:
-    """Какие пары закрыть и почему: потеря снята, донор недоступен или у
-    потери доноров больше лимита.
+    """Какие пары закрыть и почему: потеря снята, донор недоступен, донор с
+    другой ГЗУ (только «на согласовании»: принятые и применённые не трогаем)
+    или у потери доноров больше лимита.
 
     Сверх лимита закрываются только пары «на согласовании», худшие по тому же
-    порядку, что в ``allocate``; принятые и применённые остаются и занимают
-    места лимита первыми.
+    порядку, что в ``allocate`` (меньший прирост); принятые и применённые
+    остаются и занимают места лимита первыми.
     """
     result = []
     kept: dict[int, list[OpenPair]] = defaultdict(list)
     for pair in open_pairs:
+        other_gzu = (
+            pair.loss_group is not None
+            and pair.donor_group is not None
+            and pair.loss_group != pair.donor_group
+        )
         if pair.loss_well_id not in stopped_well_ids:
             result.append((pair.pair_id, CLOSE_LOSS_RESOLVED))
         elif pair.donor_well_id not in available_donor_well_ids:
             result.append((pair.pair_id, CLOSE_DONOR_UNAVAILABLE))
+        elif other_gzu and pair.status == RECOMMENDATION_PENDING:
+            result.append((pair.pair_id, CLOSE_DONOR_OTHER_GZU))
         else:
             kept[pair.loss_well_id].append(pair)
 
@@ -323,7 +327,8 @@ def pairs_to_close(
             pairs,
             key=lambda pair: (
                 pair.status == RECOMMENDATION_PENDING,
-                _donor_rank(pair.risk, pair.distance_m, pair.pair_id),
+                -pair.gain,
+                pair.pair_id,
             ),
         )
         result.extend(

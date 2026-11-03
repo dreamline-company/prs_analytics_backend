@@ -124,7 +124,7 @@ class DonorAssigner:
             try:
                 if self.dry_run:
                     await self.session.execute(text("SET TRANSACTION READ ONLY"))
-                await self.abai.execute(text("SET TRANSACTION READ ONLY"))
+                await self._abai_read_only()
                 changes = await self._plan(ngdu_id)
                 await self.abai.rollback()
                 if self.dry_run:
@@ -147,6 +147,15 @@ class DonorAssigner:
                 len(changes.closing),
                 len(changes.allocation.preempted),
             )
+
+    async def _abai_read_only(self) -> None:
+        """ABAI недоступен — подбор всё равно идёт: потери по плану, закрытия
+        пар не встают (``compute_losses`` сам откатится на план)."""
+        try:
+            await self.abai.execute(text("SET TRANSACTION READ ONLY"))
+        except Exception:
+            logger.exception("ABAI unavailable for compensation losses")
+            await self.abai.rollback()
 
     async def _plan(self, ngdu_id: int) -> NgduChanges:
         """Расчёт без записи."""
@@ -185,6 +194,15 @@ class DonorAssigner:
                     pair.status,
                     donor_by_id[pair.donor_id].risk,
                     pair.distance_m,
+                    gain=pair.gain,
+                    loss_group=gzu_group(
+                        state.gzu.get(pair.loss_well_id),
+                        f"loss:{pair.loss_well_id}",
+                    ),
+                    donor_group=gzu_group(
+                        donor_by_id[pair.donor_id].gzu_abai_id,
+                        f"donor:{pair.donor_id}",
+                    ),
                 )
                 for pair in open_pairs
             ],

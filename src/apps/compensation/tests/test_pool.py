@@ -154,3 +154,15 @@ def test_funnel_counts_step_by_step() -> None:
     assert steps["всего"] == 3
     assert steps["нефть ≥ 2 / 2,5 т/сут"] == 2
     assert steps["в пуле (с телеметрией)"] == 1
+
+
+def test_uncomputed_telemetry_metric_fails() -> None:
+    dead_k = _well(telemetry=replace(TEL_SHGN, k=None))
+    dead_evn = _well(
+        field="VMB",
+        lift=LIFT_EVN,
+        telemetry=replace(TEL_EVN, moment_cv=None),
+    )
+
+    assert "K не посчитан" in [text for _k, text in evaluate(dead_k, NORMS).fails]
+    assert not evaluate(dead_evn, NORMS).in_pool

@@ -12,6 +12,7 @@
 
 import argparse
 import asyncio
+import math
 from collections import defaultdict
 from datetime import datetime
 
@@ -41,6 +42,11 @@ from shared.database.sql.setup import session_makers
 logger = get_logger(__name__)
 
 METHOD = "Методика подбора скважин-доноров, ред. 3"
+# Защита от сбоя данных (пустая таблица состояний, долгий сбой СДМО): если из
+# пула прошлого расчёта выпадает больше этой доли — не записывать, а сообщить.
+# Строки Excel-пула (без calculated_at) в базу не входят.
+MAX_DROP_SHARE = 0.5
+MIN_GUARDED_POOL = 10
 NGDU_TITLES = {
     int(AbaiNGDUIDsEnum.ZHMG): "Жайык",
     int(AbaiNGDUIDsEnum.KMG): "Кайнар VMB",
@@ -51,7 +57,33 @@ def _round(value: float | None, digits: int = 3) -> float | None:
     return round(value, digits) if value is not None else None
 
 
-async def build_pool(*, now: datetime | None = None, dry_run: bool = False) -> dict:
+def _clean(value: object) -> object:
+    """NaN и бесконечность — None: PostgreSQL не примет их в JSONB."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _clean(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clean(item) for item in value]
+    return value
+
+
+def drop_guard(previous: set[int], still_in_pool: set[int]) -> str | None:
+    """Почему не записывать расчёт: из пула выпадает слишком много."""
+    if len(previous) < MIN_GUARDED_POOL:
+        return None
+    dropped = len(previous - still_in_pool)
+    if dropped > len(previous) * MAX_DROP_SHARE:
+        return f"из пула выпадает {dropped} из {len(previous)} доноров"
+    return None
+
+
+async def build_pool(
+    *,
+    now: datetime | None = None,
+    dry_run: bool = False,
+    force: bool = False,
+) -> dict:
     now = now or datetime.now(get_settings().ZONE_INFO).replace(tzinfo=None)
     async with session_makers["app"]() as app, session_makers["abai"]() as abai:
         await abai.execute(text("SET TRANSACTION READ ONLY"))
@@ -65,9 +97,16 @@ async def build_pool(*, now: datetime | None = None, dry_run: bool = False) -> d
         field_names = dict(
             (await app.execute(select(OilField.prefix, OilField.name))).all(),
         )
-        existing = set(
-            (await app.execute(select(CompensationDonor.well_id))).scalars().all(),
-        )
+        existing = {
+            well_id: (in_pool, calculated_at)
+            for well_id, in_pool, calculated_at in await app.execute(
+                select(
+                    CompensationDonor.well_id,
+                    CompensationDonor.in_pool,
+                    CompensationDonor.calculated_at,
+                ),
+            )
+        }
 
         rows, out_of_pool = [], {}
         for well in data.wells:
@@ -101,8 +140,9 @@ async def build_pool(*, now: datetime | None = None, dry_run: bool = False) -> d
                 ),
                 **data.details[well.id],
             }
+            source_row = _clean(source_row)
             if not result.passed:
-                if well.id in existing:
+                if existing.get(well.id, (False, None))[0]:
                     out_of_pool[well.id] = source_row
                 continue
             gzu = data.gzu.get(well.id)
@@ -133,7 +173,7 @@ async def build_pool(*, now: datetime | None = None, dry_run: bool = False) -> d
             )
         # Доноры прошлых расчётов, которые сейчас не работают, — тоже вне пула.
         scope = {well.id for well in data.wells}
-        for well_id in existing - scope:
+        for well_id in {w for w, (in_pool, _at) in existing.items() if in_pool} - scope:
             out_of_pool[well_id] = {
                 "method": METHOD,
                 "calculated_at": now.isoformat(timespec="minutes"),
@@ -148,6 +188,10 @@ async def build_pool(*, now: datetime | None = None, dry_run: bool = False) -> d
             "pool": sum(row.in_pool for row in rows),
             "no_telemetry": sum(not row.has_telemetry for row in rows),
             "out_of_pool": len(out_of_pool),
+            "blocked": drop_guard(
+                {w for w, (in_pool, at) in existing.items() if in_pool and at},
+                {row.well_id for row in rows if row.in_pool},
+            ),
             "funnel": {
                 NGDU_TITLES.get(ngdu, ngdu): funnel(res)
                 for ngdu, res in by_ngdu.items()
@@ -155,6 +199,14 @@ async def build_pool(*, now: datetime | None = None, dry_run: bool = False) -> d
         }
         if dry_run:
             await app.rollback()
+            return report
+        if report["blocked"] and not force:
+            await app.rollback()
+            logger.error(
+                "Donor pool %s not saved: %s",
+                report["now"],
+                report["blocked"],
+            )
             return report
         repository = CompensationDonorRepository(app)
         for row in rows:
@@ -181,10 +233,12 @@ def _print(report: dict) -> None:
         f"\nв пуле {report['pool']}, без телеметрии {report['no_telemetry']}, "
         f"выпадут из пула {report['out_of_pool']}; критериев: {len(CRITERIA)}",
     )
+    if report["blocked"]:
+        print(f"ЗАЩИТА: {report['blocked']} — без --force не запишется")  # noqa: T201
 
 
-async def main(*, dry_run: bool = False) -> None:
-    report = await build_pool(dry_run=dry_run)
+async def main(*, dry_run: bool = False, force: bool = False) -> None:
+    report = await build_pool(dry_run=dry_run, force=force)
     if dry_run:
         _print(report)
 
@@ -197,4 +251,10 @@ def build_compensation_pool() -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true")
-    asyncio.run(main(dry_run=parser.parse_args().dry_run))
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="записать, даже если из пула выпадает больше половины доноров",
+    )
+    args = parser.parse_args()
+    asyncio.run(main(dry_run=args.dry_run, force=args.force))

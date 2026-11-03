@@ -2,6 +2,7 @@
 
 from apps.compensation.constants import (
     CLOSE_DONOR_LIMIT,
+    CLOSE_DONOR_OTHER_GZU,
     CLOSE_DONOR_UNAVAILABLE,
     CLOSE_LOSS_RESOLVED,
     RECOMMENDATION_ACCEPTED,
@@ -153,16 +154,29 @@ def test_covered_is_capped_by_loss() -> None:
     assert covered(3.4, [0.57, 0.42]) == 0.99
 
 
-def _pair(
+def _pair(  # noqa: PLR0913
     pair_id: int,
     loss_well_id: int,
     *,
     status: str = RECOMMENDATION_PENDING,
     risk: str = RISK_MEDIUM,
     distance: int | None = 1000,
+    gain: float = 0.5,
+    loss_group: str | None = None,
+    donor_group: str | None = None,
 ) -> OpenPair:
     """Пара с донором на скважине ``pair_id * 10``."""
-    return OpenPair(pair_id, loss_well_id, pair_id * 10, status, risk, distance)
+    return OpenPair(
+        pair_id,
+        loss_well_id,
+        pair_id * 10,
+        status,
+        risk,
+        distance,
+        gain=gain,
+        loss_group=loss_group,
+        donor_group=donor_group,
+    )
 
 
 def test_pairs_to_close() -> None:
@@ -214,11 +228,11 @@ def test_open_pairs_take_places_of_the_limit() -> None:
 
 def test_pending_pairs_over_the_limit_are_closed_worst_first() -> None:
     pairs = [
-        _pair(1, 100, risk=RISK_HIGH, distance=100),
-        _pair(2, 100, distance=3000),
-        _pair(3, 100, distance=None),
-        _pair(4, 100, distance=500),
-        _pair(5, 100, status=RECOMMENDATION_ACCEPTED, risk=RISK_HIGH),
+        _pair(1, 100, gain=0.2),
+        _pair(2, 100, gain=0.9),
+        _pair(3, 100, gain=0.1),
+        _pair(4, 100, gain=0.6),
+        _pair(5, 100, status=RECOMMENDATION_ACCEPTED, gain=0.05),
     ]
 
     closing = pairs_to_close(
@@ -228,11 +242,34 @@ def test_pending_pairs_over_the_limit_are_closed_worst_first() -> None:
         max_donors=3,
     )
 
-    # Принятая пара остаётся вне очереди; из ожидающих — средний риск ближе.
+    # Принятая пара остаётся вне очереди; из ожидающих — по приросту, как подбор.
     assert sorted(closing) == [
         (1, CLOSE_DONOR_LIMIT),
         (3, CLOSE_DONOR_LIMIT),
     ]
+
+
+def test_pending_pairs_with_donor_of_other_gzu_are_closed() -> None:
+    pairs = [
+        _pair(1, 100, loss_group="gzu:1", donor_group="gzu:2"),
+        _pair(2, 100, loss_group="gzu:1", donor_group="gzu:1"),
+        _pair(
+            3,
+            100,
+            status=RECOMMENDATION_ACCEPTED,
+            loss_group="gzu:1",
+            donor_group="gzu:7",
+        ),
+    ]
+
+    closing = pairs_to_close(
+        pairs,
+        stopped_well_ids={100},
+        available_donor_well_ids={10, 20, 30},
+    )
+
+    # Принятая технологом пара с чужой ГЗУ не трогается.
+    assert closing == [(1, CLOSE_DONOR_OTHER_GZU)]
 
 
 def test_accepted_pairs_are_never_closed_by_the_limit() -> None:

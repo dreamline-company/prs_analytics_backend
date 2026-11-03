@@ -18,6 +18,7 @@
 Время везде местное наивное, как в источниках.
 """
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -45,6 +46,8 @@ ABAI_LIFT_BY_EQUIP_TYPE = {51: LIFT_SHGN, 56: LIFT_EVN, 145: LIFT_EVN}
 PRS_REPAIR_TYPE = 3  # категория ремонта ABAI: ПРС
 MRP_REPAIRS = 2  # МРП — между двумя последними ПРС
 FULL_WATER_CUT = 100.0
+# Способ эксплуатации в ревизии, который означает «не указан».
+REVISION_EMPTY_LIFT = frozenset({"Отсутствует"})
 
 SQL_LIQUID = """
     select well, dbeg, dend, liquid from emg.meas_liq
@@ -88,15 +91,26 @@ SQL_TELEMETRY = """
       avg(f.r_1991) mm, stddev_pop(f.r_1991) sm,
       avg(f.r_1991) filter (where f.savetime < :mid) m1,
       avg(f.r_1991) filter (where f.savetime >= :mid) m2,
-      percentile_cont(0.05) within group (order by f.r_1997) fill5,
-      percentile_cont(0.5) within group (order by f.r_1998) speed
+      percentile_cont(0.05) within group (
+        order by case when f.r_1997 between -1e9 and 1e9 then f.r_1997 end
+      ) fill5,
+      percentile_cont(0.5) within group (
+        order by case when f.r_1998 between -1e9 and 1e9 then f.r_1998 end
+      ) speed
     from telemetry_sdmo_fc_data f
     join telemetry_sdmo_station st on st.id = f.station_id
     where st.well_id = any(:ids) and f.savetime >= :since and f.savetime < :now
       and f.r_1991 between -1e9 and 1e9
-      and (round(f.r_1999)::int = any(:run) or (f.r_1999 is null and f.r_1998 > 0))
+      and (
+        (case when f.r_1999 between -2147483648 and 2147483647
+              then round(f.r_1999)::int end) = any(:run)
+        or (f.r_1999 is null and f.r_1998 > 0 and f.r_1998 <= 1e9)
+      )
     group by st.well_id, st.id, st.type_1900
 """
+# NaN и бесконечность в регистрах СДМО — мусор источника (см. drive.py):
+# между ±1e9 их нет (в PostgreSQL NaN больше любого числа), а приведение к int
+# только внутри диапазона int.
 SQL_HDIN = """
     select distinct on (c.abai_well_id) c.abai_well_id, v.value_double, c.meas_date
     from wells_gdis_current c
@@ -177,8 +191,15 @@ class DailyOil:
         water_cut: dict[int, list[tuple[datetime, datetime, float | None]]],
         density: dict[int, float | None],
     ) -> None:
-        self.liquid = {key: sorted(rows) for key, rows in liquid.items()}
-        self.water_cut = {key: sorted(rows) for key, rows in water_cut.items()}
+        # Только по датам: значения бывают NULL и между собой не сравниваются.
+        self.liquid = {
+            key: sorted(rows, key=lambda row: (row[0], row[1]))
+            for key, rows in liquid.items()
+        }
+        self.water_cut = {
+            key: sorted(rows, key=lambda row: (row[0], row[1]))
+            for key, rows in water_cut.items()
+        }
         self.density = density
 
     @staticmethod
@@ -293,19 +314,41 @@ async def _telemetry(
             continue  # у скважины несколько станций — берётся самая полная
         fill_k = koef.get((row["type_1900"], 1997)) or 1.0
         speed_k = koef.get((row["type_1900"], 1998)) or 1.0
+        p5, p95, mean_m, first, second = (
+            row["p5m"],
+            row["p95m"],
+            row["mm"],
+            row["m1"],
+            row["m2"],
+        )
         result[row["well_id"]] = Telemetry(
             samples=row["n"],
-            k=abs(row["p5m"]) / row["p95m"] if row["p95m"] else None,
-            moment_cv=row["sm"] / row["mm"] if row["mm"] else None,
+            # Не посчитать (нулевой момент, мёртвый датчик) — None: критерий не
+            # пройден, исправность не подтверждена.
+            k=finite(abs(p5) / p95) if p95 and p95 > 0 else None,
+            moment_cv=finite(row["sm"] / abs(mean_m)) if mean_m else None,
             moment_drift=(
-                abs(row["m2"] - row["m1"]) / row["m1"]
-                if row["m1"] and row["m2"] is not None
+                finite(abs(second - first) / abs(first))
+                if first and second is not None
                 else None
             ),
-            fill_p5=row["fill5"] * fill_k if row["fill5"] is not None else None,
-            speed=row["speed"] * speed_k if row["speed"] is not None else None,
+            fill_p5=finite(row["fill5"] * fill_k) if row["fill5"] is not None else None,
+            speed=finite(row["speed"] * speed_k) if row["speed"] is not None else None,
         )
     return result
+
+
+def finite(value: float | None) -> float | None:
+    """NaN и бесконечность — None."""
+    return value if value is not None and math.isfinite(value) else None
+
+
+def last_repairs(*sources: list[datetime]) -> list[datetime]:
+    """Две последние даты ПРС из ABAI и ревизии без дублей (по дню)."""
+    by_day = {}
+    for started in (moment for source in sources for moment in source):
+        by_day.setdefault(started.date(), started)
+    return sorted(by_day.values(), reverse=True)[:MRP_REPAIRS]
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,13 +412,14 @@ async def load_pool_data(
     details: dict[int, dict] = {}
     for well in wells:
         rev = revision.get(well.id)
-        lift = (rev.lift_type if rev and rev.lift_type else None) or lift_abai.get(
-            well.abai_id,
+        lift_rev = (
+            rev.lift_type
+            if rev and rev.lift_type and rev.lift_type not in REVISION_EMPTY_LIFT
+            else None
         )
+        lift = lift_rev or lift_abai.get(well.abai_id)
         lift_source = (
-            "ревизия"
-            if rev and rev.lift_type
-            else ("ABAI" if well.abai_id in lift_abai else None)
+            "ревизия" if lift_rev else ("ABAI" if well.abai_id in lift_abai else None)
         )
         depth = (
             rev.pump_depth_m
@@ -392,17 +436,12 @@ async def load_pool_data(
         if rev and rev.hdin_m is not None:
             candidates.append((rev.gdis_date or date.min, rev.hdin_m, "ревизия"))
         hdin = max(candidates, key=lambda c: c[0]) if candidates else None
-        starts = prs.get(well.abai_id, [])
-        if (
-            len(starts) < MRP_REPAIRS
-            and rev
-            and rev.last_prs_date
-            and rev.prev_prs_date
-        ):
-            starts = [
-                datetime.combine(rev.last_prs_date, datetime.min.time()),
-                datetime.combine(rev.prev_prs_date, datetime.min.time()),
-            ]
+        revision_repairs = [
+            datetime.combine(day, datetime.min.time())
+            for day in ((rev.last_prs_date, rev.prev_prs_date) if rev else ())
+            if day is not None
+        ]
+        starts = last_repairs(prs.get(well.abai_id, []), revision_repairs)
         series = [oil.on(well.abai_id, day) for day in window]
         values = [v for v in series if v is not None]
         cuts = [
@@ -410,7 +449,7 @@ async def load_pool_data(
             for day in window
             if (c := oil.water_cut_on(well.abai_id, day)) is not None
         ]
-        average = mean(values) if values else None
+        average = finite(mean(values)) if values else None
         changed = pump_change.get(well.abai_id)
         inputs[well.id] = PoolInput(
             well_id=well.id,
@@ -420,9 +459,13 @@ async def load_pool_data(
             lift=lift,
             days=len(values),
             oil=average,
-            cv=pstdev(values) / average if len(values) > 1 and average else None,
+            cv=(
+                finite(pstdev(values) / average)
+                if len(values) > 1 and average
+                else None
+            ),
             flat=bool(values) and len({round(v, 4) for v in values}) == 1,
-            water_cut=mean(cuts) if cuts else None,
+            water_cut=finite(mean(cuts)) if cuts else None,
             pump_depth=depth,
             hdin=hdin[1] if hdin else None,
             mrp_days=(

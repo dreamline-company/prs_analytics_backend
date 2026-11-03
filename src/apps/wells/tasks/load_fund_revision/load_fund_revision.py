@@ -57,14 +57,15 @@ async def load_fund_revision(
 ) -> Counter:
     """Записать ревизию; вернуть счётчики (строк, сопоставлено, без скважины)."""
     names = [row.well_name for row in sheet.rows]
+    # Без учёта регистра: суффиксы в отчёте и в БД пишут по-разному (VMB_02en).
     wells = {
-        well.name: well.id
-        for well in await WellRepository(session).list_by_names(names)
+        well.name.lower(): well.id
+        for well in await WellRepository(session).list_by_names_ci(names)
     }
     stats = Counter(rows=len(sheet.rows))
     rows = []
     for row in sheet.rows:
-        well_id = wells.get(row.well_name)
+        well_id = wells.get(row.well_name.lower())
         stats["matched" if well_id is not None else "unmatched"] += 1
         rows.append(
             CreateFundRevisionDTO(
