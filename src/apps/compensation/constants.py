@@ -15,6 +15,9 @@ CLOSE_DONOR_UNAVAILABLE = "donor_unavailable"  # донор встал или в
 CLOSE_REJECTED = "rejected"  # технолог отклонил
 CLOSE_DONOR_LIMIT = "donor_limit"  # у потери доноров больше MAX_DONORS_PER_LOSS
 CLOSE_DONOR_PREEMPTED = "donor_preempted"  # донора перехватила потеря крупнее
+# Донор с другой ГЗУ, чем потеря: пары, подобранные до 04.11.2026 по
+# месторождению, или ГЗУ поменялась в зеркале ABAI.
+CLOSE_DONOR_OTHER_GZU = "donor_other_gzu"
 
 # Сколько доноров закрепляется за одной потерей. Без лимита крупнейшая
 # потеря забирала весь пул месторождения (14 доноров у одной скважины),

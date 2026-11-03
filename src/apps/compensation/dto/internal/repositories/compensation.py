@@ -19,6 +19,11 @@ class CreateCompensationDonorDTO(RepositoryDTO):
     risk: str
     pool_date: date
     source_row: dict
+    in_pool: bool = True
+    has_telemetry: bool = True
+    gzu_abai_id: int | None = None
+    tap: int | None = None
+    calculated_at: datetime | None = None
 
 
 class UpdateCompensationDonorDTO(RepositoryDTO):
@@ -44,3 +49,19 @@ class UpdateCompensationRecommendationDTO(RepositoryDTO):
     decided_at: datetime | None = None
     decided_by: str | None = None
     comment: str | None = None
+
+
+class CreateCompensationLossDTO(RepositoryDTO):
+    well_id: int
+    abai_ngdu_id: int
+    stop_kind: str
+    stop_text: str | None = None
+    stop_since: datetime
+    loss: float | None = None
+    loss_source: str | None = None
+    gzu_abai_id: int | None = None
+    calculated_at: datetime
+
+
+class UpdateCompensationLossDTO(RepositoryDTO):
+    loss: float | None = None

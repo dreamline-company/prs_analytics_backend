@@ -337,7 +337,9 @@ def _render_contour(contour: CompensationContourDTO | None) -> list[str]:
             f"({contour.compensated.donors} доноров).",
         ]
     if contour.state == CONTOUR_NO_PLAN:
-        return ["Контур компенсации: стоит, но плана по нефти нет."]
+        return [
+            "Контур компенсации: стоит, но потерю не оценить — нет ни факта, ни плана.",
+        ]
     return []
 
 
@@ -530,7 +532,11 @@ async def _load_donor(session: AsyncSession, well: Well) -> dict[str, Any] | Non
     Скважины КМГ вне VMB в пуле есть, но в контур не входят, и подбор их
     никогда не возьмёт — донором в досье они не называются.
     """
-    donors = await CompensationDonorRepository(session).list_by_well_ids([well.id])
+    # Только пул: выпавшие и «без телеметрии» — тоже строки таблицы, но не доноры.
+    donors = await CompensationDonorRepository(session).list_by_well_ids(
+        [well.id],
+        in_pool_only=True,
+    )
     if not donors:
         return None
     state_service = CompensationStateService(session)

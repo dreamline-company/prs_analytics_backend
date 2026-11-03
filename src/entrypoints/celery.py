@@ -7,6 +7,11 @@ from apps.compensation.tasks.assign_donors.assign_donors import (  # noqa: F401
     assign_compensation_donors,
 )
 
+# Импорт регистрирует ежедневный расчёт пула доноров по методике.
+from apps.compensation.tasks.build_pool.build_pool import (  # noqa: F401
+    build_compensation_pool,
+)
+
 # Импорт регистрирует celery-задачи детекторов (диспетчер, подметальщик, R2,
 # R9, R10).
 from apps.detectors.cits_events.tasks.run_incidents.run_incidents import (  # noqa: F401
@@ -255,11 +260,18 @@ celery_app.conf.beat_schedule = {
         else {}
     ),
     # Контур компенсации: доноры под стоящие скважины — раз в час, после
-    # статусов ABAI (:10). Крупная потеря перехватывает доноров «на
-    # согласовании» у меньших (с 31.10.2026), остальные пары не трогаются.
+    # статусов ABAI (:10). Потеря — по таблице состояний, величина — факт ABAI
+    # за 10 суток до остановки; донор — только своей ГЗУ; крупная потеря
+    # перехватывает доноров «на согласовании» у меньших.
     "compensation-assign-donors": {
         "task": "compensation.assign_donors",
         "schedule": crontab(minute=15),
+    },
+    # Пул доноров по методике (ред. 3) — раз в сутки, после ГЗУ (05:20) и
+    # ГДИС (05:40): критерии, ступень и прирост по погружению.
+    "compensation-build-pool": {
+        "task": "compensation.build_pool",
+        "schedule": crontab(hour=6, minute=10),
     },
     # Ежедневная догрузка ГДИС из ABAI: метрики -> исследования -> значения,
     # плюс перечитывание исследований за 90 дней (заключения дописывают позже).

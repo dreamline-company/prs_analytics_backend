@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from apps.compensation.constants import (
@@ -10,12 +10,15 @@ from apps.compensation.constants import (
 )
 from apps.compensation.dto.internal.repositories.compensation import (
     CreateCompensationDonorDTO,
+    CreateCompensationLossDTO,
     CreateCompensationRecommendationDTO,
     UpdateCompensationDonorDTO,
+    UpdateCompensationLossDTO,
     UpdateCompensationRecommendationDTO,
 )
 from apps.compensation.models.compensation import (
     CompensationDonor,
+    CompensationLoss,
     CompensationRecommendation,
 )
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
@@ -43,15 +46,37 @@ class CompensationDonorRepository(
     async def list_by_well_ids(
         self,
         well_ids: Sequence[int],
+        *,
+        in_pool_only: bool = False,
     ) -> Sequence[CompensationDonor]:
+        """``in_pool_only`` — только участвующие в подборе (прошли критерии и
+        есть телеметрия)."""
         if not well_ids:
             return ()
+        filters = [CompensationDonor.well_id.in_(well_ids)]
+        if in_pool_only:
+            filters.append(CompensationDonor.in_pool.is_(True))
         return await self.get_list(
-            QuerySpec(
-                filters=(CompensationDonor.well_id.in_(well_ids),),
-                order_by=(CompensationDonor.id,),
-            ),
+            QuerySpec(filters=tuple(filters), order_by=(CompensationDonor.id,)),
         )
+
+    async def mark_out_of_pool(
+        self,
+        source_rows: dict[int, dict],
+        *,
+        calculated_at: datetime,
+    ) -> None:
+        """Скважины, не прошедшие критерии: вне пула, причины — в source_row."""
+        for well_id, source_row in source_rows.items():
+            await self.session.execute(
+                update(CompensationDonor)
+                .where(CompensationDonor.well_id == well_id)
+                .values(
+                    in_pool=False,
+                    calculated_at=calculated_at,
+                    source_row=source_row,
+                ),
+            )
 
     async def list_by_ids(self, ids: Sequence[int]) -> Sequence[CompensationDonor]:
         if not ids:
@@ -168,3 +193,35 @@ class CompensationRecommendationRepository(
             .values(closed_at=closed_at, close_reason=reason),
         )
         return result.rowcount > 0
+
+
+class CompensationLossRepository(
+    AsyncAlchemyRepository[
+        CreateCompensationLossDTO,
+        UpdateCompensationLossDTO,
+        CompensationLoss,
+    ],
+):
+    model = CompensationLoss
+
+    async def replace_for_wells(
+        self,
+        well_ids: Sequence[int],
+        rows: Sequence[CreateCompensationLossDTO],
+    ) -> None:
+        """Потери скважин ``well_ids`` целиком: прежние строки заменяются."""
+        if well_ids:
+            await self.session.execute(
+                delete(CompensationLoss).where(CompensationLoss.well_id.in_(well_ids)),
+            )
+        await self.bulk_create(rows)
+
+    async def list_by_well_ids(
+        self,
+        well_ids: Sequence[int],
+    ) -> Sequence[CompensationLoss]:
+        if not well_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(filters=(CompensationLoss.well_id.in_(well_ids),)),
+        )

@@ -77,7 +77,7 @@ class GetCompensationContourUseCase:
         if stop is None:
             return contour
         contour.reason = stop_reason(stop)
-        plan = state.plans.get(well.id)
+        plan = state.losses.get(well.id)
         if plan is None:
             contour.state = CONTOUR_NO_PLAN
             return contour
@@ -104,6 +104,7 @@ class GetCompensationContourUseCase:
         contour.losses = CompensationContourLossDTO(
             value=round_rate(loss),
             plan_date=plan_date,
+            source=state.loss_sources.get(well.id),
         )
         contour.compensated = CompensationContourCompensatedDTO(
             value=round_rate(value),

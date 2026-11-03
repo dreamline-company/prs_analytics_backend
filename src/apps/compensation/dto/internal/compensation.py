@@ -50,8 +50,10 @@ class CompensationPairDonorDTO(BaseModel):
 
 
 class CompensationContourLossDTO(BaseModel):
+    # Факт нефти за 10 сут до остановки, нет факта — план; plan_date — дата расчёта.
     value: float
     plan_date: date
+    source: str | None = None  # fact / plan
 
 
 class CompensationContourCompensatedDTO(BaseModel):
@@ -111,6 +113,8 @@ class CompensationDonorDTO(BaseModel):
     gain_kind: str = "scenario"
     constraints: CompensationDonorConstraintsDTO
     loss_well: CompensationWellDTO | None
+    # Пометки методики (п. 7): требуют рассмотрения до изменения режима.
+    flags: list[str] = []
 
 
 class CompensationDonorsSummaryDTO(BaseModel):
@@ -141,8 +145,11 @@ class CompensationLossDTO(BaseModel):
     well: CompensationWellDTO
     oil_field: CompensationOilFieldDTO
     reason: CompensationStopReasonDTO
-    loss: float | None  # план Qн; None — плана нет
+    # Потеря, т/сут: факт нефти по ABAI за 10 сут до остановки, нет факта —
+    # план техрежима; None — не оценить. plan_date — дата расчёта.
+    loss: float | None
     plan_date: date | None
+    loss_source: str | None = None  # fact / plan
     covered: float
     uncovered: float | None
     donors: list[CompensationPairDonorDTO]

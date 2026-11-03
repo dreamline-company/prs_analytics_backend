@@ -1,5 +1,6 @@
 from apps.wells.repositories.coords import CoordRepository, WellCoordRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
+from apps.wells.repositories.fund_revision import FundRevisionRepository
 from apps.wells.repositories.gdis import (
     GdisCurrentRepository,
     GdisCurrentValueRepository,
@@ -33,6 +34,7 @@ from apps.wells.repositories.well_status import (
 __all__ = (
     "CoordRepository",
     "DynamogramRepository",
+    "FundRevisionRepository",
     "GdisCurrentRepository",
     "GdisCurrentValueRepository",
     "GdisMetricRepository",
