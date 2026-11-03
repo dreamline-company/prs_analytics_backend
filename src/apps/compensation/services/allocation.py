@@ -1,14 +1,15 @@
 """Подбор доноров под потери — чистая логика, без базы.
 
-Правила (решения владельца, 29.09.2026):
+Правила (методика подбора, ред. 3; решение владельца 04.11.2026 — вариант «а»):
 
-- донор ищется только на месторождении потери;
+- донор ищется только на той же ГЗУ, что и потеря (``group``);
 - потери обходятся от больших к меньшим, доноры добираются, пока потеря не
   покрыта; донор закрепляется только за одной потерей;
-- порядок доноров: сначала низкий и средний риск по расстоянию, доноры с
-  высоким риском — только когда на месторождении кончились остальные;
-- риск — по ступени прироста скорости, которую автор пула выбирал по запасу
-  столба жидкости: 15 % — низкий, 10 % — средний, меньше — высокий.
+- минимальный набор: сначала доноры с большим приростом (п. 8.3);
+- риск — справочно, по ступени разгона (15 % — низкий, 10 % — средний,
+  меньше — высокий); порядок подбора от него не зависит.
+
+До 04.11.2026 донор искался на месторождении, ближние и низкого риска раньше.
 
 С 27.10.2026 за потерей не больше ``MAX_DONORS_PER_LOSS`` доноров: пул
 меньше суммы потерь, и без лимита его целиком забирала крупнейшая. Лишние
@@ -17,11 +18,12 @@
 С 31.10.2026 крупная потеря перехватывает доноров у меньших
 (docs/compensation_preemption_plan.md): иначе потеря, вставшая позже, оставалась
 без доноров при разобранном пуле. Порядок поиска для потери: свободные низкого и
-среднего риска, перехват таких же, свободные высокого, перехват высокого.
-Перехват — только пары «на согласовании», у потери меньше в ``PREEMPT_RATIO``
-раза (без плана — всегда), если текущая стоит не меньше ``PREEMPT_AFTER_HOURS`` и
-покрытие НГДУ не падает; жертвы — сначала самая мелкая потеря, у неё ближайший
-донор. Донор, взятый в прогоне, сразу числится за новой потерей.
+среднего риска, перехват таких же, свободные высокого, перехват высокого
+(с 04.11.2026 — свободные по приросту, затем перехват). Перехват — только пары
+«на согласовании», у потери меньше в ``PREEMPT_RATIO`` раза (без плана —
+всегда), если текущая стоит не меньше ``PREEMPT_AFTER_HOURS`` и покрытие не
+падает; жертвы — сначала самая мелкая потеря, у неё донор с большим приростом.
+Донор, взятый в прогоне, сразу числится за новой потерей.
 """
 
 import math
@@ -86,7 +88,7 @@ def _donor_rank(
 @dataclass(frozen=True, slots=True)
 class LossInput:
     well_id: int
-    field: str  # префикс месторождения (VMB в VMB_0220)
+    group: str  # ГЗУ: донор берётся только своей группы
     value: float  # план Qн, т/сут
     point: Point | None
     # Стоит не меньше PREEMPT_AFTER_HOURS — может перехватывать доноров у меньших.
@@ -96,7 +98,7 @@ class LossInput:
 @dataclass(frozen=True, slots=True)
 class DonorInput:
     donor_id: int
-    field: str
+    group: str
     gain: float
     risk: str
     point: Point | None
@@ -170,10 +172,9 @@ class _Allocator:
 
     def run(self, losses: Sequence[LossInput]) -> Allocation:
         for loss in sorted(losses, key=lambda item: (-item.value, item.well_id)):
-            for high in (False, True):
-                self._take_free(loss, high=high)
-                if loss.can_preempt:
-                    self._take_held(loss, high=high)
+            self._take_free(loss)
+            if loss.can_preempt:
+                self._take_held(loss)
         return Allocation(self.pairs)
 
     def _remaining(self, loss: LossInput) -> float:
@@ -184,10 +185,9 @@ class _Allocator:
             self._remaining(loss) > _EPS and self.counts[loss.well_id] < self.max_donors
         )
 
-    def _fits(self, loss: LossInput, donor: DonorInput, *, high: bool) -> bool:
+    def _fits(self, loss: LossInput, donor: DonorInput) -> bool:
         return (
-            (donor.risk == RISK_HIGH) == high
-            and donor.field == loss.field
+            donor.group == loss.group
             and (loss.well_id, donor.donor_id) not in self.excluded
         )
 
@@ -204,15 +204,15 @@ class _Allocator:
             NewPair(loss.well_id, donor.donor_id, distance, preempted_pair_id),
         )
 
-    def _take_free(self, loss: LossInput, *, high: bool) -> None:
+    def _take_free(self, loss: LossInput) -> None:
+        # Минимальный набор — крупные приросты раньше.
         ranked = sorted(
             (
                 (donor, distance_m(loss.point, donor.point))
                 for donor in self.free
-                if donor.donor_id not in self.used
-                and self._fits(loss, donor, high=high)
+                if donor.donor_id not in self.used and self._fits(loss, donor)
             ),
-            key=lambda item: _donor_rank(item[0].risk, item[1], item[0].donor_id),
+            key=lambda item: (-item[0].gain, item[0].donor_id),
         )
         for donor, distance in ranked:
             if not self._open(loss):
@@ -227,21 +227,20 @@ class _Allocator:
         before = self.sums[owner_id]
         return min(before, value) - min(before - gain, value)
 
-    def _take_held(self, loss: LossInput, *, high: bool) -> None:
+    def _take_held(self, loss: LossInput) -> None:
         candidates = [
             (item, distance_m(loss.point, item.donor.point))
             for item in self.preemptable.values()
             if item.loss_well_id != loss.well_id
-            and self._fits(loss, item.donor, high=high)
+            and self._fits(loss, item.donor)
             and self.values.get(item.loss_well_id, 0.0) * self.preempt_ratio
             <= loss.value + _EPS
         ]
-        # Жертвы — сначала самая мелкая потеря, у неё ближайший донор.
+        # Жертвы — сначала самая мелкая потеря, у неё донор с большим приростом.
         candidates.sort(
             key=lambda pair: (
                 self.values.get(pair[0].loss_well_id, 0.0),
-                pair[1] is None,
-                pair[1] or 0,
+                -pair[0].donor.gain,
                 pair[0].donor.donor_id,
             ),
         )

@@ -77,7 +77,7 @@ class GetCompensationContourUseCase:
         if stop is None:
             return contour
         contour.reason = stop_reason(stop)
-        plan = state.plans.get(well.id)
+        plan = state.losses.get(well.id)
         if plan is None:
             contour.state = CONTOUR_NO_PLAN
             return contour

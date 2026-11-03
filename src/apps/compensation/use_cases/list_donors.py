@@ -62,8 +62,9 @@ class ListCompensationDonorsUseCase:
         )
         names = scope.field_names
 
+        pool = [donor for donor in scope.donors if donor.in_pool]
         items = []
-        for donor in scope.donors:
+        for donor in pool:
             pair = open_by_donor.get(donor.id)
             well = scope.wells[donor.well_id]
             items.append(
@@ -96,6 +97,7 @@ class ListCompensationDonorsUseCase:
                         if pair is not None
                         else None
                     ),
+                    flags=list(donor.source_row.get("flags") or []),
                 ),
             )
 
@@ -104,7 +106,7 @@ class ListCompensationDonorsUseCase:
         used = sum(
             p.gain for p in scope.open_pairs if p.status == RECOMMENDATION_APPLIED
         )
-        pool_dates = [donor.pool_date for donor in scope.donors]
+        pool_dates = [donor.pool_date for donor in pool]
         return CompensationDonorsDTO(
             summary=CompensationDonorsSummaryDTO(
                 candidates=len(items),

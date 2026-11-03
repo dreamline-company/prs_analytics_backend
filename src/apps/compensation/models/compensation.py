@@ -30,10 +30,14 @@ from shared.database.sql.models import AppBaseModel, IntPkMixin, TimedMixinModel
 
 
 class CompensationDonor(AppBaseModel, IntPkMixin, TimedMixinModel):
-    """Донор пула — строка расчёта автора (сейчас разовая загрузка Excel).
+    """Кандидат в доноры: строка ежедневного расчёта пула по методике (ред. 3).
 
-    В колонки вынесено то, что читают подбор и эндпоинты; строка источника
-    целиком лежит в ``source_row``.
+    До 04.11.2026 — разовая загрузка Excel автора. Строки не удаляются (на них
+    ссылаются пары): скважина, не прошедшая критерии, остаётся с
+    ``in_pool = false``. Прошедшие критерии без телеметрии — отдельный перечень
+    методики: ``has_telemetry = false``, в пул и подбор не входят. В колонки
+    вынесено то, что читают подбор и эндпоинты; метрики, причины отсева и
+    пометки — в ``source_row``.
     """
 
     __tablename__ = "compensation_donor"
@@ -58,6 +62,25 @@ class CompensationDonor(AppBaseModel, IntPkMixin, TimedMixinModel):
     risk: Mapped[str] = mapped_column(String(10), nullable=False)
     pool_date: Mapped[date] = mapped_column(Date, nullable=False)
     source_row: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # Прошёл все критерии и есть телеметрия — участвует в подборе.
+    in_pool: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("true"),
+    )
+    has_telemetry: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("true"),
+    )
+    # ГЗУ скважины (wells_tech.abai_id) и отвод — подбор только внутри своей ГЗУ.
+    gzu_abai_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        index=True,
+        nullable=True,
+    )
+    tap: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    calculated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class CompensationRecommendation(AppBaseModel, IntPkMixin, TimedMixinModel):
@@ -103,3 +126,30 @@ class CompensationRecommendation(AppBaseModel, IntPkMixin, TimedMixinModel):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     decided_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class CompensationLoss(AppBaseModel, IntPkMixin, TimedMixinModel):
+    """Потеря — стоящая скважина контура и её величина; пишет подбор раз в час.
+
+    Стоит — состояние «стоит» или «ремонт» в таблице состояний скважин (ABAI +
+    привод СДМО). Величина — средняя фактическая нефть по ABAI за 10 суток до
+    остановки (методика, п. 8.1); нет факта — план техрежима
+    (``loss_source = "plan"``); нет ни того, ни другого — ``loss`` пуст.
+    Эндпоинты читают потери отсюда, чтобы видеть те же цифры, что подбор.
+    """
+
+    __tablename__ = "compensation_loss"
+
+    well_id: Mapped[int] = mapped_column(
+        ForeignKey("wells_well.id"),
+        unique=True,
+        nullable=False,
+    )
+    abai_ngdu_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    stop_kind: Mapped[str] = mapped_column(String(10), nullable=False)  # idle / repair
+    stop_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stop_since: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    loss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    loss_source: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    gzu_abai_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

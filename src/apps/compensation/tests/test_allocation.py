@@ -1,4 +1,4 @@
-"""Подбор доноров: месторождение, добор, риск, расстояние, лимит, закрытие."""
+"""Подбор доноров: своя ГЗУ, минимальный набор, лимит, перехват, закрытие."""
 
 from apps.compensation.constants import (
     CLOSE_DONOR_LIMIT,
@@ -35,10 +35,10 @@ def _loss(
     well_id: int,
     value: float,
     *,
-    field: str = "VMB",
+    group: str = "gzu:1",
     can_preempt: bool = False,
 ) -> LossInput:
-    return LossInput(well_id, field, value, ORIGIN, can_preempt)
+    return LossInput(well_id, group, value, ORIGIN, can_preempt)
 
 
 def _donor(
@@ -47,9 +47,9 @@ def _donor(
     km: float,
     *,
     risk: str = RISK_MEDIUM,
-    field: str = "VMB",
+    group: str = "gzu:1",
 ) -> DonorInput:
-    return DonorInput(donor_id, field, gain, risk, _at(km))
+    return DonorInput(donor_id, group, gain, risk, _at(km))
 
 
 def _held(
@@ -94,24 +94,26 @@ def test_donor_serves_one_loss_and_bigger_loss_goes_first() -> None:
     }
 
 
-def test_only_donors_of_the_same_field() -> None:
-    pairs = allocate([_loss(100, 1.0)], [_donor(1, 1.0, 1, field="UAZ")]).pairs
+def test_only_donors_of_the_same_gzu() -> None:
+    pairs = allocate([_loss(100, 1.0)], [_donor(1, 1.0, 1, group="gzu:2")]).pairs
 
     assert pairs == []
 
 
-def test_high_risk_only_after_low_and_medium_are_exhausted() -> None:
+def test_minimal_set_takes_bigger_gains_first() -> None:
+    # Минимальный набор (п. 8.3): крупные приросты раньше; риск и расстояние
+    # на порядок не влияют.
     donors = [
-        _donor(1, 0.5, 0.2, risk=RISK_HIGH),  # ближе всех, но риск высокий
-        _donor(2, 0.5, 3, risk=RISK_MEDIUM),
-        _donor(3, 0.5, 2, risk=RISK_LOW),
+        _donor(1, 0.3, 0.2, risk=RISK_LOW),  # ближе всех, но прирост мал
+        _donor(2, 0.9, 3, risk=RISK_HIGH),
+        _donor(3, 0.5, 2, risk=RISK_MEDIUM),
     ]
 
-    enough = allocate([_loss(100, 1.0)], donors).pairs
-    short = allocate([_loss(100, 1.2)], donors).pairs
+    enough = allocate([_loss(100, 1.2)], donors).pairs
+    short = allocate([_loss(100, 1.6)], donors).pairs
 
-    assert [pair.donor_id for pair in enough] == [3, 2]
-    assert [pair.donor_id for pair in short] == [3, 2, 1]
+    assert [pair.donor_id for pair in enough] == [2, 3]
+    assert [pair.donor_id for pair in short] == [2, 3, 1]
 
 
 def test_existing_coverage_and_rejected_pairs_are_respected() -> None:
@@ -134,9 +136,9 @@ def test_existing_coverage_and_rejected_pairs_are_respected() -> None:
     assert [pair.donor_id for pair in partly] == [2]
 
 
-def test_donors_without_coordinates_go_last_in_their_risk_group() -> None:
+def test_equal_gains_by_id_and_distance_is_only_recorded() -> None:
     far = _donor(1, 0.5, 9)
-    blind = DonorInput(2, "VMB", 0.5, RISK_MEDIUM, None)
+    blind = DonorInput(2, "gzu:1", 0.5, RISK_MEDIUM, None)
 
     pairs = allocate([_loss(100, 0.8)], [blind, far]).pairs
 
@@ -391,19 +393,17 @@ def test_smallest_loss_gives_donor_first_then_it_takes_from_smaller() -> None:
     ]
 
 
-def test_risk_order_free_then_preempt_then_high() -> None:
-    donors = [
-        _donor(1, 0.3, 4, risk=RISK_LOW),
-        _donor(2, 0.3, 0.5, risk=RISK_HIGH),  # ближе всех, но высокий риск
-    ]
+def test_free_donors_before_preemption() -> None:
+    # Сначала свободные (даже с меньшим приростом), потом перехват.
+    donors = [_donor(1, 0.2, 4), _donor(2, 0.3, 0.5)]
 
     result = allocate(
         [_loss(100, 5.0, can_preempt=True), _loss(200, 1.0)],
         donors,
-        held=[_held(200, _donor(3, 0.3, 2, risk=RISK_MEDIUM))],
+        held=[_held(200, _donor(3, 0.9, 2))],
     )
 
-    assert [pair.donor_id for pair in result.pairs] == [1, 3, 2]
+    assert [pair.donor_id for pair in result.pairs] == [2, 1, 3]
 
 
 def test_second_run_on_the_result_changes_nothing() -> None:
@@ -454,17 +454,15 @@ def test_victim_rejected_by_coverage_then_next_one_is_taken() -> None:
     ]
 
 
-def test_high_risk_donor_is_preempted_last() -> None:
+def test_preempted_donors_bigger_gain_first() -> None:
     result = allocate(
         [_loss(100, 5.0, can_preempt=True), _loss(200, 1.0)],
         [],
-        held=[
-            _held(200, _donor(1, 0.3, 1, risk=RISK_HIGH)),
-            _held(200, _donor(2, 0.3, 9, risk=RISK_LOW)),
-        ],
+        held=[_held(200, _donor(1, 0.3, 1)), _held(200, _donor(2, 0.6, 9))],
+        max_donors=1,
     )
 
-    assert [pair.donor_id for pair in result.pairs] == [2, 1]
+    assert [pair.donor_id for pair in result.pairs] == [2]
 
 
 def test_ratio_boundary_survives_float_rounding() -> None:

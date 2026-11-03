@@ -2,6 +2,7 @@ import inspect
 
 from apps.compensation.models.compensation import (
     CompensationDonor,
+    CompensationLoss,
     CompensationRecommendation,
 )
 from apps.detectors.models.conclusion import (
@@ -50,6 +51,7 @@ from apps.telemetry.models.tech_regime import TechRegime
 from apps.telemetry.models.telemetry import Telemetry
 from apps.wells.models.coords import Coord, WellCoord
 from apps.wells.models.dynamogram import Dynamogram
+from apps.wells.models.fund_revision import FundRevision
 from apps.wells.models.gdis import GdisCurrent, GdisCurrentValue, GdisMetric
 from apps.wells.models.spo import SPO
 from apps.wells.models.spo_event import SPOEvent
@@ -66,6 +68,7 @@ __all__ = (
     "SPO",
     "Brigade",
     "CompensationDonor",
+    "CompensationLoss",
     "CompensationRecommendation",
     "Coord",
     "Detector",
@@ -80,6 +83,7 @@ __all__ = (
     "DetectorVerificationHistory",
     "Dynamogram",
     "File",
+    "FundRevision",
     "GdisCurrent",
     "GdisCurrentValue",
     "GdisMetric",

@@ -84,10 +84,14 @@ async def load_scope(
         state=state,
         donors=donors,
         open_pairs=list(open_pairs),
+        # Доступен — в пуле (прошёл критерии, есть телеметрия), не стоит и не в
+        # аварии. Выпавшие из пула остаются в donors: на них ссылаются пары.
         available={
             donor.well_id
             for donor in donors
-            if donor.well_id not in state.stops and donor.well_id not in state.alarms
+            if donor.in_pool
+            and donor.well_id not in state.stops
+            and donor.well_id not in state.alarms
         },
     )
 

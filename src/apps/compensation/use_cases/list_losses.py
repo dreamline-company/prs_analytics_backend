@@ -48,7 +48,7 @@ class ListCompensationLossesUseCase:
         for well_id, stop in scope.state.stops.items():
             well = scope.wells[well_id]
             pairs = sorted(pairs_by_loss.get(well_id, []), key=lambda p: -p.gain)
-            plan = scope.state.plans.get(well_id)
+            plan = scope.state.losses.get(well_id)
             loss, plan_date = plan if plan is not None else (None, None)
             value = covered(loss, [p.gain for p in pairs]) if loss is not None else 0.0
             items.append(
@@ -58,6 +58,7 @@ class ListCompensationLossesUseCase:
                     reason=stop_reason(stop),
                     loss=round_rate(loss) if loss is not None else None,
                     plan_date=plan_date,
+                    loss_source=scope.state.loss_sources.get(well_id),
                     covered=round_rate(value),
                     uncovered=round_rate(loss - value) if loss is not None else None,
                     donors=[
