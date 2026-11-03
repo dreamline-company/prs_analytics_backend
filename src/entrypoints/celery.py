@@ -100,6 +100,9 @@ from apps.wells.tasks.analyze_dynamograms.analyze_dynamograms import (  # noqa: 
 # Импорт регистрирует таску инкрементальной загрузки ГДИС из ABAI.
 from apps.wells.tasks.load_gdis.load_gdis import load_gdis_incremental  # noqa: F401
 
+# Импорт регистрирует таску синхронизации ГЗУ и других тех. объектов из ABAI.
+from apps.wells.tasks.load_tech.load_tech import sync_tech  # noqa: F401
+
 # Импорт регистрирует таску инкрементальной загрузки способов эксплуатации.
 from apps.wells.tasks.load_well_expl.load_well_expl import (  # noqa: F401
     load_well_expl_incremental,
@@ -217,6 +220,13 @@ celery_app.conf.beat_schedule = {
     "wells-well-org-incremental": {
         "task": "wells.well_org.incremental_load",
         "schedule": crontab(hour=5, minute=15),
+    },
+    # Технологические объекты ABAI и привязки к ним скважин (ГЗУ и номер
+    # отвода) — раз в сутки полной сверкой: таблицы маленькие, а правки
+    # закрытых периодов и удаления инкрементом не поймать.
+    "wells-tech-sync": {
+        "task": "wells.tech.sync",
+        "schedule": crontab(hour=5, minute=20),
     },
     # Ежедневная догрузка периодов эксплуатации из ABAI (новые id + правки dend).
     "wells-well-expl-incremental": {

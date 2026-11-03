@@ -684,3 +684,54 @@ class GdisCurrentValue(ABAIBaseModel):
     metric: Mapped[int] = mapped_column(BigInteger, nullable=False)
     value_double: Mapped[float | None] = mapped_column(DOUBLE_PRECISION, nullable=True)
     value_string: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class TechType(ABAIBaseModel):
+    """Тип технологического объекта: ГЗУ, ГУ, КНС, ВРП…"""
+
+    __tablename__ = "tech_type"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name_ru: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name_short_ru: Mapped[str | None] = mapped_column(Text, nullable=True)
+    code: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Tech(ABAIBaseModel):
+    """Технологический объект: сама сущность, имя и родитель — в tech_history."""
+
+    __tablename__ = "tech"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    tech_type: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class TechHistory(ABAIBaseModel):
+    """Имя и родитель технологического объекта по периодам."""
+
+    __tablename__ = "tech_history"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    tech: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    parent: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    name_ru: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name_short_ru: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dbeg: Mapped[date | None] = mapped_column(Date, nullable=True)
+    dend: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+
+class WellTech(ABAIBaseModel):
+    """Привязка скважины к технологическому объекту (ГЗУ — с номером отвода)."""
+
+    __tablename__ = "well_tech"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    well: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    tech: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    dbeg: Mapped[date | None] = mapped_column(Date, nullable=True)
+    dend: Mapped[date | None] = mapped_column(Date, nullable=True)
+    tap: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="Номер отвода на ГЗУ",
+    )
