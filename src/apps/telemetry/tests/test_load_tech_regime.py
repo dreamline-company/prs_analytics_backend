@@ -27,6 +27,7 @@ def _src(
         dend=dend,
         oil=oil,
         liquid=20.0,
+        wcut=75.0,
     )
 
 
@@ -39,6 +40,7 @@ def _local(abai_id: int, *, oil: float = 5.0) -> SimpleNamespace:
         end_date=OPEN,
         oil=oil,
         liquid=20.0,
+        water_cut=75.0,
     )
 
 

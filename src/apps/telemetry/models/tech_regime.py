@@ -26,3 +26,5 @@ class TechRegime(AppBaseModel, IntPkMixin, AbaiIdMixin):
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     liquid: Mapped[float | None] = mapped_column(Float, nullable=True)
     oil: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Обводнённость по режиму, % (ABAI ``tech_mode_prod_oil.wcut``).
+    water_cut: Mapped[float | None] = mapped_column(Float, nullable=True)
