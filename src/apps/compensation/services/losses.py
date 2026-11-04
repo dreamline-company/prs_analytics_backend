@@ -16,7 +16,12 @@ from statistics import mean
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.compensation.constants import PLAN_GRACE_DAYS, STOP_IDLE, STOP_REPAIR
+from apps.compensation.constants import (
+    LOSS_RESOLVED_AFTER_HOURS,
+    PLAN_GRACE_DAYS,
+    STOP_IDLE,
+    STOP_REPAIR,
+)
 from apps.compensation.services.pool_data import (
     SQL_TECH_MODE,
     DailyOil,
@@ -33,6 +38,8 @@ MIN_FACT = 0.1  # т/сут: меньше — считаем, что факта 
 SOURCE_FACT = "fact"
 SOURCE_PLAN = "plan"
 STOP_KIND_BY_STATE = {"stopped": STOP_IDLE, "repair": STOP_REPAIR}
+RUNNING_STATES = frozenset({"working", "warning", "alarm"})
+WRITTEN_OFF_STATES = frozenset({"inactive"})
 
 # Интервалы ABAI только в окнах скважин: у давних остановок окно в прошлом.
 SQL_WINDOW = """
@@ -50,6 +57,10 @@ SQL_STOPPED = """
     where ended_at is null and state in ('stopped', 'repair')
       and well_id = any(:ids)
 """
+SQL_CURRENT_STATE = """
+    select well_id, state, started_at from wells_well_state
+    where ended_at is null and well_id = any(:ids)
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +72,41 @@ class LossValue:
     loss: float | None
     source: str | None
     gzu_abai_id: int | None
+
+
+def resolution_pending(
+    state: tuple[str, datetime] | None,
+    *,
+    now: datetime,
+) -> bool:
+    """Потеря ушла из «стоит», но снятой её считать рано: состояние неизвестно
+    (нет связи, нет строки) или пуск свежее ``LOSS_RESOLVED_AFTER_HOURS``."""
+    if state is None:
+        return True
+    kind, since = state
+    if kind in WRITTEN_OFF_STATES:
+        return False
+    if kind in RUNNING_STATES:
+        return since > now - timedelta(hours=LOSS_RESOLVED_AFTER_HOURS)
+    return True
+
+
+async def pending_resolution(
+    app: AsyncSession,
+    well_ids: list[int],
+    *,
+    now: datetime,
+) -> set[int]:
+    """Из скважин, ушедших из «стоит», — те, чьи пары пока держать."""
+    if not well_ids:
+        return set()
+    rows = await app.execute(text(SQL_CURRENT_STATE), {"ids": well_ids})
+    states = {well_id: (state, since) for well_id, state, since in rows}
+    return {
+        well_id
+        for well_id in well_ids
+        if resolution_pending(states.get(well_id), now=now)
+    }
 
 
 def loss_window(since: datetime) -> list[datetime]:

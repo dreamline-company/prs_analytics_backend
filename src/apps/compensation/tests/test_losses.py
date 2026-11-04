@@ -1,16 +1,21 @@
 """Потери контура: величина по факту ABAI, окно до остановки, состояние."""
 
 import asyncio
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
-from apps.compensation.constants import STOP_IDLE, STOP_REPAIR
+from apps.compensation.constants import (
+    LOSS_RESOLVED_AFTER_HOURS,
+    STOP_IDLE,
+    STOP_REPAIR,
+)
 from apps.compensation.services.losses import (
     SOURCE_FACT,
     SOURCE_PLAN,
     LossValue,
     loss_value,
     loss_window,
+    resolution_pending,
 )
 from apps.compensation.services.pool_data import DailyOil, implied_density
 from apps.compensation.services.state import (
@@ -112,3 +117,19 @@ def test_state_service_reads_loss_table() -> None:
     assert state.losses[1] == (2.5, date(2026, 11, 4))
     assert state.loss_sources[1] == SOURCE_PLAN
     assert state.alarms == {2}
+
+
+def test_resolution_pending() -> None:
+    now = datetime(2026, 11, 4, 12, 0)  # noqa: DTZ001
+    long_ago = now - timedelta(hours=LOSS_RESOLVED_AFTER_HOURS + 1)
+    just_now = now - timedelta(minutes=30)
+
+    # Неизвестно — держим: нет строки состояния, нет связи.
+    assert resolution_pending(None, now=now)
+    assert resolution_pending(("no_link", long_ago), now=now)
+    # Пуск свежий — держим; работает дольше порога — снята.
+    assert resolution_pending(("working", just_now), now=now)
+    assert not resolution_pending(("working", long_ago), now=now)
+    assert not resolution_pending(("alarm", long_ago), now=now)
+    # Списана — снята сразу.
+    assert not resolution_pending(("inactive", just_now), now=now)

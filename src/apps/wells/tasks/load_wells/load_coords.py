@@ -225,7 +225,11 @@ class LoadCoords:
         changes: dict[int, int | None] = {}
 
         for well in app_wells:
-            whc = whc_by_abai_well_id.get(well.abai_id)
+            # Нет в ответе источника — неизвестно, а не «без устья»: не трогаем
+            # (пустой ответ ABAI иначе обнулил бы координаты всего фонда).
+            if well.abai_id not in whc_by_abai_well_id:
+                continue
+            whc = whc_by_abai_well_id[well.abai_id]
             coords_id = whc if whc in known_coord_ids else None
             if coords_id != well.coords_id:
                 changes[well.abai_id] = coords_id

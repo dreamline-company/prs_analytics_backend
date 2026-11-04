@@ -17,7 +17,11 @@
 
 Если источник вдруг отдал меньше половины строк копии (пустая таблица после
 перезаливки, пропавшие права), прогон прерывается целиком: иначе сверка
-стёрла бы зеркало вместе со всеми зависимыми таблицами.
+стёрла бы зеркало вместе со всеми зависимыми таблицами. Так же прерывается
+прогон, где удалений в таблице больше ``MAX_DELETE`` / ``MAX_DELETE_SHARE``:
+чтение идёт порциями по 5000, и оборванная вторая порция (5000 из 6226
+привязок — больше половины) иначе удалила бы ~1200 привязок к ГЗУ на сутки.
+Настоящую массовую правку в ABAI записывает ручной прогон с ``--force``.
 """
 
 import argparse
@@ -160,6 +164,9 @@ def well_tech_dto(
 class LoadTech:
     # Источник короче этой доли копии — считаем его сломанным и не сверяем.
     MIN_SOURCE_SHARE = 0.5
+    # Больше стольких удалений в таблице за прогон — сбой чтения, не правки.
+    MAX_DELETE = 50
+    MAX_DELETE_SHARE = 0.05
 
     def __init__(self, abai_session: AsyncSession, app_session: AsyncSession) -> None:
         self.app_session = app_session
@@ -173,7 +180,12 @@ class LoadTech:
         self.well_tech_repo = WellTechRepository(session=app_session)
         self.well_repo = WellRepository(session=app_session)
 
-    async def run(self, *, dry_run: bool = False) -> dict[str, TableStats]:
+    async def run(
+        self,
+        *,
+        dry_run: bool = False,
+        force: bool = False,
+    ) -> dict[str, TableStats]:
         types = [
             tech_type_dto(row) for row in await self.abai_tech_type_repo.list_all()
         ]
@@ -214,6 +226,14 @@ class LoadTech:
             plan_sync(dtos, mirror)
             for (_, _, dtos, _), mirror in zip(tables, mirrors, strict=True)
         ]
+        if not force:
+            for (name, _, _, _), mirror, plan in zip(
+                tables,
+                mirrors,
+                plans,
+                strict=True,
+            ):
+                self._check_deletes(name, deleted=len(plan.delete), mirror=len(mirror))
 
         stats: dict[str, TableStats] = {}
         try:
@@ -266,8 +286,23 @@ class LoadTech:
             )
             raise SourceShrunkError
 
+    def _check_deletes(self, name: str, *, deleted: int, mirror: int) -> None:
+        if deleted > max(self.MAX_DELETE, mirror * self.MAX_DELETE_SHARE):
+            logger.error(
+                "Tech sync aborted: %s would delete %s of %s rows "
+                "(run with --force if ABAI really changed that much)",
+                name,
+                deleted,
+                mirror,
+            )
+            raise SourceShrunkError
 
-async def main(*, dry_run: bool = False) -> dict[str, TableStats]:
+
+async def main(
+    *,
+    dry_run: bool = False,
+    force: bool = False,
+) -> dict[str, TableStats]:
     async with (
         session_makers["abai"]() as abai_session,
         session_makers["app"]() as app_session,
@@ -275,7 +310,7 @@ async def main(*, dry_run: bool = False) -> dict[str, TableStats]:
         return await LoadTech(
             abai_session=abai_session,
             app_session=app_session,
-        ).run(dry_run=dry_run)
+        ).run(dry_run=dry_run, force=force)
 
 
 @celery_app.task(name="wells.tech.sync")
@@ -297,9 +332,17 @@ def _parse_args() -> argparse.Namespace:
         description="Технологические объекты и ГЗУ из ABAI",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="записать, даже если удалений больше порога",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
-    _print_summary(asyncio.run(main(dry_run=args.dry_run)), dry_run=args.dry_run)
+    _print_summary(
+        asyncio.run(main(dry_run=args.dry_run, force=args.force)),
+        dry_run=args.dry_run,
+    )

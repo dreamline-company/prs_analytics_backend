@@ -4,6 +4,9 @@
 ремонт, закрытый в ABAI спустя полгода, иначе висел бы у нас открытым вечно.
 Ремонт, которого в ABAI больше нет, помечается ``abai_deleted_at`` и перестаёт
 считаться идущим; запись остаётся ради привязанной аналитики, СПО и сводок.
+Пропало больше ``MAX_GONE`` / ``MAX_GONE_SHARE`` — это сбой ответа ABAI, а не
+удаления: ничего не помечается. Помеченный ремонт, снова найденный в ABAI,
+пометку теряет (ложная пометка иначе была бы вечной).
 Ремонты, закрытые нами по телеметрии (``closed_by_telemetry_at``), тоже
 сверяются: дата окончания из ABAI заменяет нашу, пометка снимается.
 """
@@ -28,20 +31,33 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 
+def too_many_gone(gone: int, checked: int) -> bool:
+    """Столько пропавших за прогон — сбой источника, а не удаления."""
+    return gone > max(
+        UpdateNotFinishedRepairs.MAX_GONE,
+        checked * UpdateNotFinishedRepairs.MAX_GONE_SHARE,
+    )
+
+
 class UpdateNotFinishedRepairs:
     ITER_SIZE = 1000
+    # Настоящие удаления — единицы в месяц (на 04.11.2026 всего 10).
+    MAX_GONE = 3
+    MAX_GONE_SHARE = 0.1
 
     async def run(self) -> None:
         logger.info("UpdateNotFinishedRepairs task started.")
         now = datetime.now(tz=settings.ZONE_INFO).replace(tzinfo=None)
         async with session_makers["abai"]() as abai_session:
             abai_repairs_repo = ABAIWellWorkoverRepository(abai_session)
-            updated = deleted = 0
+            updated = deleted = restored = checked = 0
+            gone: list[int] = []
             async with session_makers["app"]() as app_session:
                 app_repairs_repo = RepairRepository(app_session)
                 try:
                     async for nf_repairs in self._iter_nf_repairs(app_repairs_repo):
                         nf_repairs_abai_ids = [r.abai_id for r in nf_repairs]
+                        checked += len(nf_repairs_abai_ids)
                         logger.debug(
                             "Batch: %s non-finished repairs fetched from app DB.",
                             len(nf_repairs),
@@ -58,17 +74,11 @@ class UpdateNotFinishedRepairs:
                         if not abai_repairs:
                             continue
                         found_ids = {ar.id for ar in abai_repairs}
-                        for abai_id in nf_repairs_abai_ids:
-                            if abai_id not in found_ids:
-                                logger.info(
-                                    "Repair abai_id=%s is gone from ABAI; marked.",
-                                    abai_id,
-                                )
-                                await app_repairs_repo.update_by_abai_id(
-                                    abai_id=abai_id,
-                                    data=UpdateRepairDTO(abai_deleted_at=now),
-                                )
-                                deleted += 1
+                        gone.extend(
+                            abai_id
+                            for abai_id in nf_repairs_abai_ids
+                            if abai_id not in found_ids
+                        )
                         for ar in abai_repairs:
                             if ar.dend is not None and isinstance(ar.dend, datetime):
                                 logger.debug(
@@ -87,14 +97,25 @@ class UpdateNotFinishedRepairs:
                                     ),
                                 )
                                 updated += 1
-                    if updated or deleted:
+                    deleted = await self._mark_gone(
+                        app_repairs_repo,
+                        gone,
+                        checked=checked,
+                        now=now,
+                    )
+                    restored = await self._unmark_found(
+                        app_repairs_repo,
+                        abai_repairs_repo,
+                    )
+                    if updated or deleted or restored:
                         await app_session.commit()
 
                         logger.info(
                             "Updated %s repairs and set as finished; "
-                            "%s marked as deleted in ABAI.",
+                            "%s marked as deleted in ABAI, %s unmarked.",
                             updated,
                             deleted,
+                            restored,
                         )
                     logger.info(
                         "UPdating of non finished repairs is done successfully.",
@@ -102,6 +123,54 @@ class UpdateNotFinishedRepairs:
                 except Exception:
                     logger.exception("Update of Not finished repairs is failed.")
                     await app_session.rollback()
+
+    async def _mark_gone(
+        self,
+        repairs_repo: RepairRepository,
+        gone: list[int],
+        *,
+        checked: int,
+        now: datetime,
+    ) -> int:
+        if too_many_gone(len(gone), checked):
+            logger.error(
+                "%s of %s open repairs not found in ABAI — source read failure "
+                "suspected, nothing marked as deleted",
+                len(gone),
+                checked,
+            )
+            return 0
+        for abai_id in gone:
+            logger.info("Repair abai_id=%s is gone from ABAI; marked.", abai_id)
+            await repairs_repo.update_by_abai_id(
+                abai_id=abai_id,
+                data=UpdateRepairDTO(abai_deleted_at=now),
+            )
+        return len(gone)
+
+    async def _unmark_found(
+        self,
+        repairs_repo: RepairRepository,
+        abai_repairs_repo: ABAIWellWorkoverRepository,
+    ) -> int:
+        marked = await repairs_repo.get_list(
+            spec=QuerySpec(filters=(Repair.abai_deleted_at.is_not(None),)),
+        )
+        if not marked:
+            return 0
+        found = {
+            row.id
+            for row in await abai_repairs_repo.list_by_ids(
+                [repair.abai_id for repair in marked],
+            )
+        }
+        for abai_id in sorted(found):
+            logger.warning("Repair abai_id=%s is back in ABAI; unmarked.", abai_id)
+            await repairs_repo.update_by_abai_id(
+                abai_id=abai_id,
+                data=UpdateRepairDTO(abai_deleted_at=None),
+            )
+        return len(found)
 
     async def _iter_nf_repairs(
         self,

@@ -238,3 +238,30 @@ def test_shrunk_source_aborts_before_any_write() -> None:
 
     assert log == []
     assert session.calls == []
+
+
+def test_mass_delete_from_broken_batch_aborts() -> None:
+    # Источник отдал половину копии (вторая порция оборвалась) — порог доли
+    # источника проходит, но 64 удаления — это сбой, а не правки.
+    mirror = {"well_tech": [stale_link(i, tech=100) for i in range(1, 129)]}
+    loader, _session, log = make_loader(mirror)
+    loader.abai_well_tech_repo = FakeSource(
+        [
+            SimpleNamespace(
+                id=i,
+                well=10,
+                tech=100,
+                tap=8,
+                dbeg=None,
+                dend=OPEN_LINK_END,
+            )
+            for i in range(1, 65)
+        ],
+    )
+
+    with pytest.raises(SourceShrunkError):
+        asyncio.run(loader.run())
+    assert log == []
+
+    asyncio.run(loader.run(force=True))
+    assert "delete well_tech" in log[-1]

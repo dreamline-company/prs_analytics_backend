@@ -58,7 +58,11 @@ from apps.compensation.services.allocation import (
     pairs_to_close,
     target_speed,
 )
-from apps.compensation.services.losses import LossValue, compute_losses
+from apps.compensation.services.losses import (
+    LossValue,
+    compute_losses,
+    pending_resolution,
+)
 from apps.compensation.services.state import (
     CompensationStateService,
     WellsState,
@@ -91,6 +95,8 @@ class NgduChanges:
     loss_values: list[LossValue]
     closing: list[tuple[int, str]]  # (пара, причина) — кроме перехватов
     allocation: Allocation
+    # Ушли из «стоит», но снятие не подтверждено — пары держатся.
+    pending_losses: set[int]
 
 
 class DonorAssigner:
@@ -185,6 +191,11 @@ class DonorAssigner:
         open_pairs = list(
             await self.pair_repository.list_open_by_donor_ids(list(donor_by_id)),
         )
+        pending_losses = await pending_resolution(
+            self.session,
+            sorted({pair.loss_well_id for pair in open_pairs} - set(state.stops)),
+            now=local_now,
+        )
         closing = pairs_to_close(
             [
                 OpenPair(
@@ -206,7 +217,8 @@ class DonorAssigner:
                 )
                 for pair in open_pairs
             ],
-            stopped_well_ids=set(state.stops),
+            # Неподтверждённое снятие — как остановка: пары не закрываются.
+            stopped_well_ids=set(state.stops) | pending_losses,
             available_donor_well_ids=available,
         )
         closed_ids = {pair_id for pair_id, _ in closing}
@@ -275,6 +287,7 @@ class DonorAssigner:
             loss_values=loss_values,
             closing=closing,
             allocation=allocation,
+            pending_losses=pending_losses,
         )
 
     async def _apply(self, changes: NgduChanges, abai_ngdu_id: int) -> None:
@@ -357,6 +370,9 @@ def _print_changes(ngdu_name: str, changes: NgduChanges) -> None:
         f"с оценкой {len(losses)} (факт {sources['fact']}, план {sources['plan']}), "
         f"в пуле доноров {sum(d.in_pool for d in donors.values())}",
     )
+    if changes.pending_losses:
+        held = ", ".join(sorted(name(w) for w in changes.pending_losses))
+        print(f"  держим пары (снятие не подтверждено): {held}")  # noqa: T201
     for pair_id, reason in changes.closing:
         pair = by_pair[pair_id]
         after[pair.loss_well_id] -= 1
