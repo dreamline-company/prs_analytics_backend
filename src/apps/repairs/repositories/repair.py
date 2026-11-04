@@ -292,6 +292,23 @@ class RepairRepository(
             .values(abai_repair_type_id=abai_repair_type_id),
         )
 
+    async def list_existing_abai_ids(
+        self,
+        abai_ids: Sequence[int],
+        *,
+        chunk_size: int = 1000,
+    ) -> set[int]:
+        """Какие из ``abai_ids`` уже есть у нас."""
+        existing: set[int] = set()
+        for start in range(0, len(abai_ids), chunk_size):
+            result = await self.session.execute(
+                select(Repair.abai_id).where(
+                    Repair.abai_id.in_(abai_ids[start : start + chunk_size]),
+                ),
+            )
+            existing.update(result.scalars())
+        return existing
+
     async def get_last_by_abai_id(self) -> Repair | None:
         rs = await self.get_list(
             spec=QuerySpec(order_by=(Repair.abai_id.desc(),), limit=1),

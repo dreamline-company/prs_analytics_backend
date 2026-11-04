@@ -1,3 +1,12 @@
+"""Скважины из ABAI (ручной запуск): новые, переименования, удаления.
+
+Скважина, которой нет в ответе ABAI, помечается ``is_deleted`` и пропадает из
+матрицы, состояний и загрузок. Помечаемых больше ``MAX_DELETE`` /
+``MAX_DELETE_SHARE`` — сбой ответа (пустой, обрезанный), прогон прерывается до
+записи; настоящую массовую правку записывает ``--force``.
+"""
+
+import argparse
 import asyncio
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,13 +21,20 @@ from shared.repository.sqlalchemy import QuerySpec
 logger = get_logger(__name__)
 
 
+class WellsSourceShrunkError(RuntimeError):
+    """ABAI отдал подозрительно мало скважин — запись прервана."""
+
+
 class LoadWells:
+    MAX_DELETE = 50
+    MAX_DELETE_SHARE = 0.05
+
     def __init__(self, abai_session: AsyncSession, app_session: AsyncSession) -> None:
         self.abai_wells_repo = ABAIWellRepository(session=abai_session)
         self.well_repo = WellRepository(session=app_session)
         self.app_session = app_session
 
-    async def run(self) -> None:
+    async def run(self, *, force: bool = False) -> None:
         abai_wells = await self.abai_wells_repo.get_list(spec=QuerySpec())
         # abai_wells = [w for w in abai_wells if len(w.uwi) == 8 and w.uwi[4:].isdigit()]
         app_wells = await self.well_repo.get_list()
@@ -37,6 +53,16 @@ class LoadWells:
             for well in app_wells
             if well.abai_id not in abai_ids and not well.is_deleted
         ]
+        active = sum(not well.is_deleted for well in app_wells)
+        limit = max(self.MAX_DELETE, active * self.MAX_DELETE_SHARE)
+        if len(deleted_abai_ids) > limit and not force:
+            logger.error(
+                "Wells sync aborted: %s of %s wells missing in ABAI "
+                "(run with --force if ABAI really changed that much)",
+                len(deleted_abai_ids),
+                active,
+            )
+            raise WellsSourceShrunkError
         restored_abai_ids = [
             well.abai_id
             for well in app_wells
@@ -82,7 +108,7 @@ class LoadWells:
         )
 
 
-async def main() -> None:
+async def main(*, force: bool = False) -> None:
     async with (
         session_makers["abai"]() as abai_session,
         session_makers["app"]() as app_session,
@@ -90,8 +116,14 @@ async def main() -> None:
         await LoadWells(
             abai_session=abai_session,
             app_session=app_session,
-        ).run()
+        ).run(force=force)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Скважины из ABAI")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="записать, даже если удалённых в ABAI скважин больше порога",
+    )
+    asyncio.run(main(force=parser.parse_args().force))
