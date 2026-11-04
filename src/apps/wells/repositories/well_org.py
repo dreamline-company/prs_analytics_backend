@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 
 from apps.wells.dto.internal.repositories.well_org import (
     CreateWellOrgDTO,
@@ -29,6 +29,16 @@ class WellOrgRepository(
         WellOrg.dbeg.desc().nullslast(),
         WellOrg.abai_id.desc(),
     )
+
+    async def list_well_abai_ids_without_rows(self) -> list[int]:
+        """Скважины, у которых в копии нет ни одной строки."""
+        result = await self.session.execute(
+            select(Well.abai_id).where(
+                Well.abai_id.is_not(None),
+                ~exists().where(WellOrg.abai_well_id == Well.abai_id),
+            ),
+        )
+        return list(result.scalars())
 
     async def get_max_abai_id(self) -> int:
         result = await self.session.execute(select(func.max(WellOrg.abai_id)))
