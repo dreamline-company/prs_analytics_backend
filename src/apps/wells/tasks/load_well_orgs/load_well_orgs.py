@@ -1,9 +1,12 @@
 """Инкрементальная загрузка привязок скважин к орг. объектам (emg.well_org).
 
-Две фазы за прогон:
+Три фазы за прогон:
 
 1. Новые строки — keyset по ``id > max(abai_id)`` батчами.
-2. Открытые интервалы — источник закрывает период правкой ``dend`` (или меняет
+2. Новые скважины — у скважины нет ни одной строки в копии, а в ABAI есть:
+   её завели (``load_wells`` ручной) позже, чем пришли её строки, и шаг 1 их
+   пропустил, а курсор ушёл дальше. Строки дочитываются по скважине.
+3. Открытые интервалы — источник закрывает период правкой ``dend`` (или меняет
    организацию) у уже существующей строки, новый id при этом не появляется.
    Поэтому строки с ``dend`` пустым или в будущем перечитываются и
    обновляются, иначе копия навсегда останется с устаревшей привязкой.
@@ -54,6 +57,7 @@ class LoadWellOrgs:
 
         try:
             created, skipped = await self._load_new_rows()
+            restored = await self._restore_new_wells()
             updated = await self._refresh_open_intervals(on_date)
             await self.app_session.commit()
         except Exception:
@@ -62,8 +66,9 @@ class LoadWellOrgs:
             raise
 
         logger.info(
-            "Well org sync finished: created=%s, updated=%s, skipped=%s",
+            "Well org sync finished: created=%s, restored=%s, updated=%s, skipped=%s",
             created,
+            restored,
             updated,
             skipped,
         )
@@ -85,16 +90,7 @@ class LoadWellOrgs:
             skipped += len(rows) - len(loadable)
 
             await self.well_org_repo.bulk_create(
-                [
-                    CreateWellOrgDTO(
-                        abai_id=row.id,
-                        abai_well_id=row.well,
-                        abai_org_id=row.org,
-                        dbeg=row.dbeg,
-                        dend=row.dend,
-                    )
-                    for row in loadable
-                ],
+                [self._create_dto(row) for row in loadable],
             )
             created += len(loadable)
             last_abai_id = rows[-1].id
@@ -103,6 +99,30 @@ class LoadWellOrgs:
                 break
 
         return created, skipped
+
+    async def _restore_new_wells(self) -> int:
+        wells = await self.well_org_repo.list_well_abai_ids_without_rows()
+        rows = [
+            row
+            for row in await self.abai_well_org_repo.list_by_wells(wells)
+            if self._is_loadable(row)
+        ]
+        if rows:
+            logger.warning("Well orgs of newly added wells restored: %s", len(rows))
+            await self.well_org_repo.bulk_create(
+                [self._create_dto(row) for row in rows]
+            )
+        return len(rows)
+
+    @staticmethod
+    def _create_dto(row: ABAIWellOrg) -> CreateWellOrgDTO:
+        return CreateWellOrgDTO(
+            abai_id=row.id,
+            abai_well_id=row.well,
+            abai_org_id=row.org,
+            dbeg=row.dbeg,
+            dend=row.dend,
+        )
 
     async def _refresh_open_intervals(self, on_date: date) -> int:
         open_rows = await self.well_org_repo.list_open_intervals(on_date)

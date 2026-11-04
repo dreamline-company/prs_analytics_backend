@@ -1,9 +1,12 @@
 """Инкрементальная загрузка периодов эксплуатации скважин (emg.well_expl).
 
-Две фазы за прогон:
+Три фазы за прогон:
 
 1. Новые строки — keyset по ``id > max(abai_id)`` батчами.
-2. Открытые интервалы — источник закрывает период правкой ``dend`` у уже
+2. Новые скважины — у скважины нет ни одной строки в копии, а в ABAI есть:
+   её завели (``load_wells`` ручной) позже, чем пришли её строки, и шаг 1 их
+   пропустил, а курсор ушёл дальше. Строки дочитываются по скважине.
+3. Открытые интервалы — источник закрывает период правкой ``dend`` у уже
    существующей строки (было ``3333-12-31`` → стало дата смены способа), новый
    id при этом не появляется. Поэтому строки с ``dend`` пустым или в будущем
    перечитываются и обновляются, иначе копия навсегда останется с открытым
@@ -67,6 +70,7 @@ class LoadWellExpl:
 
         try:
             created, skipped = await self._load_new_rows()
+            restored = await self._restore_new_wells()
             updated = await self._refresh_open_intervals(on_date)
             await self.app_session.commit()
         except Exception:
@@ -75,8 +79,9 @@ class LoadWellExpl:
             raise
 
         logger.info(
-            "Well expl sync finished: created=%s, updated=%s, skipped=%s",
+            "Well expl sync finished: created=%s, restored=%s, updated=%s, skipped=%s",
             created,
+            restored,
             updated,
             skipped,
         )
@@ -99,16 +104,7 @@ class LoadWellExpl:
             await self._ensure_types(loadable)
 
             await self.expl_repo.bulk_create(
-                [
-                    CreateWellExplDTO(
-                        abai_id=row.id,
-                        abai_well_id=row.well,
-                        expl=self._expl_or_none(row),
-                        dbeg=row.dbeg,
-                        dend=row.dend,
-                    )
-                    for row in loadable
-                ],
+                [self._create_dto(row) for row in loadable],
             )
             created += len(loadable)
             last_abai_id = rows[-1].id
@@ -117,6 +113,28 @@ class LoadWellExpl:
                 break
 
         return created, skipped
+
+    async def _restore_new_wells(self) -> int:
+        wells = await self.expl_repo.list_well_abai_ids_without_rows()
+        rows = [
+            row
+            for row in await self.abai_expl_repo.list_by_wells(wells)
+            if self._is_loadable(row)
+        ]
+        if rows:
+            logger.warning("Well expl of newly added wells restored: %s", len(rows))
+            await self._ensure_types(rows)
+            await self.expl_repo.bulk_create([self._create_dto(row) for row in rows])
+        return len(rows)
+
+    def _create_dto(self, row: ABAIWellExpl) -> CreateWellExplDTO:
+        return CreateWellExplDTO(
+            abai_id=row.id,
+            abai_well_id=row.well,
+            expl=self._expl_or_none(row),
+            dbeg=row.dbeg,
+            dend=row.dend,
+        )
 
     async def _refresh_open_intervals(self, on_date: date) -> int:
         open_rows = await self.expl_repo.list_open_intervals(on_date)

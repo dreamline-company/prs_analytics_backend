@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 
 from apps.wells.dto.internal.repositories.well_expl import (
     CreateWellExplDTO,
@@ -9,6 +9,7 @@ from apps.wells.dto.internal.repositories.well_expl import (
     UpdateWellExplDTO,
     UpdateWellExplTypeDTO,
 )
+from apps.wells.models.well import Well
 from apps.wells.models.well_expl import WellExpl, WellExplType
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
@@ -47,6 +48,16 @@ class WellExplRepository(
     AsyncAlchemyRepository[CreateWellExplDTO, UpdateWellExplDTO, WellExpl],
 ):
     model = WellExpl
+
+    async def list_well_abai_ids_without_rows(self) -> list[int]:
+        """Скважины, у которых в копии нет ни одной строки."""
+        result = await self.session.execute(
+            select(Well.abai_id).where(
+                Well.abai_id.is_not(None),
+                ~exists().where(WellExpl.abai_well_id == Well.abai_id),
+            ),
+        )
+        return list(result.scalars())
 
     async def get_max_abai_id(self) -> int:
         result = await self.session.execute(select(func.max(WellExpl.abai_id)))

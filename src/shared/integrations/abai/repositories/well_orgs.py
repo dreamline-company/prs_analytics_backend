@@ -31,6 +31,16 @@ class ABAIWellOrgRepository(
             ),
         )
 
+    async def list_by_wells(self, well_ids: Sequence[int]) -> Sequence[WellOrg]:
+        if not well_ids:
+            return ()
+        return await self.get_list(
+            QuerySpec(
+                filters=(WellOrg.well.in_(well_ids),),
+                order_by=(WellOrg.id,),
+            ),
+        )
+
     async def list_by_well(self, well_id: int) -> Sequence[WellOrg]:
         return await self.get_list(
             QuerySpec(
