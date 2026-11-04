@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from datetime import datetime
 
 from shared.integrations.abai.models import Reason, WellStatus, WellStatusType
 from shared.integrations.abai.repositories.base import ABAIReadOnlyRepository
@@ -35,6 +36,15 @@ class ABAIWellStatusRepository(
                 filters=(WellStatus.id > last_id,),
                 order_by=(WellStatus.id.asc(),),
                 limit=limit,
+            ),
+        )
+
+    async def list_ending_after(self, since: datetime) -> Sequence[WellStatus]:
+        """Интервалы, закончившиеся после ``since`` или ещё открытые."""
+        return await self.get_list(
+            QuerySpec(
+                filters=(WellStatus.dend > since,),
+                order_by=(WellStatus.id.asc(),),
             ),
         )
 

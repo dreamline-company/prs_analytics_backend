@@ -5,11 +5,17 @@
 1. Справочники статусов и причин — целиком (десятки и ~1 тыс. строк): новые
    создаются, изменившиеся обновляются.
 2. Новые интервалы — keyset по ``id > max(abai_id)`` батчами.
-3. Открытые интервалы (``dend`` в будущем) — источник закрывает интервал
+3. Восстановление: интервалы источника, открытые или закрывшиеся за
+   последние ``RESTORE_LOOKBACK``, которых нет в копии, создаются заново.
+   Шаг 2 берёт только id больше нашего максимума и пропавшую строку сам не
+   вернёт (04.11.2026 сбойный прогон удалил 7,8 тыс. открытых интервалов).
+4. Открытые интервалы (``dend`` в будущем) — источник закрывает интервал
    правкой ``dend`` у существующей строки, новый id при этом не появляется.
    Такие строки перечитываются и обновляются; исчезнувшие в источнике
    удаляются: ошибочно заведённый и удалённый простой иначе навсегда исключил
-   бы скважину из мониторинга.
+   бы скважину из мониторинга. Если исчезла заметная доля (``MAX_GONE``,
+   ``MAX_GONE_SHARE``) — это сбой чтения источника, а не правка технологов:
+   ничего не удаляется. Настоящие удаления — единицы за прогон.
 
 Время копируется как есть — UTC, открытый интервал до 3333-12-31. Строки по
 скважине, которой нет в нашем ``wells_well``, пропускаются (FK на
@@ -17,7 +23,7 @@
 """
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,6 +67,11 @@ class LoadWellStatus:
     ITER_BATCH_SIZE = 5000
     # Размер IN-списка при перечитывании открытых интервалов.
     REFRESH_CHUNK_SIZE = 1000
+    # Глубина восстановления пропавших в копии интервалов.
+    RESTORE_LOOKBACK = timedelta(days=3)
+    # Больше стольких пропавших за прогон — сбой источника, не удалять.
+    MAX_GONE = 50
+    MAX_GONE_SHARE = 0.05
 
     def __init__(self, abai_session: AsyncSession, app_session: AsyncSession) -> None:
         self.abai_status_repo = ABAIWellStatusRepository(session=abai_session)
@@ -83,6 +94,7 @@ class LoadWellStatus:
             await self._sync_types()
             await self._sync_reasons()
             created, skipped = await self._load_new_rows()
+            restored = await self._restore_missing(now)
             updated, deleted = await self._refresh_open_intervals(now)
             await self.app_session.commit()
         except Exception:
@@ -91,8 +103,10 @@ class LoadWellStatus:
             raise
 
         logger.info(
-            "Well status sync finished: created=%s, updated=%s, deleted=%s, skipped=%s",
+            "Well status sync finished: created=%s, restored=%s, updated=%s, "
+            "deleted=%s, skipped=%s",
             created,
+            restored,
             updated,
             deleted,
             skipped,
@@ -189,6 +203,23 @@ class LoadWellStatus:
 
         return created, skipped
 
+    async def _restore_missing(self, now: datetime) -> int:
+        source = await self.abai_status_repo.list_ending_after(
+            now - self.RESTORE_LOOKBACK,
+        )
+        existing = await self.status_repo.list_existing_abai_ids(
+            [row.id for row in source],
+        )
+        missing = [
+            row for row in source if row.id not in existing and self._is_loadable(row)
+        ]
+        if missing:
+            logger.warning("Well statuses missing in copy, restored: %s", len(missing))
+            await self.status_repo.bulk_create(
+                [self._create_dto(row) for row in missing],
+            )
+        return len(missing)
+
     async def _refresh_open_intervals(self, now: datetime) -> tuple[int, int]:
         open_rows = await self.status_repo.list_open_intervals(now)
         if not open_rows:
@@ -230,6 +261,15 @@ class LoadWellStatus:
                 )
                 updated += 1
 
+        limit = max(self.MAX_GONE, len(abai_ids) * self.MAX_GONE_SHARE)
+        if len(gone) > limit:
+            logger.error(
+                "Well statuses: %s of %s open intervals not found in source — "
+                "source read failure suspected, nothing deleted",
+                len(gone),
+                len(abai_ids),
+            )
+            return updated, 0
         if gone:
             logger.info("Well statuses deleted in source: %s", len(gone))
             await self.status_repo.delete_by_abai_ids(gone)
