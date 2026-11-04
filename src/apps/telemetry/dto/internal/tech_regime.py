@@ -13,3 +13,4 @@ class TechRegimeDTO(BaseModel):
     end_date: date
     liquid: float | None
     oil: float | None
+    water_cut: float | None = None

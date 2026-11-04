@@ -10,6 +10,7 @@ class CreateTechRegimeDTO(RepositoryDTO):
     end_date: date
     liquid: float | None
     oil: float | None
+    water_cut: float | None = None
 
 
 class UpdateTechRegimeDTO(RepositoryDTO):
@@ -18,3 +19,4 @@ class UpdateTechRegimeDTO(RepositoryDTO):
     end_date: date | None = None
     liquid: float | None = None
     oil: float | None = None
+    water_cut: float | None = None

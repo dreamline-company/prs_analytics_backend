@@ -19,6 +19,7 @@ from apps.detectors.models.incident import (
     DetectorCursor,
     DetectorIncident,
 )
+from apps.detectors.models.r2_loss_report import DetectorR2LossReport
 from apps.detectors.models.verification import (
     DetectorVerification,
     DetectorVerificationHistory,
@@ -79,6 +80,7 @@ __all__ = (
     "DetectorDailySheetDelivery",
     "DetectorFinding",
     "DetectorIncident",
+    "DetectorR2LossReport",
     "DetectorVerification",
     "DetectorVerificationHistory",
     "Dynamogram",

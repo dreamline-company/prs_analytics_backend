@@ -14,6 +14,7 @@
 даты окончания пропускаются: FK и NOT NULL иначе роняли бы весь прогон.
 """
 
+import argparse
 import asyncio
 from collections.abc import AsyncGenerator, Sequence
 from datetime import date, datetime, timedelta
@@ -46,6 +47,7 @@ def regime_dto(row: TechModeProdOil) -> CreateTechRegimeDTO:
         end_date=row.dend,
         oil=row.oil,
         liquid=row.liquid,
+        water_cut=row.wcut,
     )
 
 
@@ -56,6 +58,7 @@ def regime_changed(local: TechRegime, row: TechModeProdOil) -> bool:
         or local.end_date != row.dend
         or local.oil != row.oil
         or local.liquid != row.liquid
+        or local.water_cut != row.wcut
     )
 
 
@@ -65,7 +68,12 @@ class ABAILoadTechRegime:
     MAX_GONE = 50
     MAX_GONE_SHARE = 0.05
 
-    async def run(self, *, today: date | None = None) -> None:
+    async def run(
+        self,
+        *,
+        today: date | None = None,
+        reread_days: int | None = None,
+    ) -> None:
         today = today or datetime.now(tz=settings.ZONE_INFO).date()
         async with (
             session_makers["app"]() as app_session,
@@ -89,7 +97,7 @@ class ABAILoadTechRegime:
                 created, updated, deleted = await self._reread(
                     abai_tech_repo,
                     app_tech_repo,
-                    since=today - timedelta(days=self.REREAD_DAYS),
+                    since=today - timedelta(days=reread_days or self.REREAD_DAYS),
                 )
                 await app_session.commit()
             except Exception:
@@ -167,6 +175,7 @@ class ABAILoadTechRegime:
                     end_date=row.dend,
                     oil=row.oil,
                     liquid=row.liquid,
+                    water_cut=row.wcut,
                 ),
             )
         if len(gone) > max(self.MAX_GONE, len(local_recent) * self.MAX_GONE_SHARE):
@@ -203,8 +212,8 @@ class ABAILoadTechRegime:
                 break
 
 
-async def main() -> None:
-    await ABAILoadTechRegime().run()
+async def main(*, reread_days: int | None = None) -> None:
+    await ABAILoadTechRegime().run(reread_days=reread_days)
 
 
 @celery_app.task(name="telemetry.tech_regime.incremental_load")
@@ -213,5 +222,16 @@ def load_tech_regime_incremental() -> None:
     run_async(main())
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Техрежимы из ABAI")
+    parser.add_argument(
+        "--reread-days",
+        type=int,
+        default=None,
+        help="Перечитать режимы, действовавшие за N дней (разовая догрузка полей)",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main(reread_days=_parse_args().reread_days))

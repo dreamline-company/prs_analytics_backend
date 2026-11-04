@@ -5,9 +5,12 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.detectors.dto.internal.daily_sheet import DailySheetDTO
+from apps.detectors.dto.internal.r2_loss_report import R2LossReportDTO
 from apps.detectors.dto.queries.daily_sheet import GetDailySheetQuery, SheetDetectorCode
 from apps.detectors.dto.responses.daily_sheet import DailySheetResponseDTO
+from apps.detectors.dto.responses.r2_loss_report import R2LossReportResponseDTO
 from apps.detectors.use_cases.get_daily_sheet import GetDailySheetUseCase
+from apps.detectors.use_cases.get_r2_loss_report import GetR2LossReportUseCase
 from core.settings import get_settings
 from shared.database.s3.storage import AiobotoFileStorage
 from shared.dependencies.db import (
@@ -80,3 +83,45 @@ async def get_daily_sheet(  # noqa: PLR0913
         ),
     )
     return DailySheetResponseDTO(data=sheet)
+
+
+@router.get(
+    "/r2-losses",
+    response_model=AppResponse[R2LossReportDTO],
+    summary="Отчёт «Обрыв штанг»: скважины с сигналом R2 без ремонта и недобор нефти",
+    description=(
+        "Один отчёт на дату по всем НГДУ — сохранённый артефакт: первый запрос "
+        "собирает его из записанных эпизодов R2 и кладёт xlsx в S3, повторные "
+        "отдают готовое (отчёт, собранный до 07:00 следующего дня, при "
+        "следующем запросе пересобирается). В отчёт попадают скважины с "
+        "эпизодом R2 за 60 суток, не признанным проверкой ложным, без начатого "
+        "ремонта, которые после сигнала так и не заработали с нормальным "
+        "моментом. 409 — за дату нет телеметрии ни одной станции R2."
+    ),
+)
+async def get_r2_loss_report(
+    session: Annotated[AsyncSession, Depends(get_app_session)],
+    report_date: Annotated[
+        date,
+        Query(alias="date", description="Дата отчёта, YYYY-MM-DD"),
+    ],
+    rebuild: Annotated[  # noqa: FBT002 — query-параметр FastAPI
+        bool,
+        Query(description="Пересобрать, даже если отчёт за дату уже есть"),
+    ] = False,
+    expires_in: Annotated[
+        int,
+        Query(ge=60, le=7 * 24 * 3600, description="Срок ссылки на файл, сек"),
+    ] = 3600,
+) -> R2LossReportResponseDTO:
+    storage = AiobotoFileStorage(
+        bucket_name=settings.S3_BUCKET_NAME,
+        client_factory=get_aioboto_client_factory(),
+        presign_client_factory=get_aioboto_presign_client_factory(),
+    )
+    report = await GetR2LossReportUseCase(session, storage=storage).execute(
+        report_date,
+        rebuild=rebuild,
+        expires_in=expires_in,
+    )
+    return R2LossReportResponseDTO(data=report)

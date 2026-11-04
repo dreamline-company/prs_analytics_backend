@@ -46,6 +46,11 @@ from apps.detectors.tasks.mail_daily_sheets.mail_daily_sheets import (  # noqa: 
     mail_daily_sheets,
 )
 
+# Импорт регистрирует утренний отчёт «Обрыв штанг» (R2) и его рассылку.
+from apps.detectors.tasks.r2_loss_report.r2_loss_report import (  # noqa: F401
+    build_r2_loss_report,
+)
+
 # Импорт регистрирует справочник машин и загрузку GPS-треков из «Аргуса».
 from apps.gps.tasks.load_tracks.load_tracks import (  # noqa: F401
     NIGHTLY_REREAD_HOURS,
@@ -217,6 +222,13 @@ celery_app.conf.beat_schedule = {
     "detectors-daily-sheets-mail": {
         "task": "detectors.daily_sheet.mail",
         "schedule": crontab(hour=7, minute=50),
+    },
+    # Отчёт «Обрыв штанг» за вчера по всем НГДУ: скважины с сигналом R2 без
+    # ремонта и недобор нефти; одно письмо тем же получателям, что ведомости,
+    # повторно за дату не уходит.
+    "detectors-r2-loss-report": {
+        "task": "detectors.r2_loss_report.build",
+        "schedule": crontab(hour=7, minute=35),
     },
     # Ежедневная догрузка привязок скважин к оргструктуре из ABAI (новые id +
     # правки dend/org). После org.sync, чтобы матрица по НГДУ опиралась на

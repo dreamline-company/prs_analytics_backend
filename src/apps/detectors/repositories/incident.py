@@ -384,6 +384,25 @@ class DetectorIncidentRepository(
             ),
         )
 
+    async def list_opened_between(
+        self,
+        *,
+        detector_code: str,
+        opened_since: datetime,
+        opened_before: datetime,
+    ) -> Sequence[DetectorIncident]:
+        """Эпизоды правила, открытые в [opened_since, opened_before)."""
+        return await self.get_list(
+            QuerySpec(
+                filters=(
+                    DetectorIncident.detector_code == detector_code,
+                    DetectorIncident.opened_at >= opened_since,
+                    DetectorIncident.opened_at < opened_before,
+                ),
+                order_by=(DetectorIncident.opened_at.asc(), DetectorIncident.id.asc()),
+            ),
+        )
+
 
 class DetectorCursorRepository(
     AsyncAlchemyRepository[
