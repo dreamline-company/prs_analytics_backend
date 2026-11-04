@@ -17,6 +17,7 @@ from apps.files.dto.internal.repositories.file import CreateFileDTO
 from apps.files.models.file import File
 from apps.files.repositories.file import FileRepository
 from apps.repairs.models.repair import Repair
+from apps.repairs.tasks.fill_analytics.ai.dynamogram_image import detect_kind
 from apps.wells.dto.internal.repositories.dynamogram import CreateDynamogramDTO
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.repositories.dynamogram import DynamogramRepository
@@ -25,6 +26,9 @@ from shared.database.s3.storage import AiobotoFileStorage
 from shared.integrations.abai.api.client import AbaiAsyncClient, AbaiFile
 
 logger = get_logger(__name__)
+
+# Не файл, а страница ABAI или пустой ответ: такое не сохраняется.
+REJECTED_KINDS = frozenset({"html", "empty"})
 
 
 class AbaiDynamogramFetcher:
@@ -244,6 +248,16 @@ class AbaiDynamogramFetcher:
             )
             return None
 
+        kind = detect_kind(payload)
+        if kind in REJECTED_KINDS:
+            # Строку не создаём: следующий прогон скачает файл заново.
+            logger.warning(
+                "Dynamogram attachment abai_file_id=%s is %s, not saved.",
+                abai_file.id,
+                kind,
+            )
+            return None
+
         s3_key = f"dynamograms/{abai_file.id}/{abai_file.file_name}"
         try:
             await self._storage.upload_file(BytesIO(payload), s3_key)
@@ -254,16 +268,4 @@ class AbaiDynamogramFetcher:
         return await self._file_repo.create(CreateFileDTO(file=s3_key))
 
     async def _download_bytes(self, abai_file: AbaiFile) -> bytes:
-        await self._abai._ensure_login()  # noqa: SLF001
-        headers = {"Accept": "*/*"}
-        token = self._abai._xsrf_token  # noqa: SLF001
-        if token:
-            headers["X-XSRF-TOKEN"] = token
-        async with self._abai._client.stream(  # noqa: SLF001
-            "GET",
-            f"/ru/attachments/{abai_file.id}",
-            headers=headers,
-        ) as resp:
-            resp.raise_for_status()
-            chunks: list[bytes] = [chunk async for chunk in resp.aiter_bytes() if chunk]
-            return b"".join(chunks)
+        return await self._abai.fetch_attachment(abai_file.id)
