@@ -68,6 +68,12 @@ def match_connect_to(
     return host, port
 
 
+def looks_like_html(payload: bytes) -> bool:
+    """HTML-страница вместо файла (страница входа ABAI и т.п.)."""
+    head = payload[:512].lstrip().lower()
+    return head.startswith((b"<!doctype html", b"<html"))
+
+
 class _ConnectToBackend(AsyncNetworkBackend):
     """
     Network backend, который при connect_tcp подменяет адрес назначения по
@@ -750,6 +756,47 @@ class AbaiAsyncClient:
 
         log.info("Скачано: %s (%d байт)", out_path, out_path.stat().st_size)
         return out_path
+
+    async def fetch_attachment(self, file_id: int) -> bytes:
+        """Вложение в память: GET /ru/attachments/{file_id}.
+
+        Протухшая сессия здесь не даёт 401: ABAI редиректит на страницу входа и
+        отвечает 200 HTML. Поэтому редирект на вход или HTML вместо файла —
+        перелогин и один повтор; снова так — ``AbaiAuthError``. 09–11.09.2026
+        скачивание мимо этой проверки сохранило ~9,7 тыс. страниц входа как
+        динамограммы.
+        """
+        await self._ensure_login()
+        async with self._download_sem:
+            for relogin_attempt in (False, True):
+                login_gen = self._login_gen
+                headers = {"Accept": "*/*"}
+                if self._xsrf_token:
+                    headers["X-XSRF-TOKEN"] = self._xsrf_token
+                async with self._client.stream(
+                    "GET",
+                    f"/ru/attachments/{file_id}",
+                    headers=headers,
+                ) as resp:
+                    resp.raise_for_status()
+                    body = b"".join(
+                        [chunk async for chunk in resp.aiter_bytes() if chunk],
+                    )
+                    login_page = "login" in str(resp.url) or looks_like_html(body)
+                if not login_page:
+                    return body
+                if relogin_attempt:
+                    raise AbaiAuthError(
+                        f"Вместо вложения {file_id} — HTML-страница (сессия?).",
+                    )
+                log.warning(
+                    "Вместо вложения %s пришла HTML-страница — перелогин.",
+                    file_id,
+                )
+                if self._login_gen == login_gen:
+                    self._logged_in = False
+                await self._ensure_login()
+        raise AbaiAuthError(f"Не удалось скачать вложение {file_id}.")
 
     async def _save_stream(
         self,

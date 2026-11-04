@@ -36,6 +36,8 @@ from shared.integrations.abai.api.client import AbaiAsyncClient, AbaiFile
 
 logger = get_logger(__name__)
 
+PDF_SIGNATURE = b"%PDF"
+
 DocAction = Literal["skip", "set_act", "upload"]
 
 
@@ -100,6 +102,16 @@ class AbaiRepairDocFetcher:
         except Exception:
             logger.exception(
                 "Failed to download PRS PDF abai_file_id=%s for repair_id=%s.",
+                pdf.id,
+                repair.id,
+            )
+            return DocFetchOutcome(doc=existing, changed=False)
+
+        if not payload.startswith(PDF_SIGNATURE):
+            # Не PDF (страница ABAI, пустой ответ) — хороший файл не затираем и
+            # заглушку актом не закрепляем; следующий прогон скачает заново.
+            logger.warning(
+                "PRS attachment abai_file_id=%s for repair_id=%s is not a PDF.",
                 pdf.id,
                 repair.id,
             )
@@ -183,16 +195,4 @@ class AbaiRepairDocFetcher:
         return None
 
     async def _download_bytes(self, abai_file: AbaiFile) -> bytes:
-        await self._abai._ensure_login()  # noqa: SLF001
-        headers = {"Accept": "*/*"}
-        token = self._abai._xsrf_token  # noqa: SLF001
-        if token:
-            headers["X-XSRF-TOKEN"] = token
-        async with self._abai._client.stream(  # noqa: SLF001
-            "GET",
-            f"/ru/attachments/{abai_file.id}",
-            headers=headers,
-        ) as resp:
-            resp.raise_for_status()
-            chunks: list[bytes] = [chunk async for chunk in resp.aiter_bytes() if chunk]
-            return b"".join(chunks)
+        return await self._abai.fetch_attachment(abai_file.id)
