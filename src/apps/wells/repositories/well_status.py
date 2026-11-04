@@ -97,6 +97,22 @@ class WellStatusRepository(
             filters=(WellStatus.abai_id == abai_id,),
         )
 
+    async def list_existing_abai_ids(
+        self,
+        abai_ids: Sequence[int],
+        *,
+        chunk_size: int = 1000,
+    ) -> set[int]:
+        """Какие из ``abai_ids`` уже есть в копии."""
+        existing: set[int] = set()
+        for start in range(0, len(abai_ids), chunk_size):
+            chunk = abai_ids[start : start + chunk_size]
+            result = await self.session.execute(
+                select(WellStatus.abai_id).where(WellStatus.abai_id.in_(chunk)),
+            )
+            existing.update(result.scalars())
+        return existing
+
     async def delete_by_abai_ids(self, abai_ids: Sequence[int]) -> None:
         if not abai_ids:
             return
