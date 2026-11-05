@@ -305,13 +305,15 @@ class GetRepairAnalyticsViewUseCase:
         self,
         repair: Repair,
     ) -> list[BrigadeErrorScreenDTO]:
-        """Экраны бригады за время ремонта — те же, что в KPI и ИИ-вердикте."""
+        """Экраны бригады за время ремонта — та же цепочка, что в KPI и
+        ИИ-вердикте, но только обработанные в CM (``is_processed``)."""
         screens = await list_repair_error_screens(
             repair,
             repair_brigade_repo=self.repair_brigade_repository,
             unique_brigade_repo=self.unique_brigade_repository,
             cm_brigade_repo=self.cm_brigade_repository,
             cm_brigade_error_screen_repo=self.cm_brigade_error_screen_repository,
+            processed_only=True,
         )
         return [
             BrigadeErrorScreenDTO.model_validate(screen).model_copy(

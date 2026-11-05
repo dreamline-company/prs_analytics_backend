@@ -91,16 +91,20 @@ class CMBrigadeErrorScreenRepository(
         *,
         start_time: datetime,
         end_time: datetime,
+        processed_only: bool = False,
     ) -> Sequence[BrigadeErrorScreen]:
         if not brigade_ids:
             return ()
+        filters = [
+            BrigadeErrorScreen.brigade_id.in_(brigade_ids),
+            BrigadeErrorScreen.timestamp >= to_aware(start_time),
+            BrigadeErrorScreen.timestamp <= to_aware(end_time),
+        ]
+        if processed_only:
+            filters.append(BrigadeErrorScreen.is_processed.is_(True))
         return await self.get_list(
             QuerySpec(
-                filters=(
-                    BrigadeErrorScreen.brigade_id.in_(brigade_ids),
-                    BrigadeErrorScreen.timestamp >= to_aware(start_time),
-                    BrigadeErrorScreen.timestamp <= to_aware(end_time),
-                ),
+                filters=tuple(filters),
                 order_by=(BrigadeErrorScreen.timestamp,),
             ),
         )
