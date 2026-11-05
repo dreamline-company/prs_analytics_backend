@@ -58,6 +58,7 @@ class _CMBrigades:
 class _Screens:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
+        self.processed_only: list[bool] = []
 
     async def list_by_brigade_ids_in_range(
         self,
@@ -65,8 +66,10 @@ class _Screens:
         *,
         start_time: datetime,
         end_time: datetime,
+        processed_only: bool = False,
     ) -> list[str]:
         self.calls.append((brigade_ids, start_time, end_time))
+        self.processed_only.append(processed_only)
         return ["screen"]
 
 
@@ -75,6 +78,7 @@ def _run(
     brigade_id: int | None = 1,
     name: str = "Бригада ПРС №12",
     end: datetime | None = END,
+    processed_only: bool = False,
 ) -> tuple[list, _CMBrigades, _Screens]:
     cm, screens = _CMBrigades(), _Screens()
     result = asyncio.run(
@@ -84,6 +88,7 @@ def _run(
             unique_brigade_repo=_Brigades(name),
             cm_brigade_repo=cm,
             cm_brigade_error_screen_repo=screens,
+            processed_only=processed_only,
         ),
     )
     return list(result), cm, screens
@@ -101,6 +106,49 @@ def test_open_repair_is_searched_until_now() -> None:
     _, _, screens = _run(end=None)
 
     assert screens.calls[0][2] > END
+
+
+def test_all_screens_by_default_processed_only_on_request() -> None:
+    assert _run()[2].processed_only == [False]  # KPI и ИИ-вердикт
+    assert _run(processed_only=True)[2].processed_only == [True]
+
+
+def test_analytics_page_shows_only_processed_screens() -> None:
+    cm, screens = _CMBrigades(), _Screens()
+    use_case = GetRepairAnalyticsViewUseCase(
+        **dict.fromkeys(
+            (
+                "repair_repository",
+                "wells_repository",
+                "analytics_repository",
+                "analytics_dynamogram_repository",
+                "analytics_spo_repository",
+                "dynamogram_repository",
+                "spo_repository",
+                "dynamogram_ai_repository",
+                "spo_ai_repository",
+                "overall_ai_repository",
+                "transport_repository",
+                "file_repository",
+                "storage",
+            ),
+        ),
+        repair_brigade_repository=_Links(1),
+        unique_brigade_repository=_Brigades("Бригада ПРС №12"),
+        cm_brigade_repository=cm,
+        cm_brigade_error_screen_repository=screens,
+        cm_media_url_header="http://cm",
+    )
+
+    async def _no_screens(*_args: object, **kwargs: object) -> list:
+        screens.processed_only.append(kwargs["processed_only"])
+        return []
+
+    screens.list_by_brigade_ids_in_range = _no_screens
+    repair = SimpleNamespace(id=100, start_time=START, end_time=END)
+
+    assert asyncio.run(use_case._build_error_screens(repair)) == []  # noqa: SLF001
+    assert screens.processed_only == [True]
 
 
 def test_no_screens_without_brigade_or_its_number() -> None:

@@ -3,7 +3,8 @@
 Одна цепочка для KPI ремонта, общего ИИ-вердикта и страницы аналитики, чтобы
 везде были одни и те же экраны: бригада ремонта (привязка из сводок) -> бригады
 CM с её номером в её НГДУ -> их экраны за время ремонта (незакрытый ремонт — до
-текущего момента). Нет данных на любом шаге — пусто.
+текущего момента). Нет данных на любом шаге — пусто. ``processed_only`` — только
+экраны с ``is_processed`` в CM (страница аналитики ремонта).
 """
 
 from collections.abc import Sequence
@@ -20,13 +21,14 @@ from shared.integrations.cm.repositories.brigade_error_screens import (
 from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
 
 
-async def list_repair_error_screens(
+async def list_repair_error_screens(  # noqa: PLR0913
     repair: Repair,
     *,
     repair_brigade_repo: RepairBrigadeRepository,
     unique_brigade_repo: UniqueBrigadeRepository,
     cm_brigade_repo: CMBrigadeRepository,
     cm_brigade_error_screen_repo: CMBrigadeErrorScreenRepository,
+    processed_only: bool = False,
 ) -> Sequence[BrigadeErrorScreen]:
     link = await repair_brigade_repo.get_by_repair_id(repair.id)
     if link is None:
@@ -47,4 +49,5 @@ async def list_repair_error_screens(
         cm_ids,
         start_time=repair.start_time,
         end_time=end_time,
+        processed_only=processed_only,
     )
