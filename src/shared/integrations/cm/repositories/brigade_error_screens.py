@@ -91,16 +91,27 @@ class CMBrigadeErrorScreenRepository(
         *,
         start_time: datetime,
         end_time: datetime,
+        only_processed: bool = True,
     ) -> Sequence[BrigadeErrorScreen]:
+        """Экраны нарушений бригад за период.
+
+        По умолчанию только обработанные (``is_processed``): сырые срабатывания
+        камер человек не проверял, и среди них бывают ложные («без каски» при
+        надетых касках), поэтому нарушениями ТБ в дашборде считаются только
+        прошедшие обработку. ``only_processed=False`` отдаёт всё.
+        """
         if not brigade_ids:
             return ()
+        filters = [
+            BrigadeErrorScreen.brigade_id.in_(brigade_ids),
+            BrigadeErrorScreen.timestamp >= to_aware(start_time),
+            BrigadeErrorScreen.timestamp <= to_aware(end_time),
+        ]
+        if only_processed:
+            filters.append(BrigadeErrorScreen.is_processed.is_(True))
         return await self.get_list(
             QuerySpec(
-                filters=(
-                    BrigadeErrorScreen.brigade_id.in_(brigade_ids),
-                    BrigadeErrorScreen.timestamp >= to_aware(start_time),
-                    BrigadeErrorScreen.timestamp <= to_aware(end_time),
-                ),
+                filters=tuple(filters),
                 order_by=(BrigadeErrorScreen.timestamp,),
             ),
         )
