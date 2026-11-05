@@ -16,6 +16,12 @@
     закрытые замеры за ``KBRS_LATE_SWEEP_WINDOW_HOURS``: прибор со слабой
     связью досылает архив часы спустя, и сервер дописывает его в тот же
     замер, когда тот у нас уже не «живой»;
+  * после перезапуска сначала догоняет простой: замеры с последнего опроса
+    (не глубже ``CATCH_UP_MAX_DAYS``) запрашиваются по суткам — список
+    отдаёт не больше ``page_count`` строк, широкое окно обрезалось бы;
+  * ответ меньше уже сохранённого замера не принимается: замер на сервере
+    только растёт, меньший — обрезанный ответ (иначе он затирал бы полный
+    ``raw.bin``, а СПО и события пересобирались бы по огрызку);
   * сырой payload / chart.json / notes.json / passport.json кладёт в S3
     (ключи детерминированы — при перечитке объекты перезаписываются),
     метаданные — в таблицу ``kbrs_measure``.
@@ -113,6 +119,9 @@ class _KnownMeasure:
 class KbrsMeasurePoller:
     """Держит Toucan-сессии и бесконечно опрашивает новые замеры."""
 
+    # Глубже не догоняем: старые замеры подберёт fetch_spo_toucan по ремонтам.
+    CATCH_UP_MAX_DAYS = 7
+
     def __init__(  # noqa: PLR0913
         self,
         *,
@@ -155,6 +164,10 @@ class KbrsMeasurePoller:
             asyncio.create_task(self._late_sweep_loop()),
         ]
         try:
+            try:
+                await self.catch_up()
+            except Exception:
+                logger.exception("Catch-up after restart failed; polling goes on.")
             while not self._stop_event.is_set():
                 cycle_started = time.monotonic()
                 try:
@@ -250,8 +263,34 @@ class KbrsMeasurePoller:
         )
         return grown
 
-    async def _poll_once(self) -> None:
-        rows = await self._list_recent_measures()
+    async def catch_up(self) -> int:
+        """Замеры за время простоя: от последнего опроса до начала окна, по суткам."""
+        async with session_makers["app"]() as session:
+            last = await KbrsMeasureRepository(session).get_last_fetched_at()
+        now = _local_now()
+        window_start = now - timedelta(hours=self._window_hours)
+        if last is None or last >= window_start:
+            return 0
+        start = max(
+            last - timedelta(hours=1),
+            now - timedelta(days=self.CATCH_UP_MAX_DAYS),
+        )
+        logger.info("Catch-up: poller was idle since %s, listing from %s.", last, start)
+        days = 0
+        while start < window_start and not self._stop_event.is_set():
+            end = min(start + timedelta(days=1), window_start)
+            await self._poll_once(date_from=start, date_to=end)
+            start = end
+            days += 1
+        return days
+
+    async def _poll_once(
+        self,
+        *,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> None:
+        rows = await self._list_recent_measures(date_from=date_from, date_to=date_to)
         if not rows:
             logger.info("Poll: no measures in the window.")
             return
@@ -343,10 +382,15 @@ class KbrsMeasurePoller:
         # Живой замер (мог дорасти), пока его правый край близок к now.
         return now - existing.end_time <= self._refresh_grace
 
-    async def _list_recent_measures(self) -> list[MeasureRowDto]:
+    async def _list_recent_measures(
+        self,
+        *,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> list[MeasureRowDto]:
         now = _local_now()
-        date_from = now - timedelta(hours=self._window_hours)
-        date_to = now + timedelta(days=1)
+        date_from = date_from or now - timedelta(hours=self._window_hours)
+        date_to = date_to or now + timedelta(days=1)
 
         async def _for_owner(owner_id: int) -> list[MeasureRowDto]:
             filters = MeasureListFilterDto(
@@ -428,13 +472,21 @@ class KbrsMeasurePoller:
             lambda client: client.measurement_service.load_raw_measurement(request),
         )
 
-        if (
-            existing is not None
-            and existing.status == MEASURE_STATUS_OK
-            and len(raw) == existing.raw_size
+        if existing is not None and shrunk_or_same(
+            existing.status,
+            existing.raw_size,
+            len(raw),
         ):
             # Не вырос с прошлого фетча — только отметить факт опроса.
-            # Непарсившийся разбирается заново: парсер мог научиться.
+            # Непарсившийся того же размера разбирается заново: парсер мог
+            # научиться. Меньший — обрезанный ответ, сохранённый не трогаем.
+            if existing.raw_size and len(raw) < existing.raw_size:
+                logger.warning(
+                    "Measure %s: got %s bytes, %s stored — truncated answer ignored.",
+                    row.measure_id,
+                    len(raw),
+                    existing.raw_size,
+                )
             await measure_repo.update_by_id(
                 existing.id,
                 UpdateKbrsMeasureDTO(fetched_at=_local_now()),
@@ -540,6 +592,16 @@ class KbrsMeasurePoller:
             return existing_file_id
         file = await file_repo.create(CreateFileDTO(file=s3_key))
         return file.id
+
+
+def shrunk_or_same(status: str | None, stored: int | None, received: int) -> bool:
+    """Скачанное не новее сохранённого: меньше (обрезанный ответ) или тот же
+    размер у разобранного замера."""
+    if not stored:
+        return False
+    if received < stored:
+        return True
+    return received == stored and status == MEASURE_STATUS_OK
 
 
 def device_description_map(

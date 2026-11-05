@@ -401,8 +401,24 @@ def test_waits_past_window_for_drive_after_late_measurement() -> None:
     assert evaluate(inp, now=T0 + 108 * H).verdict == VERDICT_FALSE_ALARM
 
 
+WORKING = AbaiStatusEvent(T0 - 240 * H, None, "WRK", None)
+
+
 def test_final_after_seven_days() -> None:
-    inp = _input(measurements=[_oil(10, 5.0)])
+    inp = _input(measurements=[_oil(10, 5.0)], abai=[WORKING])
     result = evaluate(inp, now=T0 + timedelta(days=config.FINAL_DAYS))
     assert result.verdict == VERDICT_FALSE_ALARM
     assert result.is_final is True
+
+
+def test_not_final_while_abai_statuses_are_missing() -> None:
+    # Нет статуса ABAI на T0 — копия могла быть стёрта сбоем: не закрепляем,
+    # пока статусы не вернутся или не выйдет запас.
+    inp = _input(measurements=[_oil(10, 5.0)])
+    at_seven = evaluate(inp, now=T0 + timedelta(days=config.FINAL_DAYS))
+    grace = config.FINAL_DAYS + config.FINAL_STATUS_GAP_GRACE_DAYS
+    at_grace = evaluate(inp, now=T0 + timedelta(days=grace))
+
+    assert at_seven.verdict == VERDICT_FALSE_ALARM
+    assert at_seven.is_final is False
+    assert at_grace.is_final is True

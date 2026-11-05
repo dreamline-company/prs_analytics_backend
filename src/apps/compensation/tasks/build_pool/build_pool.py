@@ -44,8 +44,10 @@ logger = get_logger(__name__)
 METHOD = "Методика подбора скважин-доноров, ред. 3"
 # Защита от сбоя данных (пустая таблица состояний, долгий сбой СДМО): если из
 # пула прошлого расчёта выпадает больше этой доли — не записывать, а сообщить.
-# Строки Excel-пула (без calculated_at) в базу не входят.
-MAX_DROP_SHARE = 0.5
+# Считается по каждому НГДУ: сбой данных одного НГДУ (СДМО КМГ лежит дольше
+# 72 ч) в общей доле по двум НГДУ не виден. Обычный суточный оборот пула —
+# единицы доноров. Строки Excel-пула (без calculated_at) в базу не входят.
+MAX_DROP_SHARE = 0.3
 MIN_GUARDED_POOL = 10
 NGDU_TITLES = {
     int(AbaiNGDUIDsEnum.ZHMG): "Жайык",
@@ -78,7 +80,20 @@ def drop_guard(previous: set[int], still_in_pool: set[int]) -> str | None:
     return None
 
 
-async def build_pool(
+def drop_guard_by_ngdu(
+    previous: dict[int, set[int]],
+    still_in_pool: set[int],
+) -> str | None:
+    """``drop_guard`` по каждому НГДУ; причины сработавших — через «; »."""
+    reasons = [
+        f"{NGDU_TITLES.get(ngdu, ngdu)}: {reason}"
+        for ngdu, wells in sorted(previous.items())
+        if (reason := drop_guard(wells, still_in_pool))
+    ]
+    return "; ".join(reasons) or None
+
+
+async def build_pool(  # noqa: C901
     *,
     now: datetime | None = None,
     dry_run: bool = False,
@@ -98,15 +113,20 @@ async def build_pool(
             (await app.execute(select(OilField.prefix, OilField.name))).all(),
         )
         existing = {
-            well_id: (in_pool, calculated_at)
-            for well_id, in_pool, calculated_at in await app.execute(
+            well_id: (in_pool, calculated_at, ngdu)
+            for well_id, in_pool, calculated_at, ngdu in await app.execute(
                 select(
                     CompensationDonor.well_id,
                     CompensationDonor.in_pool,
                     CompensationDonor.calculated_at,
+                    CompensationDonor.abai_ngdu_id,
                 ),
             )
         }
+        previous: dict[int, set[int]] = defaultdict(set)
+        for well_id, (in_pool, calculated_at, ngdu) in existing.items():
+            if in_pool and calculated_at:
+                previous[ngdu].add(well_id)
 
         rows, out_of_pool = [], {}
         for well in data.wells:
@@ -142,7 +162,7 @@ async def build_pool(
             }
             source_row = _clean(source_row)
             if not result.passed:
-                if existing.get(well.id, (False, None))[0]:
+                if existing.get(well.id, (False, None, None))[0]:
                     out_of_pool[well.id] = source_row
                 continue
             gzu = data.gzu.get(well.id)
@@ -173,7 +193,8 @@ async def build_pool(
             )
         # Доноры прошлых расчётов, которые сейчас не работают, — тоже вне пула.
         scope = {well.id for well in data.wells}
-        for well_id in {w for w, (in_pool, _at) in existing.items() if in_pool} - scope:
+        was_in_pool = {w for w, (in_pool, _at, _ngdu) in existing.items() if in_pool}
+        for well_id in was_in_pool - scope:
             out_of_pool[well_id] = {
                 "method": METHOD,
                 "calculated_at": now.isoformat(timespec="minutes"),
@@ -188,8 +209,8 @@ async def build_pool(
             "pool": sum(row.in_pool for row in rows),
             "no_telemetry": sum(not row.has_telemetry for row in rows),
             "out_of_pool": len(out_of_pool),
-            "blocked": drop_guard(
-                {w for w, (in_pool, at) in existing.items() if in_pool and at},
+            "blocked": drop_guard_by_ngdu(
+                previous,
                 {row.well_id for row in rows if row.in_pool},
             ),
             "funnel": {

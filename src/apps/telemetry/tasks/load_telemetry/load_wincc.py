@@ -12,6 +12,9 @@
 Второй вариант — разовая догрузка истории (например, после правки
 сопоставления месторождений): источник перечитывается с даты, недостающее
 дописывается, дублей не появляется.
+
+Замеры с датой позже ``future_limit()`` (опечатка в ЦИТС) не грузятся и не
+сдвигают курсор: иначе загрузка НГДУ встала бы до этой даты.
 """
 
 import argparse
@@ -23,6 +26,7 @@ from apps.celery_app import celery_app, run_async
 from apps.models_registry import *  # noqa: F403
 from apps.telemetry.dto.internal.repositories import CreateTelemetryDTO
 from apps.telemetry.repositories import TelemetryRepository
+from apps.telemetry.services.clock import future_limit
 from apps.wells.repositories import WellRepository
 from core import get_logger
 from shared.constants.ngdu import AbaiNGDUIDsEnum
@@ -168,6 +172,7 @@ class WinccLoadTelemetry:
             if since is None:
                 last_tm = await telemetry_repo.get_last_by_ngdu_id(
                     abai_ngdu_id=ngdu_id,
+                    until=future_limit(),
                 )
                 since = last_tm.date_time - self.OVERLAP if last_tm else None
             existing = (
@@ -227,6 +232,8 @@ class WinccLoadTelemetry:
         """
         bulk_data = []
         not_found_wells = []
+        limit = future_limit()
+        future = 0
         for tm in tms:
             if (
                 not tm.Meas_date
@@ -240,6 +247,9 @@ class WinccLoadTelemetry:
                     tm.Oil_field,
                     tm.Well,
                 )
+                continue
+            if tm.Meas_date > limit:
+                future += 1
                 continue
 
             try:
@@ -271,6 +281,8 @@ class WinccLoadTelemetry:
                     oil_field=tm.Oil_field,
                 ),
             )
+        if future:
+            logger.warning("TM skipped: %s measurements dated in the future", future)
         if not_found_wells:
             logger.warning("Not found %s wells in database", len(not_found_wells))
         if bulk_data:

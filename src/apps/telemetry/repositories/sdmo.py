@@ -234,6 +234,8 @@ class SdmoFcDataRepository(
     async def get_last_cursor_by_station(
         self,
         station_ids: Sequence[int],
+        *,
+        until: datetime | None = None,
     ) -> dict[int, tuple[datetime, int]]:
         """Курсор ``(max savetime, sdmo_id при этом savetime)`` на станцию.
 
@@ -244,6 +246,7 @@ class SdmoFcDataRepository(
         по ``(station_id, savetime)``, независимо от глубины истории (DISTINCT
         ON прошёл бы все строки станций). Станции без строк в результат не
         попадают (вызывающий берёт ``(None, 0)`` — «грузим с начала»).
+        ``until`` отсекает строки «из будущего» (скачок часов станции).
         """
         if not station_ids:
             return {}
@@ -255,7 +258,10 @@ class SdmoFcDataRepository(
         ).subquery("requested")
         last_row = (
             select(SdmoFcData.savetime, SdmoFcData.sdmo_id)
-            .where(SdmoFcData.station_id == requested.c.station_id)
+            .where(
+                SdmoFcData.station_id == requested.c.station_id,
+                *(() if until is None else (SdmoFcData.savetime <= until,)),
+            )
             .order_by(SdmoFcData.savetime.desc(), SdmoFcData.sdmo_id.desc())
             .limit(1)
             .lateral("last_row")

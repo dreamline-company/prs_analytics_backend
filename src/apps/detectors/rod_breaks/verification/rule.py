@@ -353,6 +353,18 @@ def _confirmation(inp: VerificationInput, now: datetime) -> VerificationResult |
     )
 
 
+def is_final_at(inp: VerificationInput, now: datetime) -> bool:
+    """Отметку пора закрепить: прошло ``FINAL_DAYS``, и копия статусов ABAI по
+    скважине не выглядит дырявой (есть статус на T0) — иначе ждём ещё
+    ``FINAL_STATUS_GAP_GRACE_DAYS``."""
+    if now < inp.t0 + timedelta(days=config.FINAL_DAYS):
+        return False
+    if any(status.covers(inp.t0) for status in inp.abai_statuses):
+        return True
+    grace = config.FINAL_DAYS + config.FINAL_STATUS_GAP_GRACE_DAYS
+    return now >= inp.t0 + timedelta(days=grace)
+
+
 def _block_at(inp: VerificationInput) -> datetime | None:
     """Первое после T0 событие, после которого замеры описывают другое состояние.
 
@@ -467,7 +479,7 @@ def _evaluate(  # noqa: PLR0911 — по ветке на каждую отмет
     now: datetime,
     moment: _MomentCheck | None,
 ) -> VerificationResult:
-    final = now >= inp.t0 + timedelta(days=config.FINAL_DAYS)
+    final = is_final_at(inp, now)
 
     confirmed = _confirmation(inp, now)
     if confirmed is not None:
