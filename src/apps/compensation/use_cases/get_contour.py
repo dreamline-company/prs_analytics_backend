@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
 from apps.compensation.constants import (
+    CONTOUR_NO_DATA,
     CONTOUR_NO_PLAN,
     CONTOUR_STOPPED,
     CONTOUR_WORKING,
@@ -21,6 +22,7 @@ from apps.compensation.repositories import (
     CompensationRecommendationRepository,
 )
 from apps.compensation.services.allocation import covered
+from apps.compensation.services.losses import NO_DATA_STATES, current_states
 from apps.compensation.services.state import (
     CompensationStateService,
     to_local,
@@ -75,6 +77,11 @@ class GetCompensationContourUseCase:
         state = await self.state_service.load([well], now=now)
         stop = state.stops.get(well.id)
         if stop is None:
+            # Не стоит — ещё не значит «работает»: без связи и без состояния
+            # потерю не оценить, а «в работе» было бы неправдой.
+            current = (await current_states(self.session, [well.id])).get(well.id)
+            if current is None or current[0] in NO_DATA_STATES:
+                contour.state = CONTOUR_NO_DATA
             return contour
         contour.reason = stop_reason(stop)
         plan = state.losses.get(well.id)

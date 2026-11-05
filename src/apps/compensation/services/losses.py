@@ -39,6 +39,7 @@ SOURCE_FACT = "fact"
 SOURCE_PLAN = "plan"
 STOP_KIND_BY_STATE = {"stopped": STOP_IDLE, "repair": STOP_REPAIR}
 RUNNING_STATES = frozenset({"working", "warning", "alarm"})
+NO_DATA_STATES = frozenset({"no_link"})
 WRITTEN_OFF_STATES = frozenset({"inactive"})
 
 # Интервалы ABAI только в окнах скважин: у давних остановок окно в прошлом.
@@ -91,6 +92,17 @@ def resolution_pending(
     return True
 
 
+async def current_states(
+    app: AsyncSession,
+    well_ids: list[int],
+) -> dict[int, tuple[str, datetime]]:
+    """Открытое состояние скважин: well_id → (код, с какого времени)."""
+    if not well_ids:
+        return {}
+    rows = await app.execute(text(SQL_CURRENT_STATE), {"ids": well_ids})
+    return {well_id: (state, since) for well_id, state, since in rows}
+
+
 async def pending_resolution(
     app: AsyncSession,
     well_ids: list[int],
@@ -98,10 +110,7 @@ async def pending_resolution(
     now: datetime,
 ) -> set[int]:
     """Из скважин, ушедших из «стоит», — те, чьи пары пока держать."""
-    if not well_ids:
-        return set()
-    rows = await app.execute(text(SQL_CURRENT_STATE), {"ids": well_ids})
-    states = {well_id: (state, since) for well_id, state, since in rows}
+    states = await current_states(app, well_ids)
     return {
         well_id
         for well_id in well_ids

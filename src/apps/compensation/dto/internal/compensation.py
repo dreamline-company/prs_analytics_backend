@@ -64,7 +64,7 @@ class CompensationContourCompensatedDTO(BaseModel):
 class CompensationContourDTO(BaseModel):
     as_of: datetime
     well: CompensationWellDTO
-    state: str  # stopped / no_plan / working
+    state: str  # stopped / no_plan / no_data / working
     reason: CompensationStopReasonDTO | None
     losses: CompensationContourLossDTO | None
     compensated: CompensationContourCompensatedDTO
