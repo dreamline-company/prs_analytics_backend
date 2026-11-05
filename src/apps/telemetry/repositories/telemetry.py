@@ -107,10 +107,19 @@ class TelemetryRepository(
         )
         return tms[0] if tms else None
 
-    async def get_last_by_ngdu_id(self, abai_ngdu_id: int) -> Telemetry | None:
+    async def get_last_by_ngdu_id(
+        self,
+        abai_ngdu_id: int,
+        *,
+        until: datetime | None = None,
+    ) -> Telemetry | None:
+        """Последний замер НГДУ; ``until`` отсекает строки «из будущего»."""
+        filters = [Telemetry.abai_ngdu_id == abai_ngdu_id]
+        if until is not None:
+            filters.append(Telemetry.date_time <= until)
         tms = await self.get_list(
             QuerySpec(
-                filters=(Telemetry.abai_ngdu_id == abai_ngdu_id,),
+                filters=tuple(filters),
                 order_by=(Telemetry.date_time.desc(),),
                 limit=1,
             ),

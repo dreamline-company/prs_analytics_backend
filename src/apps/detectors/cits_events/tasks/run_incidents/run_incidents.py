@@ -20,6 +20,10 @@ CATCHUP_DAYS), потому что эпизод следующих суток з
 Явная дата — ручной прогон: эпизоды обновляются так, будто это текущие
 сутки, поэтому прошлые даты гонять только по порядку и на пустом R10.
 
+Сутки не считаются, пока загрузка замеров ЦИТС по НГДУ стоит (последний
+замер старше ``FEED_MAX_GAP_HOURS``): курсор остаётся, сутки досчитаются после
+дозагрузки.
+
 Ежечасный режим (``--intraday``) считает сегодняшние неполные сутки, чтобы
 сигнал появлялся в тот же день, а не утром следующего. По неполным суткам
 эпизоды только открываются и повышаются: закрытие, срез и курсор — дело
@@ -73,6 +77,7 @@ from apps.detectors.repositories import (
     DetectorIncidentRepository,
 )
 from apps.models_registry import *  # noqa: F403
+from apps.telemetry.repositories import TelemetryRepository
 from core import get_logger
 from core.settings import get_settings
 from shared.database.sql.setup import session_makers
@@ -138,6 +143,23 @@ class CitsEventsRunner:
         self.incident_repo = DetectorIncidentRepository(session)
         self.finding_repo = DetectorFindingRepository(session)
         self.cursor_repo = DetectorCursorRepository(session)
+        self.telemetry_repo = TelemetryRepository(session)
+
+    async def feed_fresh(self, ngdu: int, at: datetime) -> bool:
+        """Замеры ЦИТС по НГДУ к моменту ``at`` грузятся (не дыра WinCC)."""
+        last = await self.telemetry_repo.get_last_by_ngdu_id(ngdu, until=at)
+        gap = timedelta(hours=incident_config.FEED_MAX_GAP_HOURS)
+        if last is not None and last.date_time >= at - gap:
+            return True
+        logger.warning(
+            "R10 NGDU %s: last CITS measurement %s is older than %sh before %s — "
+            "WinCC feed is down, not evaluating",
+            ngdu,
+            last.date_time if last is not None else None,
+            incident_config.FEED_MAX_GAP_HOURS,
+            at,
+        )
+        return False
 
     async def run(
         self,
@@ -153,6 +175,9 @@ class CitsEventsRunner:
         for ngdu in incident_config.TARGET_NGDU_IDS:
             days = [target] if fix_date else await self._pending_days(ngdu, target)
             for day in days:
+                if not await self.feed_fresh(int(ngdu), _day_end(day)):
+                    # Следующие сутки опираются на эти — ждём дозагрузки.
+                    break
                 try:
                     stats = await self._run_day(int(ngdu), day, now)
                     await self.session.commit()
@@ -182,6 +207,8 @@ class CitsEventsRunner:
                     "R10 NGDU %s intraday skipped: yesterday is not processed yet",
                     int(ngdu),
                 )
+                continue
+            if not await self.feed_fresh(int(ngdu), self.now):
                 continue
             try:
                 stats = await self._run_day(int(ngdu), today, self.now, intraday=True)

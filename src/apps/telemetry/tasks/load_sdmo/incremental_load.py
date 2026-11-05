@@ -17,6 +17,7 @@ import time
 from apps.celery_app import celery_app, run_async
 from apps.models_registry import *  # noqa: F403
 from apps.telemetry.repositories import SdmoFcDataRepository
+from apps.telemetry.services.clock import future_limit
 from apps.telemetry.tasks.load_sdmo import loader
 from apps.telemetry.tasks.load_sdmo.lock import ngdu_load_lock
 from apps.telemetry.tasks.load_sdmo.sources import as_ngdu, sdmo_session_maker
@@ -59,7 +60,10 @@ class SdmoIncrementalLoad:
             stations = loader.select_stations(stations, station_ids)
             cursor = await SdmoFcDataRepository(
                 app_session,
-            ).get_last_cursor_by_station([station.id for station in stations])
+            ).get_last_cursor_by_station(
+                [station.id for station in stations],
+                until=future_limit(),
+            )
 
             logger.info(
                 "Incremental SDMO load [%s]: %s stations",

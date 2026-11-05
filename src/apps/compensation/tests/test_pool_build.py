@@ -3,7 +3,11 @@
 from datetime import datetime
 
 from apps.compensation.services.pool_data import DailyOil, finite, last_repairs
-from apps.compensation.tasks.build_pool.build_pool import _clean, drop_guard
+from apps.compensation.tasks.build_pool.build_pool import (
+    _clean,
+    drop_guard,
+    drop_guard_by_ngdu,
+)
 
 FAR = datetime(3333, 12, 31)  # noqa: DTZ001
 
@@ -11,9 +15,20 @@ FAR = datetime(3333, 12, 31)  # noqa: DTZ001
 def test_drop_guard() -> None:
     previous = set(range(20))
 
-    assert drop_guard(previous, set(range(12))) is None  # выпало 8 из 20
-    assert drop_guard(previous, set(range(5))) is not None  # выпало 15 из 20
+    assert drop_guard(previous, set(range(15))) is None  # выпало 5 из 20
+    assert drop_guard(previous, set(range(12))) is not None  # выпало 8 из 20
     assert drop_guard(set(range(5)), set()) is None  # маленький пул не охраняем
+
+
+def test_drop_guard_sees_one_ngdu_losing_its_pool() -> None:
+    # Жайык цел, у Кайнара пропали все доноры: в общей доле (34 из 61) это
+    # ещё «меньше половины», по НГДУ — сбой.
+    previous = {4: set(range(27)), 5: set(range(100, 134))}
+
+    reason = drop_guard_by_ngdu(previous, set(range(27)))
+
+    assert reason is not None
+    assert "34 из 34" in reason
 
 
 def test_clean_replaces_nan_for_jsonb() -> None:

@@ -14,6 +14,9 @@ telemetry_sdmo_fc_data. Используется и bulk-, и инкремент
 
 Источник append-only (строки только дописываются) → savetime растёт монотонно,
 курсор ``(savetime, id)`` корректен, upsert не нужен, чистый COPY-append.
+Исключение — скачок часов станции: строки позже ``future_limit()`` не
+пишутся, иначе курсор ушёл бы в будущее и настоящие отсчёты до этой даты
+пропали бы навсегда.
 
 Почему keyset по ``(savetime, id)``, а не ``id``: у источника индекс
 ``trend(station_id, savetime, day)``, а индекса ``(station_id, id)`` нет.
@@ -45,6 +48,7 @@ from apps.telemetry.repositories import (
     SdmoFcRegRepository,
     SdmoStationRepository,
 )
+from apps.telemetry.services.clock import future_limit
 from apps.wells.repositories import WellRepository
 from apps.wells.repositories.well_org import WellOrgRepository
 from apps.wells.services import NGDUWellsService
@@ -240,6 +244,8 @@ async def load_station_delta(
 
     started = time.monotonic()
     total = 0
+    future = 0
+    limit = future_limit()
     next_log = PROGRESS_LOG_EVERY_ROWS
     first_batch = True
     attempt = 0
@@ -260,9 +266,11 @@ async def load_station_delta(
                         time.monotonic() - started,
                     )
                     first_batch = False
-                await app_repo.copy_rows([to_record(row, station) for row in rows])
+                fresh = [row for row in rows if row.savetime <= limit]
+                future += len(rows) - len(fresh)
+                await app_repo.copy_rows([to_record(row, station) for row in fresh])
                 await app_session.commit()
-                total += len(rows)
+                total += len(fresh)
                 last_savetime, last_id = rows[-1].savetime, rows[-1].id
                 if total >= next_log:
                     rate = total / max(time.monotonic() - started, 1e-9)
@@ -299,6 +307,14 @@ async def load_station_delta(
             )
             await asyncio.sleep(pause)
 
+    if future:
+        logger.warning(
+            "%s%s: %s rows dated after %s skipped (station clock jump?)",
+            label,
+            station_ref,
+            future,
+            limit,
+        )
     if total:
         rate = total / max(time.monotonic() - started, 1e-9)
         logger.info(

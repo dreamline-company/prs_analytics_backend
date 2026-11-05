@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 
 from apps.kbrs.dto.internal.repositories.measure import (
     CreateKbrsMeasureDTO,
@@ -26,6 +26,10 @@ class KbrsMeasureRepository(
             QuerySpec(filters=(KbrsMeasure.measure_id.in_(measure_ids),)),
         )
         return {row.measure_id: row for row in rows}
+
+    async def get_last_fetched_at(self) -> datetime | None:
+        result = await self.session.execute(select(func.max(KbrsMeasure.fetched_at)))
+        return result.scalar()
 
     async def update_by_id(
         self,
