@@ -180,6 +180,11 @@ class RepairKPICalculator:
         return regimes[0].liquid if regimes else None
 
     async def _tech_regime_current(self, repair: Repair) -> float | None:
+        # Незавершённый ремонт: «выхода на режим» ещё нет. Без end_time выборка
+        # телеметрии шла бы за всё время, и брался бы последний замер вообще (он мог
+        # быть сделан в начале ремонта), а не значение после ремонта.
+        if repair.end_time is None:
+            return None
         # Repair.well_id is not populated — resolve the well via abai_well_id.
         if repair.abai_well_id is None:
             return None
