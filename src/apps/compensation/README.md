@@ -90,7 +90,7 @@ cd src && python -m apps.compensation.tasks.assign_donors.assign_donors --dry-ru
 
 | | Параметры | Что |
 |---|---|---|
-| `GET /contour` | `well_id` | контур стоящей скважины (`stopped` / `no_plan` / `working`) |
+| `GET /contour` | `well_id` | контур стоящей скважины (`stopped` / `no_plan` / `no_data` — нет связи или состояния / `working`) |
 | `GET /recommendations` | `ngdu_id`, `oil_field_id`, `limit` | открытые пары, крупные сначала |
 | `GET /donors` | `ngdu_id`, `oil_field_id`, `status` | пул (`in_pool`) со статусами, пометками и шапкой вкладок |
 | `GET /losses` | `ngdu_id`, `oil_field_id` | стоящие скважины, величина и источник потери, доноры |

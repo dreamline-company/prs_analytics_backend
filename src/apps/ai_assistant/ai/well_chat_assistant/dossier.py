@@ -45,7 +45,11 @@ from apps.ai_assistant.ai.well_chat_assistant.tools.telemetry import (
     LIFT_BY_STATION_TYPE,
     unwrap_moment,
 )
-from apps.compensation.constants import CONTOUR_NO_PLAN, CONTOUR_STOPPED
+from apps.compensation.constants import (
+    CONTOUR_NO_DATA,
+    CONTOUR_NO_PLAN,
+    CONTOUR_STOPPED,
+)
 from apps.compensation.dto.internal.compensation import CompensationContourDTO
 from apps.compensation.dto.queries.compensation import GetCompensationContourQuery
 from apps.compensation.repositories import (
@@ -339,6 +343,11 @@ def _render_contour(contour: CompensationContourDTO | None) -> list[str]:
     if contour.state == CONTOUR_NO_PLAN:
         return [
             "Контур компенсации: стоит, но потерю не оценить — нет ни факта, ни плана.",
+        ]
+    if contour.state == CONTOUR_NO_DATA:
+        return [
+            "Контур компенсации: нет связи со скважиной — работает ли она и есть "
+            "ли потеря, неизвестно.",
         ]
     return []
 

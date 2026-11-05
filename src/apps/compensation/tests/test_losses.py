@@ -13,6 +13,7 @@ from apps.compensation.services.losses import (
     SOURCE_FACT,
     SOURCE_PLAN,
     LossValue,
+    current_states,
     loss_value,
     loss_window,
     resolution_pending,
@@ -133,3 +134,22 @@ def test_resolution_pending() -> None:
     assert not resolution_pending(("alarm", long_ago), now=now)
     # Списана — снята сразу.
     assert not resolution_pending(("inactive", just_now), now=now)
+
+
+def test_current_states_reads_open_rows() -> None:
+    since = datetime(2026, 11, 5, 9, 0)  # noqa: DTZ001
+    session = SimpleNamespace(
+        execute=_async_return([(1, "no_link", since), (2, "working", since)]),
+    )
+
+    states = asyncio.run(current_states(session, [1, 2, 3]))
+
+    assert states == {1: ("no_link", since), 2: ("working", since)}
+    assert asyncio.run(current_states(session, [])) == {}
+
+
+def _async_return(value: object):  # noqa: ANN202
+    async def call(*_args: object, **_kwargs: object) -> object:
+        return value
+
+    return call
