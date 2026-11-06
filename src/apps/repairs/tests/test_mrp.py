@@ -233,7 +233,8 @@ def test_crf_counts_only_non_gtm_repairs_from_threshold() -> None:
     assert crf.percent_of_fund == pytest.approx(50.0)
     # VMB_0001: 1 ремонт без ГТМ (ГТМ не считается); JLM_0002: 3
     assert crf.distribution == {1: 1, 3: 1}
-    assert crf.wells_by_count == {3: ["JLM_0002"]}
+    # имена скважин есть у всех групп градации, а не только у ЧРФ
+    assert crf.wells_by_count == {1: ["VMB_0001"], 3: ["JLM_0002"]}
 
 
 def test_crf_threshold_is_configurable() -> None:
