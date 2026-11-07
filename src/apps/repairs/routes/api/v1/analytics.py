@@ -41,6 +41,7 @@ from core.settings import get_settings
 from shared.database.s3.storage import AiobotoFileStorage
 from shared.dependencies.db import (
     get_aioboto_client_factory,
+    get_aioboto_presign_client_factory,
     get_app_session,
     get_cm_session,
 )
@@ -84,6 +85,7 @@ async def get_repair_analytics_view(
         storage=AiobotoFileStorage(
             bucket_name=settings.S3_BUCKET_NAME,
             client_factory=get_aioboto_client_factory(),
+            presign_client_factory=get_aioboto_presign_client_factory(),
         ),
         cm_brigade_repository=CMBrigadeRepository(session=cm_session),
         cm_brigade_error_screen_repository=CMBrigadeErrorScreenRepository(

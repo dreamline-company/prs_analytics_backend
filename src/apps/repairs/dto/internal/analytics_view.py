@@ -98,6 +98,12 @@ class SPOWithAIResultDTO(BaseModel):
     chart_json_file_id: int | None
     notes_file_id: int | None
     passport_file_id: int | None
+    # Presigned-ссылки на те же файлы (живут час): без запроса /files/{id}.
+    file_url: str | None = None
+    chart_file_url: str | None = None
+    chart_json_file_url: str | None = None
+    notes_file_url: str | None = None
+    passport_file_url: str | None = None
     snapshot_time: datetime.datetime
     start_time: datetime.datetime | None = None
     end_time: datetime.datetime | None = None

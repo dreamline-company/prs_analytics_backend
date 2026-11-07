@@ -4,13 +4,13 @@ Aggregates data from the app DB (analytics, dynamograms, SPOs, AI results)
 and the CM DB (brigade error screens referenced by ``cm_screen_id``).
 """
 
-import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime
 
 from starlette import status
 
+from apps.files.models.file import File
 from apps.files.repositories.file import FileRepository
 from apps.org.dto.internal.brigade import BrigadeShortDTO
 from apps.org.repositories.brigade import UniqueBrigadeRepository
@@ -58,8 +58,8 @@ from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
 
 logger = get_logger(__name__)
 
-# Одновременных чтений паспортов/notes.json СПО из S3.
-_S3_CONCURRENCY = 8
+# Срок presigned-ссылок на файлы СПО — как у /files/{id} по умолчанию.
+_SPO_URL_TTL_SEC = 3600
 
 
 class RepairAnalyticsNotFoundError(HttpError):
@@ -221,69 +221,97 @@ class GetRepairAnalyticsViewUseCase:
             [spo.id for spo in spos],
         )
         ai_by_spo_id = {result.spo_id: result for result in ai_results}
-        notes = await self._load_json_files(
-            [spo.notes_file_id for spo in spos],
-            "notes",
+        file_ids = {
+            file_id
+            for spo in spos
+            for file_id in (
+                spo.file_id,
+                spo.chart_file_id,
+                spo.chart_json_file_id,
+                spo.notes_file_id,
+                spo.passport_file_id,
+            )
+            if file_id is not None
+        }
+        files = {
+            row.id: row
+            for row in await self.file_repository.list_by_ids(sorted(file_ids))
+            if row.file
+        }
+        side_json = await self._load_json_files(
+            [
+                files[file_id]
+                for spo in spos
+                for file_id in (spo.notes_file_id, spo.passport_file_id)
+                if file_id in files
+            ],
         )
-        passports = await self._load_json_files(
-            [spo.passport_file_id for spo in spos],
-            "passport",
-        )
+        urls = await self._presigned_urls(list(files.values()))
 
         dtos: list[SPOWithAIResultDTO] = []
         for spo in spos:
             dto = SPOWithAIResultDTO.model_validate(spo)
-            spo_notes = notes.get(spo.notes_file_id) or {}
+            spo_notes = side_json.get(spo.notes_file_id) or {}
             dto.start_time = _parse_iso(spo_notes.get("start"))
             dto.end_time = _parse_iso(spo_notes.get("end"))
             row_count = spo_notes.get("row_count")
             dto.row_count = row_count if isinstance(row_count, int) else None
             dto.passport = _parse_passport(
-                passports.get(spo.passport_file_id),
+                side_json.get(spo.passport_file_id),
                 spo.passport_file_id,
             )
+            dto.file_url = urls.get(spo.file_id)
+            dto.chart_file_url = urls.get(spo.chart_file_id)
+            dto.chart_json_file_url = urls.get(spo.chart_json_file_id)
+            dto.notes_file_url = urls.get(spo.notes_file_id)
+            dto.passport_file_url = urls.get(spo.passport_file_id)
             ai = ai_by_spo_id.get(spo.id)
             if ai is not None:
                 dto.ai_result = AIResultDTO.model_validate(ai)
             dtos.append(dto)
         return dtos
 
-    async def _load_json_files(
-        self,
-        file_ids: Sequence[int | None],
-        kind: str,
-    ) -> dict[int, dict]:
-        """File.id → JSON сопутствующего файла СПО из S3.
+    async def _load_json_files(self, rows: Sequence[File]) -> dict[int, dict]:
+        """File.id → JSON сопутствующих файлов СПО (паспорт, notes.json) из S3.
 
         Непрочитанное (нет в S3, битый JSON) пропускается: страница не должна
         падать из-за устаревшего или пропавшего файла.
         """
-        ids = sorted({file_id for file_id in file_ids if file_id is not None})
-        if not ids:
+        if not rows:
             return {}
-        rows = [row for row in await self.file_repository.list_by_ids(ids) if row.file]
-        semaphore = asyncio.Semaphore(_S3_CONCURRENCY)
+        try:
+            payloads = await self.storage.download_files(row.file for row in rows)
+        except Exception:
+            logger.exception("Failed to read SPO side files from S3; skipping.")
+            return {}
 
-        async def download(file_id: int, path: str) -> dict | None:
-            async with semaphore:
-                try:
-                    payload = await self.storage.download_file(path)
-                    data = json.loads(payload.getvalue().decode("utf-8"))
-                except Exception:
-                    logger.exception(
-                        "Failed to read SPO %s file id=%s; skipping.",
-                        kind,
-                        file_id,
-                    )
-                    return None
-            return data if isinstance(data, dict) else None
+        result: dict[int, dict] = {}
+        for row in rows:
+            payload = payloads.get(row.file)
+            if payload is None:
+                continue
+            try:
+                data = json.loads(payload.getvalue().decode("utf-8"))
+            except ValueError:
+                logger.exception("SPO file id=%s is not JSON; skipping.", row.id)
+                continue
+            if isinstance(data, dict):
+                result[row.id] = data
+        return result
 
-        payloads = await asyncio.gather(*(download(row.id, row.file) for row in rows))
-        return {
-            row.id: data
-            for row, data in zip(rows, payloads, strict=True)
-            if data is not None
-        }
+    async def _presigned_urls(self, rows: Sequence[File]) -> dict[int, str]:
+        """File.id → presigned-ссылка: фронту не нужен /files/{id} на каждый файл."""
+        if not rows:
+            return {}
+        try:
+            urls = await self.storage.generate_presigned_urls(
+                (row.file for row in rows),
+                expires_in=_SPO_URL_TTL_SEC,
+            )
+        except Exception:
+            logger.exception("Failed to presign SPO files; skipping.")
+            return {}
+        return {row.id: urls[row.file] for row in rows if row.file in urls}
 
     @staticmethod
     def _build_overall(overall) -> OverallAIResultDTO | None:  # noqa: ANN001

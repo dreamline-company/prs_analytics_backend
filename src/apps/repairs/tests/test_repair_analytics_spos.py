@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from types import SimpleNamespace
@@ -73,12 +74,34 @@ class _Files:
 class _Storage:
     def __init__(self, payloads: dict[str, object]) -> None:
         self.payloads = payloads
+        self.downloads: list[list[str]] = []
+        self.presigned: list[list[str]] = []
 
-    async def download_file(self, path: str) -> BytesIO:
-        payload = self.payloads[path]
-        if isinstance(payload, Exception):
-            raise payload
-        return BytesIO(json.dumps(payload).encode("utf-8"))
+    async def download_files(self, paths: Iterable[str]) -> dict[str, BytesIO]:
+        paths = list(paths)
+        self.downloads.append(paths)
+        for path in paths:
+            if isinstance(self.payloads.get(path), Exception):
+                raise self.payloads[path]
+        return {
+            path: BytesIO(
+                payload
+                if isinstance(payload, bytes)
+                else json.dumps(payload).encode("utf-8"),
+            )
+            for path in paths
+            if (payload := self.payloads.get(path)) is not None
+        }
+
+    async def generate_presigned_urls(
+        self,
+        paths: Iterable[str],
+        *,
+        expires_in: int,
+    ) -> dict[str, str]:
+        paths = list(paths)
+        self.presigned.append(paths)
+        return {path: f"https://s3/{path}?ttl={expires_in}" for path in paths}
 
 
 def _use_case(spos: _SPOs, ai: _AI, storage: _Storage) -> GetRepairAnalyticsViewUseCase:
@@ -136,13 +159,18 @@ def test_page_shows_every_spo_of_repair_window_in_order() -> None:
     assert result[0].passport.brigade == 13
     assert result[1].passport is None
     assert [dto.ai_result is not None for dto in result] == [True, False, True]
+    # Паспорта и notes.json — одной пачкой, ссылки на все файлы — другой.
+    assert storage.downloads == [["key/101", "key/201", "key/102"]]
+    assert len(storage.presigned) == 1
+    assert result[0].file_url == "https://s3/key/10?ttl=3600"
+    assert result[0].notes_file_url == "https://s3/key/101?ttl=3600"
+    assert result[0].passport_file_url == "https://s3/key/201?ttl=3600"
+    assert result[1].passport_file_url is None
 
 
-def test_unreadable_side_file_does_not_break_page() -> None:
+def test_bad_side_file_does_not_break_page() -> None:
     spos = _SPOs([_spo(1, 28, notes=101, passport=201)])
-    storage = _Storage(
-        {"key/101": RuntimeError("s3 down"), "key/201": ["not", "a", "dict"]},
-    )
+    storage = _Storage({"key/101": b"not json", "key/201": ["not", "a", "dict"]})
     use_case = _use_case(spos, _AI([]), storage)
     repair = SimpleNamespace(id=1, start_time=START, end_time=END)
 
@@ -151,6 +179,19 @@ def test_unreadable_side_file_does_not_break_page() -> None:
     assert dto.start_time is None
     assert dto.row_count is None
     assert dto.passport is None
+    assert dto.notes_file_url is not None
+
+
+def test_s3_failure_does_not_break_page() -> None:
+    spos = _SPOs([_spo(1, 28, notes=101, passport=None)])
+    storage = _Storage({"key/101": RuntimeError("s3 down")})
+    use_case = _use_case(spos, _AI([]), storage)
+    repair = SimpleNamespace(id=1, start_time=START, end_time=END)
+
+    (dto,) = asyncio.run(use_case._build_spos(repair, 7))  # noqa: SLF001
+
+    assert dto.start_time is None
+    assert dto.file_url is not None
 
 
 def test_no_spo_in_window_gives_empty_list() -> None:
