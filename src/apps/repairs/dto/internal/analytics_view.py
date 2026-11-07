@@ -101,6 +101,8 @@ class SPOWithAIResultDTO(BaseModel):
     snapshot_time: datetime.datetime
     start_time: datetime.datetime | None = None
     end_time: datetime.datetime | None = None
+    # Строк телеметрии в замере (notes.json); у замера установки — сотни.
+    row_count: int | None = None
     well_id: int
     passport: SPOPassportDTO | None = None
     ai_result: AIResultDTO | None = None

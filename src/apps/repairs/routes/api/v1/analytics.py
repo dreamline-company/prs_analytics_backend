@@ -22,7 +22,6 @@ from apps.repairs.repositories.ai_results import (
 from apps.repairs.repositories.analytics import (
     RepairAnalyticsDynamogramRepository,
     RepairAnalyticsRepository,
-    RepairAnalyticsSPORepository,
 )
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.docs import RepairDocRepository
@@ -73,7 +72,6 @@ async def get_repair_analytics_view(
         analytics_dynamogram_repository=RepairAnalyticsDynamogramRepository(
             session=app_session,
         ),
-        analytics_spo_repository=RepairAnalyticsSPORepository(session=app_session),
         dynamogram_repository=DynamogramRepository(session=app_session),
         spo_repository=SPORepository(session=app_session),
         dynamogram_ai_repository=RepairDynamogramAIResultRepository(
