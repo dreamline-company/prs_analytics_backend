@@ -4,7 +4,9 @@ Aggregates data from the app DB (analytics, dynamograms, SPOs, AI results)
 and the CM DB (brigade error screens referenced by ``cm_screen_id``).
 """
 
+import asyncio
 import json
+from collections.abc import Sequence
 from datetime import datetime
 
 from starlette import status
@@ -36,12 +38,12 @@ from apps.repairs.repositories.ai_results import (
 from apps.repairs.repositories.analytics import (
     RepairAnalyticsDynamogramRepository,
     RepairAnalyticsRepository,
-    RepairAnalyticsSPORepository,
 )
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.repair import RepairRepository
 from apps.repairs.repositories.transport import RepairTransportRepository
 from apps.repairs.services.error_screens import list_repair_error_screens
+from apps.repairs.tasks.fetch_sources.candidates import local_now, repair_window
 from apps.wells.dto.internal.well import WellShortDTO
 from apps.wells.repositories import WellRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
@@ -55,6 +57,9 @@ from shared.integrations.cm.repositories.brigade_error_screens import (
 from shared.integrations.cm.repositories.brigades import CMBrigadeRepository
 
 logger = get_logger(__name__)
+
+# Одновременных чтений паспортов/notes.json СПО из S3.
+_S3_CONCURRENCY = 8
 
 
 class RepairAnalyticsNotFoundError(HttpError):
@@ -73,7 +78,6 @@ class GetRepairAnalyticsViewUseCase:
         unique_brigade_repository: UniqueBrigadeRepository,
         analytics_repository: RepairAnalyticsRepository,
         analytics_dynamogram_repository: RepairAnalyticsDynamogramRepository,
-        analytics_spo_repository: RepairAnalyticsSPORepository,
         dynamogram_repository: DynamogramRepository,
         spo_repository: SPORepository,
         dynamogram_ai_repository: RepairDynamogramAIResultRepository,
@@ -92,7 +96,6 @@ class GetRepairAnalyticsViewUseCase:
         self.unique_brigade_repository = unique_brigade_repository
         self.analytics_repository = analytics_repository
         self.analytics_dynamogram_repository = analytics_dynamogram_repository
-        self.analytics_spo_repository = analytics_spo_repository
         self.dynamogram_repository = dynamogram_repository
         self.spo_repository = spo_repository
         self.dynamogram_ai_repository = dynamogram_ai_repository
@@ -141,7 +144,7 @@ class GetRepairAnalyticsViewUseCase:
         )
 
         dynamograms = await self._build_dynamograms(analytics.id)
-        spos = await self._build_spos(analytics.id)
+        spos = await self._build_spos(repair, well.id)
 
         error_screens = await self._build_error_screens(repair)
         overall = await self.overall_ai_repository.get_by_analytics_id(analytics.id)
@@ -200,82 +203,87 @@ class GetRepairAnalyticsViewUseCase:
             after=build(link.dynamogram_after_id),
         )
 
-    async def _build_spos(self, analytics_id: int) -> list[SPOWithAIResultDTO]:
-        link = await self.analytics_spo_repository.get_by_analytics_id(analytics_id)
-        if link is None:
-            return []
-        spo = await self.spo_repository.get_by_id(link.spo_id)
-        if spo is None:
-            return []
-        dto = SPOWithAIResultDTO.model_validate(spo)
-        start_time, end_time = await self._load_spo_times(spo.notes_file_id)
-        dto.start_time = start_time
-        dto.end_time = end_time
-        dto.passport = await self._load_spo_passport(spo.passport_file_id)
-        ai_results = await self.spo_ai_repository.list_by_spo_ids([spo.id])
-        if ai_results:
-            dto.ai_result = AIResultDTO.model_validate(ai_results[0])
-        return [dto]
-
-    async def _load_spo_times(
+    async def _build_spos(
         self,
-        notes_file_id: int | None,
-    ) -> tuple[datetime | None, datetime | None]:
-        """Read start/end from the SPO notes.json in S3."""
+        repair: Repair,
+        well_id: int,
+    ) -> list[SPOWithAIResultDTO]:
+        """Все СПО скважины в окне ремонта по времени.
 
-        data = await self._load_json_file(notes_file_id, "notes")
-        if data is None:
-            return None, None
-        return _parse_iso(data.get("start")), _parse_iso(data.get("end"))
-
-    async def _load_spo_passport(
-        self,
-        passport_file_id: int | None,
-    ) -> SPOPassportDTO | None:
-        """Read passport JSON from S3 and coerce into a typed DTO."""
-
-        data = await self._load_json_file(passport_file_id, "passport")
-        if data is None:
-            return None
-        try:
-            return SPOPassportDTO.model_validate(data)
-        except ValueError:
-            logger.exception(
-                "SPO passport file id=%s does not match expected shape; skipping.",
-                passport_file_id,
-            )
-            return None
-
-    async def _load_json_file(
-        self,
-        file_id: int | None,
-        kind: str,
-    ) -> dict | None:
-        """Download and parse a JSON side-artifact by File.id.
-
-        Returns ``None`` on any failure (missing row, S3 miss, malformed
-        JSON, decode error). The view should never fail because of a stale
-        or missing side-artifact.
+        Окно то же, что у привязки замеров и ИИ-вердикта: [начало, конец
+        (у открытого — сейчас) + сутки].
         """
+        start, end = repair_window(repair, now=local_now())
+        spos = await self.spo_repository.list_by_well_id_in_window(well_id, start, end)
+        if not spos:
+            return []
+        ai_results = await self.spo_ai_repository.list_by_spo_ids(
+            [spo.id for spo in spos],
+        )
+        ai_by_spo_id = {result.spo_id: result for result in ai_results}
+        notes = await self._load_json_files(
+            [spo.notes_file_id for spo in spos],
+            "notes",
+        )
+        passports = await self._load_json_files(
+            [spo.passport_file_id for spo in spos],
+            "passport",
+        )
 
-        if file_id is None:
-            return None
-        try:
-            file_row = await self.file_repository.get_by_id(file_id)
-            if file_row is None or not file_row.file:
-                return None
-            payload = await self.storage.download_file(file_row.file)
-            data = json.loads(payload.getvalue().decode("utf-8"))
-        except Exception:
-            logger.exception(
-                "Failed to read SPO %s file id=%s; skipping.",
-                kind,
-                file_id,
+        dtos: list[SPOWithAIResultDTO] = []
+        for spo in spos:
+            dto = SPOWithAIResultDTO.model_validate(spo)
+            spo_notes = notes.get(spo.notes_file_id) or {}
+            dto.start_time = _parse_iso(spo_notes.get("start"))
+            dto.end_time = _parse_iso(spo_notes.get("end"))
+            row_count = spo_notes.get("row_count")
+            dto.row_count = row_count if isinstance(row_count, int) else None
+            dto.passport = _parse_passport(
+                passports.get(spo.passport_file_id),
+                spo.passport_file_id,
             )
-            return None
-        if not isinstance(data, dict):
-            return None
-        return data
+            ai = ai_by_spo_id.get(spo.id)
+            if ai is not None:
+                dto.ai_result = AIResultDTO.model_validate(ai)
+            dtos.append(dto)
+        return dtos
+
+    async def _load_json_files(
+        self,
+        file_ids: Sequence[int | None],
+        kind: str,
+    ) -> dict[int, dict]:
+        """File.id → JSON сопутствующего файла СПО из S3.
+
+        Непрочитанное (нет в S3, битый JSON) пропускается: страница не должна
+        падать из-за устаревшего или пропавшего файла.
+        """
+        ids = sorted({file_id for file_id in file_ids if file_id is not None})
+        if not ids:
+            return {}
+        rows = [row for row in await self.file_repository.list_by_ids(ids) if row.file]
+        semaphore = asyncio.Semaphore(_S3_CONCURRENCY)
+
+        async def download(file_id: int, path: str) -> dict | None:
+            async with semaphore:
+                try:
+                    payload = await self.storage.download_file(path)
+                    data = json.loads(payload.getvalue().decode("utf-8"))
+                except Exception:
+                    logger.exception(
+                        "Failed to read SPO %s file id=%s; skipping.",
+                        kind,
+                        file_id,
+                    )
+                    return None
+            return data if isinstance(data, dict) else None
+
+        payloads = await asyncio.gather(*(download(row.id, row.file) for row in rows))
+        return {
+            row.id: data
+            for row, data in zip(rows, payloads, strict=True)
+            if data is not None
+        }
 
     @staticmethod
     def _build_overall(overall) -> OverallAIResultDTO | None:  # noqa: ANN001
@@ -326,6 +334,22 @@ class GetRepairAnalyticsViewUseCase:
         if not screen:
             return None
         return f"{self.cm_media_url_header.rstrip('/')}/{screen.lstrip('/')}"
+
+
+def _parse_passport(
+    data: dict | None,
+    file_id: int | None,
+) -> SPOPassportDTO | None:
+    if data is None:
+        return None
+    try:
+        return SPOPassportDTO.model_validate(data)
+    except ValueError:
+        logger.exception(
+            "SPO passport file id=%s does not match expected shape; skipping.",
+            file_id,
+        )
+        return None
 
 
 def _parse_iso(value: str | None) -> datetime | None:
