@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable, Iterable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
@@ -45,6 +46,39 @@ class AiobotoFileStorage:
             raise FileNotExistError from e
         file.seek(0)
         return file
+
+    async def download_files(self, file_paths: Iterable[str]) -> dict[str, BytesIO]:
+        """Скачать пачку объектов одним клиентом; ненайденные пропускаются.
+
+        Дорого не чтение из MinIO, а создание клиента (~40 мс CPU на каждый),
+        поэтому вся пачка идёт через один ``async with``.
+        """
+        paths = list(dict.fromkeys(file_paths))
+        if not paths:
+            return {}
+
+        async with self.client_factory() as client:
+
+            async def download(path: str) -> BytesIO | None:
+                file = BytesIO()
+                try:
+                    await client.download_fileobj(
+                        Bucket=self.bucket_name,
+                        Key=path,
+                        Fileobj=file,
+                    )
+                except ClientError:
+                    logger.warning("S3 object %s not found; skipped.", path)
+                    return None
+                file.seek(0)
+                return file
+
+            files = await asyncio.gather(*(download(path) for path in paths))
+        return {
+            path: file
+            for path, file in zip(paths, files, strict=True)
+            if file is not None
+        }
 
     async def download_file_to_path(self, file_path: str, local_path: Path) -> None:
         try:
