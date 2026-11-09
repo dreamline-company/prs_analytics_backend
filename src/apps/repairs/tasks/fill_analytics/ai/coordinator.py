@@ -29,7 +29,7 @@ from apps.repairs.repositories.ai_results import (
 )
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.services.error_screens import list_repair_error_screens
-from apps.repairs.services.lift_type import dynamogram_applicable
+from apps.repairs.services.lift_type import RepairLiftTypes
 from apps.repairs.tasks.fill_analytics.inputs import overall_fingerprint
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.models.spo import SPO
@@ -166,17 +166,22 @@ class AICoordinator:
         dynamogram_after: RepairDynamogramAIResult | None,
         spo_results: list[RepairSPOAIResult],
         inputs_fingerprint: str | None = None,
-        lift_type: str | None = None,
+        lift_types: RepairLiftTypes | None = None,
     ) -> RepairAIAnalysis:
         existing = await self.overall_ai_repo.get_by_analytics_id(analytics_id)
         # Нарушения нужны и для отпечатка: они входят в промпт, и новое
         # нарушение после первого вердикта должно его пересчитать.
         violations = await self._fetch_repair_violations(repair)
-        has_dynamograms = dynamogram_applicable(lift_type)
-        # Способ добычи входит в отпечаток, только если динамограмм нет (ЭВН и т.п.):
-        # вердикты штанговых скважин остаются актуальными и заново не считаются.
+        lifts = lift_types or RepairLiftTypes()
+        before_applicable = lifts.dynamogram_before_applicable
+        after_applicable = lifts.dynamogram_after_applicable
+        # Способ добычи входит в отпечаток, только если хотя бы с одной стороны
+        # динамограммы нет (ЭВН и т.п.): вердикты штанговых скважин остаются
+        # актуальными и заново не считаются.
         base_fingerprint = (inputs_fingerprint or "") + (
-            "" if has_dynamograms else f"|no-dynamogram:{lift_type}"
+            ""
+            if before_applicable and after_applicable
+            else f"|no-dynamogram:{lifts.before}>{lifts.after}"
         )
         fingerprint = overall_fingerprint(
             base_fingerprint,
@@ -205,8 +210,10 @@ class AICoordinator:
                 ),
                 spo_results=[r.result for r in spo_results if r.result is not None],
                 violations=violations,
-                lift_type=lift_type,
-                dynamogram_applicable=has_dynamograms,
+                lift_type_before=lifts.before,
+                lift_type_after=lifts.after,
+                dynamogram_before_applicable=before_applicable,
+                dynamogram_after_applicable=after_applicable,
             ),
         )
         self._record_usage(repair.id, result.usage)
