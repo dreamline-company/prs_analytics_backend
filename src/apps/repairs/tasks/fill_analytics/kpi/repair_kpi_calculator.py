@@ -22,12 +22,14 @@ reused across pipeline passes so we don't re-bill the LLM every run.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from statistics import median
 from io import BytesIO
 from typing import TYPE_CHECKING, Any
 
 from markitdown import MarkItDown
 
+from apps.compensation.constants import PLAN_GRACE_DAYS
 from apps.repairs.dto.internal.repositories.kpi import (
     CreateRepairKPIDTO,
     UpdateRepairKPIDTO,
@@ -69,6 +71,9 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 _TECH_REGIME_UNIT = "м3/сут"
+# Окно после окончания ремонта, за которое считается «выход на тех. режим»: медиана
+# замеров за месяц не боится отдельных нулей (остановов), но остаётся привязанной к ремонту
+_TECH_REGIME_WINDOW = timedelta(days=30)
 
 
 @dataclass(slots=True)
@@ -164,7 +169,7 @@ class RepairKPICalculator:
     # --- Выход на тех. режим -------------------------------------------------
 
     async def _tech_regime(self, repair: Repair) -> dict[str, Any]:
-        plan = await self._tech_regime_plan(repair.abai_well_id)
+        plan = await self._tech_regime_plan(repair)
         current = await self._tech_regime_current(repair)
         deviation = None
         if plan not in (None, 0) and current is not None:
@@ -176,26 +181,48 @@ class RepairKPICalculator:
             "unit": _TECH_REGIME_UNIT,
         }
 
-    async def _tech_regime_plan(self, abai_well_id: int | None) -> float | None:
+    async def _tech_regime_plan(self, repair: Repair) -> float | None:
+        abai_well_id = repair.abai_well_id
         if abai_well_id is None:
             return None
+        # Режим, действовавший на момент окончания ремонта (у незавершённого — на сегодня),
+        # как в сводках; режимы месячные, поэтому берётся с запасом на лаг ABAI.
+        on_date = (repair.end_time or datetime.now(tz=repair.start_time.tzinfo)).date()
+        current = await self.tech_regime_repo.get_current_by_abai_well_ids(
+            [abai_well_id],
+            on_date=on_date,
+            grace_days=PLAN_GRACE_DAYS,
+        )
+        if abai_well_id in current:
+            return current[abai_well_id].liquid
         regimes = await self.tech_regime_repo.list_by_abai_well_id(abai_well_id)
         return regimes[0].liquid if regimes else None
 
     async def _tech_regime_current(self, repair: Repair) -> float | None:
+        # Незавершённый ремонт: «выхода на режим» ещё нет. Без end_time выборка
+        # телеметрии шла бы за всё время, и брался бы последний замер вообще (он мог
+        # быть сделан в начале ремонта), а не значение после ремонта.
+        if repair.end_time is None:
+            return None
         # Repair.well_id is not populated — resolve the well via abai_well_id.
         if repair.abai_well_id is None:
             return None
         well = await self.well_repo.get_by_abai_id(abai_id=repair.abai_well_id)
         if well is None:
             return None
+        # «Выход на режим» — дебит жидкости в первые сутки после ремонта, а не
+        # последний замер скважины вообще: иначе со временем в KPI попадает текущее
+        # состояние скважины (простой через полтора месяца даёт 0 и −100%).
+        # Берём медиану за месяц после окончания ремонта.
         measurements = await self.telemetry_repo.list_by_well_id_in_period(
             well.id,
             date_time_from=repair.end_time,
+            date_time_to=repair.end_time + _TECH_REGIME_WINDOW,
         )
-        if not measurements:
+        values = [m.qv_liquid for m in measurements if m.qv_liquid is not None]
+        if not values:
             return None
-        return measurements[-1].qv_liquid
+        return round(median(values), 2)
 
     # --- КПД насоса после ПРС ------------------------------------------------
 
