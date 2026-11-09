@@ -397,12 +397,15 @@ class RepairKPICalculator:
     # --- Нарушения ТБ --------------------------------------------------------
 
     async def _count_violations(self, repair: Repair) -> int:
+        # Только обработанные экраны CM — те же, что показывает страница аналитики
+        # ремонта: иначе в KPI число из всех срабатываний камеры, а в панели 0.
         screens = await list_repair_error_screens(
             repair,
             repair_brigade_repo=self.repair_brigade_repo,
             unique_brigade_repo=self.unique_brigade_repo,
             cm_brigade_repo=self.cm_brigade_repo,
             cm_brigade_error_screen_repo=self.cm_brigade_error_screen_repo,
+            processed_only=True,
         )
         return len(screens)
 

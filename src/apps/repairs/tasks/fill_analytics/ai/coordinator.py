@@ -305,12 +305,15 @@ class AICoordinator:
         self,
         repair: Repair,
     ) -> list[OverallViolationDTO]:
+        # Только обработанные экраны CM: ИИ-вывод не должен называть нарушения,
+        # которых нет в панели нарушений на странице ремонта.
         screens = await list_repair_error_screens(
             repair,
             repair_brigade_repo=self.repair_brigade_repo,
             unique_brigade_repo=self.unique_brigade_repo,
             cm_brigade_repo=self.cm_brigade_repo,
             cm_brigade_error_screen_repo=self.cm_brigade_error_screen_repo,
+            processed_only=True,
         )
         return [
             OverallViolationDTO(
