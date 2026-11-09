@@ -74,6 +74,23 @@ class WellExplRepository(
             ),
         )
 
+    async def list_named_periods_by_abai_well_id(
+        self,
+        abai_well_id: int,
+    ) -> list[tuple[date | None, str | None]]:
+        """Периоды способа эксплуатации скважины: (``dbeg``, название), по ``dbeg``.
+
+        Пустой ``dbeg`` считается самым старым; tiebreak по ``abai_id``.
+        """
+        stmt = (
+            select(WellExpl.dbeg, WellExplType.name_ru)
+            .join(WellExplType, WellExplType.abai_id == WellExpl.expl, isouter=True)
+            .where(WellExpl.abai_well_id == abai_well_id)
+            .order_by(WellExpl.dbeg.asc().nullsfirst(), WellExpl.abai_id.asc())
+        )
+        result = await self.session.execute(stmt)
+        return [(row[0], row[1]) for row in result.all()]
+
     async def list_open_intervals(self, on_date: date) -> Sequence[WellExpl]:
         """Локальные незакрытые интервалы: dend пуст или в будущем."""
         return await self.get_list(

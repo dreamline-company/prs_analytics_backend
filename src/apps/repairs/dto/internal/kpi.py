@@ -40,6 +40,9 @@ class DynamogramKPIDTO(BaseModel):
     before_pct: float | None = None
     after_pct: float | None = None
     direction: str | None = None  # "better" | "worse" | "same" | None
+    # False — сравнение ДО/ПОСЛЕ не применимо: у способа добычи (ЭВН и т.п.)
+    # динамограмма не снимается; None — KPI посчитан до появления поля
+    applicable: bool | None = None
     verdict: str | None = None
 
 

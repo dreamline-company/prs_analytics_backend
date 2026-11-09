@@ -65,6 +65,7 @@ from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.docs import RepairDocRepository
 from apps.repairs.repositories.kpi import RepairKPIRepository
 from apps.repairs.repositories.reports import RepairSummaryRepository
+from apps.repairs.services.lift_type import get_repair_lift_types
 from apps.repairs.tasks.fetch_sources.candidates import (
     ai_retry_cutoff,
     as_naive,
@@ -117,6 +118,7 @@ from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.spo import SPORepository
 from apps.wells.repositories.spo_event import SPOEventRepository
 from apps.wells.repositories.well import WellRepository
+from apps.wells.repositories.well_expl import WellExplRepository
 from core import get_logger
 from core.settings import get_settings
 from shared.database.sql.setup import session_makers
@@ -299,6 +301,13 @@ class FillRepairAnalytics:
             repair.end_time,
         )
         well = await resolve_repair_well(repair, deps.well_repo)
+        # Способ добычи (ABAI) до и после ремонта нужен ИИ-выводу и KPI:
+        # у ЭВН/УЭЦН/фонтана динамограммы нет
+        lift_types = await get_repair_lift_types(
+            repair,
+            deps.well_expl_repo,
+            today=now.date(),
+        )
         analytics = await self._ensure_analytics(repair, deps.analytics_repo)
         inputs = await self._collect_inputs(repair, well, deps, now=now)
         logger.info(
@@ -362,6 +371,7 @@ class FillRepairAnalytics:
             dynamogram_after=dyn_after_ai,
             spo_results=spo_ai_results,
             inputs_fingerprint=inputs.fingerprint(),
+            lift_types=lift_types,
         )
 
         usage = ai_coordinator.pop_repair_usage(repair.id)
@@ -381,6 +391,7 @@ class FillRepairAnalytics:
             well_id=well.id if well else None,
             spo_closed=inputs.primary_spo_closed,
             spo_revision=primary_spo.raw_size if primary_spo else None,
+            lift_types=lift_types,
         )
 
         if await self._should_finalize(
@@ -632,6 +643,7 @@ class _Dependencies:
     summary_repo: RepairSummaryRepository
     file_repo: FileRepository
     well_repo: WellRepository
+    well_expl_repo: WellExplRepository
     measure_repo: KbrsMeasureRepository
     spo_ai_repo: RepairSPOAIResultRepository
     overall_ai_repo: RepairAIAnalysisRepository
@@ -652,6 +664,7 @@ class _Dependencies:
             summary_repo=RepairSummaryRepository(session),
             file_repo=FileRepository(session),
             well_repo=WellRepository(session),
+            well_expl_repo=WellExplRepository(session),
             measure_repo=KbrsMeasureRepository(session),
             spo_ai_repo=RepairSPOAIResultRepository(session),
             overall_ai_repo=RepairAIAnalysisRepository(session),

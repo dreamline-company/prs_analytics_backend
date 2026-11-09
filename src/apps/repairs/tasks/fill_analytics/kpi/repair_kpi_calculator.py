@@ -34,6 +34,7 @@ from apps.repairs.dto.internal.repositories.kpi import (
 )
 from apps.repairs.models.analytics import AI_STATUS_COMPLETED
 from apps.repairs.services.error_screens import list_repair_error_screens
+from apps.repairs.services.lift_type import RepairLiftTypes
 from core import get_logger
 from core.settings import get_settings
 from shared.database.s3.storage import FileNotExistError
@@ -101,6 +102,7 @@ class RepairKPICalculator:
         well_id: int | None = None,
         spo_closed: bool = True,
         spo_revision: int | None = None,
+        lift_types: RepairLiftTypes | None = None,
     ) -> RepairKPI:
         """Собрать и сохранить KPI ремонта.
 
@@ -135,6 +137,7 @@ class RepairKPICalculator:
             "dynamogram_kpi": self._dynamogram_kpi(
                 dynamogram_before_ai,
                 dynamogram_after_ai,
+                lift_types=lift_types,
             ),
         }
         logger.info("Repair id=%s KPI computed: %s", repair.id, metrics)
@@ -301,13 +304,44 @@ class RepairKPICalculator:
         self,
         dynamogram_before_ai: RepairDynamogramAIResult | None,
         dynamogram_after_ai: RepairDynamogramAIResult | None,
+        *,
+        lift_types: RepairLiftTypes | None = None,
     ) -> dict[str, Any]:
+        lifts = lift_types or RepairLiftTypes()
         before = self._parsed(dynamogram_before_ai)
         after = self._parsed(dynamogram_after_ai)
         before_pct = self._num(before, "score", "pump_efficiency_pct")
         after_pct = self._num(after, "score", "pump_efficiency_pct")
+        # ЭВН, УЭЦН и фонтан: динамограммы нет, её отсутствие — не недостаток
+        # ремонта. Есть оценка — сравниваем по ней, что бы ни говорил способ.
+        no_before = before_pct is None and not lifts.dynamogram_before_applicable
+        no_after = after_pct is None and not lifts.dynamogram_after_applicable
 
-        if before_pct is None or after_pct is None:
+        if no_before and no_after:
+            lift = (
+                f"«{lifts.before}»"
+                if lifts.before == lifts.after
+                else f"«{lifts.before}» → «{lifts.after}»"
+            )
+            direction = None
+            verdict = (
+                f"Динамограмма не применима: способ добычи {lift}, "
+                "динамограмма не снимается."
+            )
+        elif no_before or no_after:
+            side, lift, other, other_pct = (
+                ("до", lifts.before, "после", after_pct)
+                if no_before
+                else ("после", lifts.after, "до", before_pct)
+            )
+            direction = None
+            verdict = (
+                f"Сравнение ДО/ПОСЛЕ не применимо: {side} ремонта способ добычи "
+                f"«{lift}», динамограмма не снималась."
+            )
+            if other_pct is not None:
+                verdict += f" Оценка {other} ремонта — {other_pct}%."
+        elif before_pct is None or after_pct is None:
             direction = None
             verdict = "Недостаточно данных для сравнения ДО/ПОСЛЕ."
         elif after_pct > before_pct:
@@ -329,6 +363,7 @@ class RepairKPICalculator:
             "before_pct": before_pct,
             "after_pct": after_pct,
             "direction": direction,
+            "applicable": not (no_before or no_after),
             "verdict": verdict,
         }
 

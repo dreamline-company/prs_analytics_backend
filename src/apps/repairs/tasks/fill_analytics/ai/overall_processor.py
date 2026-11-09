@@ -30,6 +30,12 @@ class OverallProcessingInput:
     dynamogram_after_result: dict | None = None
     spo_results: list[dict] = field(default_factory=list)
     violations: list[OverallViolationDTO] = field(default_factory=list)
+    # Способ добычи до и после ремонта (ШГН / ЭВН / УЭЦН / …); None — неизвестен
+    lift_type_before: str | None = None
+    lift_type_after: str | None = None
+    # False — у такого способа добычи динамограмма не снимается (ЭВН и т.п.)
+    dynamogram_before_applicable: bool = True
+    dynamogram_after_applicable: bool = True
 
 
 _OUTPUT_SCHEMA_HINT = {
@@ -54,6 +60,12 @@ class OverallAIProcessor(BaseAIProcessor[OverallProcessingInput]):
                 if item.repair.end_time is not None
                 else None
             ),
+            "well": {
+                "lift_type_before": item.lift_type_before,
+                "lift_type_after": item.lift_type_after,
+                "dynamogram_before_applicable": item.dynamogram_before_applicable,
+                "dynamogram_after_applicable": item.dynamogram_after_applicable,
+            },
             "dynamogram_before_result": item.dynamogram_before_result,
             "dynamogram_after_result": item.dynamogram_after_result,
             "spo_results": item.spo_results,
@@ -85,6 +97,11 @@ class OverallAIProcessor(BaseAIProcessor[OverallProcessingInput]):
             "выдумывай, оставь список пустым.\n"
             "- Если во входе `brigade_violations.count > 0`, обязательно упомяни "
             "это в risks_and_issues с точным числом.\n"
+            "- Если `well.dynamogram_before_applicable = false` (способ добычи до "
+            "ремонта — ЭВН, УЭЦН, фонтан, насоса нет и т.п.), динамограмма до "
+            "ремонта не снималась: НЕ указывай её отсутствие в risks_and_issues "
+            "и attention_points и не рекомендуй её предоставлять. То же для "
+            "`well.dynamogram_after_applicable` и динамограммы после ремонта.\n"
             "- Пиши по-русски, коротко и по делу. Без вводных фраз.\n\n"
             "Схема ответа (пример):\n"
             f"{json.dumps(_OUTPUT_SCHEMA_HINT, ensure_ascii=False)}\n\n"
