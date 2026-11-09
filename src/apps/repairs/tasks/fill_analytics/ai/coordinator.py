@@ -29,6 +29,7 @@ from apps.repairs.repositories.ai_results import (
 )
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.services.error_screens import list_repair_error_screens
+from apps.repairs.services.lift_type import dynamogram_applicable
 from apps.repairs.tasks.fill_analytics.inputs import overall_fingerprint
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.models.spo import SPO
@@ -165,13 +166,20 @@ class AICoordinator:
         dynamogram_after: RepairDynamogramAIResult | None,
         spo_results: list[RepairSPOAIResult],
         inputs_fingerprint: str | None = None,
+        lift_type: str | None = None,
     ) -> RepairAIAnalysis:
         existing = await self.overall_ai_repo.get_by_analytics_id(analytics_id)
         # Нарушения нужны и для отпечатка: они входят в промпт, и новое
         # нарушение после первого вердикта должно его пересчитать.
         violations = await self._fetch_repair_violations(repair)
+        has_dynamograms = dynamogram_applicable(lift_type)
+        # Способ добычи входит в отпечаток, только если динамограмм нет (ЭВН и т.п.):
+        # вердикты штанговых скважин остаются актуальными и заново не считаются.
+        base_fingerprint = (inputs_fingerprint or "") + (
+            "" if has_dynamograms else f"|no-dynamogram:{lift_type}"
+        )
         fingerprint = overall_fingerprint(
-            inputs_fingerprint or "",
+            base_fingerprint,
             end_time=repair.end_time,
             violations=[(v.timestamp, v.description) for v in violations],
             spo_ai_outcomes={
@@ -197,6 +205,8 @@ class AICoordinator:
                 ),
                 spo_results=[r.result for r in spo_results if r.result is not None],
                 violations=violations,
+                lift_type=lift_type,
+                dynamogram_applicable=has_dynamograms,
             ),
         )
         self._record_usage(repair.id, result.usage)

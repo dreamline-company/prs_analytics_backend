@@ -30,6 +30,10 @@ class OverallProcessingInput:
     dynamogram_after_result: dict | None = None
     spo_results: list[dict] = field(default_factory=list)
     violations: list[OverallViolationDTO] = field(default_factory=list)
+    # Способ добычи скважины (ШГН / ЭВН / УЭЦН / …); None — неизвестен
+    lift_type: str | None = None
+    # False — у такого способа добычи динамограммы не снимаются (ЭВН и т.п.)
+    dynamogram_applicable: bool = True
 
 
 _OUTPUT_SCHEMA_HINT = {
@@ -54,6 +58,10 @@ class OverallAIProcessor(BaseAIProcessor[OverallProcessingInput]):
                 if item.repair.end_time is not None
                 else None
             ),
+            "well": {
+                "lift_type": item.lift_type,
+                "dynamogram_applicable": item.dynamogram_applicable,
+            },
             "dynamogram_before_result": item.dynamogram_before_result,
             "dynamogram_after_result": item.dynamogram_after_result,
             "spo_results": item.spo_results,
@@ -85,6 +93,10 @@ class OverallAIProcessor(BaseAIProcessor[OverallProcessingInput]):
             "выдумывай, оставь список пустым.\n"
             "- Если во входе `brigade_violations.count > 0`, обязательно упомяни "
             "это в risks_and_issues с точным числом.\n"
+            "- Если `well.dynamogram_applicable = false` (способ добычи — ЭВН, УЭЦН, "
+            "фонтан и т.п.), динамограммы на такой скважине не снимаются: НЕ указывай "
+            "их отсутствие в risks_and_issues и attention_points и не рекомендуй их "
+            "предоставлять.\n"
             "- Пиши по-русски, коротко и по делу. Без вводных фраз.\n\n"
             "Схема ответа (пример):\n"
             f"{json.dumps(_OUTPUT_SCHEMA_HINT, ensure_ascii=False)}\n\n"

@@ -34,6 +34,7 @@ from apps.repairs.dto.internal.repositories.kpi import (
 )
 from apps.repairs.models.analytics import AI_STATUS_COMPLETED
 from apps.repairs.services.error_screens import list_repair_error_screens
+from apps.repairs.services.lift_type import dynamogram_applicable
 from core import get_logger
 from core.settings import get_settings
 from shared.database.s3.storage import FileNotExistError
@@ -101,6 +102,7 @@ class RepairKPICalculator:
         well_id: int | None = None,
         spo_closed: bool = True,
         spo_revision: int | None = None,
+        lift_type: str | None = None,
     ) -> RepairKPI:
         """Собрать и сохранить KPI ремонта.
 
@@ -135,6 +137,7 @@ class RepairKPICalculator:
             "dynamogram_kpi": self._dynamogram_kpi(
                 dynamogram_before_ai,
                 dynamogram_after_ai,
+                lift_type=lift_type,
             ),
         }
         logger.info("Repair id=%s KPI computed: %s", repair.id, metrics)
@@ -301,7 +304,21 @@ class RepairKPICalculator:
         self,
         dynamogram_before_ai: RepairDynamogramAIResult | None,
         dynamogram_after_ai: RepairDynamogramAIResult | None,
+        *,
+        lift_type: str | None = None,
     ) -> dict[str, Any]:
+        # ЭВН, УЭЦН и фонтан: динамограммы нет, её отсутствие — не недостаток ремонта
+        if not dynamogram_applicable(lift_type):
+            return {
+                "before_pct": None,
+                "after_pct": None,
+                "direction": None,
+                "applicable": False,
+                "verdict": (
+                    f"Динамограмма не применима: у способа добычи {lift_type} "
+                    "динамограммы не снимаются."
+                ),
+            }
         before = self._parsed(dynamogram_before_ai)
         after = self._parsed(dynamogram_after_ai)
         before_pct = self._num(before, "score", "pump_efficiency_pct")
