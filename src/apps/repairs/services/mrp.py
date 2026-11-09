@@ -277,7 +277,7 @@ class CrfResult:
     percent_of_fund: float | None
     # число ремонтов без ГТМ за период → число скважин
     distribution: dict[int, int]
-    # число ремонтов → имена скважин (только для ЧРФ: от min_repairs)
+    # число ремонтов → имена скважин (для всех групп градации, не только для ЧРФ)
     wells_by_count: dict[int, list[str]]
     # ЧРФ по фонду ШГН (методика ЧРФ, шаг 6): скважины ШГН, их ремонты, доля от
     # фонда ШГН на конец окна
@@ -498,8 +498,7 @@ def compute_kmg(  # noqa: PLR0913
     wells_by_count: dict[int, list[str]] = defaultdict(list)
     for name, n in counts.items():
         distribution[n] += 1
-        if n >= crf_min_repairs:
-            wells_by_count[n].append(name)
+        wells_by_count[n].append(name)
 
     return KmgResult(
         window_start=win_start,
