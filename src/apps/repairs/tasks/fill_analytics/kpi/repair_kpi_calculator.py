@@ -22,7 +22,7 @@ reused across pipeline passes so we don't re-bill the LLM every run.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from typing import TYPE_CHECKING, Any
 
@@ -68,6 +68,8 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 _TECH_REGIME_UNIT = "м3/сут"
+# Окно после окончания ремонта, за которое считается «выход на тех. режим»
+_TECH_REGIME_WINDOW = timedelta(days=7)
 
 
 @dataclass(slots=True)
@@ -191,13 +193,19 @@ class RepairKPICalculator:
         well = await self.well_repo.get_by_abai_id(abai_id=repair.abai_well_id)
         if well is None:
             return None
+        # «Выход на режим» — дебит жидкости в первые сутки после ремонта, а не
+        # последний замер скважины вообще: иначе со временем в KPI попадает текущее
+        # состояние скважины (простой через полтора месяца даёт 0 и −100%).
+        # Берём среднее за окно после окончания ремонта.
         measurements = await self.telemetry_repo.list_by_well_id_in_period(
             well.id,
             date_time_from=repair.end_time,
+            date_time_to=repair.end_time + _TECH_REGIME_WINDOW,
         )
-        if not measurements:
+        values = [m.qv_liquid for m in measurements if m.qv_liquid is not None]
+        if not values:
             return None
-        return measurements[-1].qv_liquid
+        return round(sum(values) / len(values), 2)
 
     # --- КПД насоса после ПРС ------------------------------------------------
 
