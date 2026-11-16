@@ -196,11 +196,16 @@ class MrpInputsService:
 
         # Действующий фонд, как считает ABAI: категория OIL и статус «в работе» /
         # «простой» / «периодическая» на 1-е число месяца.
+        # Фонд на конец периода — на 1-е число месяца после окна, если оно уже
+        # наступило (окно ноябрь–октябрь: фонд на 1 ноября).
+        end_first = window_end.date()
+        end_known = datetime.combine(end_first, datetime.min.time()) <= now
+        fund_firsts = [*month_firsts, end_first] if end_known else month_firsts
         category_rows = await self.category_repository.list_intervals_by_code(
             abai_ids,
             code=FUND_CATEGORY_CODE,
-            since=datetime.combine(month_firsts[0], datetime.min.time()),
-            until=datetime.combine(month_firsts[-1], datetime.min.time()),
+            since=datetime.combine(fund_firsts[0], datetime.min.time()),
+            until=datetime.combine(fund_firsts[-1], datetime.min.time()),
         )
         category_by_well: dict[int, list[tuple[datetime | None, datetime]]] = (
             defaultdict(list)
@@ -225,6 +230,15 @@ class MrpInputsService:
                     category_by_well.get(well.abai_id, []),
                     fund_status_by_well.get(well.abai_id, []),
                 ),
+                in_fund_at_end=bool(
+                    fund_months_of(
+                        [end_first],
+                        category_by_well.get(well.abai_id, []),
+                        fund_status_by_well.get(well.abai_id, []),
+                    ),
+                )
+                if end_known
+                else None,
             )
             for well in wells
         ]

@@ -248,6 +248,10 @@ class WellFundInput:
     # «периодическая». Время работы месяца в фонде — все его календарные сутки
     # минус ремонты. None — фонд не ограничивается (месяц с работой в статусах).
     fund_months: frozenset[tuple[int, int]] | None = None
+    # В фонде ли на 1-е число месяца после окна (так заказчик считает «фонд на
+    # конец периода»: окно ноябрь–октябрь — фонд на 1 ноября). None — это 1-е
+    # число ещё не наступило или фонд не задан: берётся последний месяц окна.
+    in_fund_at_end: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -553,6 +557,8 @@ def compute_kmg(  # noqa: PLR0913
     last_y, last_m = periods[-1]
 
     def in_last_month_fund(well: WellFundInput) -> bool:
+        if well.in_fund_at_end is not None:
+            return well.in_fund_at_end
         if well.fund_months is not None:
             return (last_y, last_m) in well.fund_months
         return any(_clip(iv, last_lo, win_end) for iv in well.work_intervals)
