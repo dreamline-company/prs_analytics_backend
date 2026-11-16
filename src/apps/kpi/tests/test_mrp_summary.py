@@ -315,9 +315,10 @@ def test_crf_repair_list_marks_gtm_as_not_counted() -> None:
     }
     assert flags["2026-06-01"] == (True, False)
     assert flags["2026-03-10"] == (False, True)
-    assert sum(r.counted for r in wells["VMB_0001"].repairs_detail) == wells[
-        "VMB_0001"
-    ].repairs
+    assert (
+        sum(r.counted for r in wells["VMB_0001"].repairs_detail)
+        == wells["VMB_0001"].repairs
+    )
 
 
 def _first(year: int, month: int) -> date:
@@ -360,3 +361,27 @@ def test_unknown_category_start_means_since_forever() -> None:
     status = [(_dt("2000-01-01T00:00"), OPEN_END)]
 
     assert fund_months_of([_first(2026, 1)], category, status) == {(2026, 1)}
+
+
+def test_fund_at_end_is_taken_on_the_first_day_after_the_window() -> None:
+    # JLM_0002 числится нефтяной до полуночи 1 октября: 1 сентября (последний
+    # месяц окна) она в фонде, а на 1 октября — уже нет. Окно по сентябрь
+    # включительно — «фонд на конец» это 1 октября, то есть одна скважина.
+    categories = [
+        (1001, _dt("2025-01-01T00:00"), OPEN_END),
+        (1002, _dt("2026-01-01T00:00"), _dt("2026-10-01T00:00")),
+    ]
+
+    crf = _run(categories).crf
+
+    assert crf.fund_at_end == 1
+
+
+def test_fund_at_end_falls_back_to_last_month_when_next_first_is_in_future() -> None:
+    # окно по октябрь, «сейчас» 5 октября — 1 ноября ещё не наступило, фонд на
+    # конец берётся на 1 октября
+    summary = asyncio.run(
+        _use_case().execute(GetMrpSummaryQuery(end_month="2026-10"), now=NOW),
+    )
+
+    assert summary.crf.fund_at_end == 2
