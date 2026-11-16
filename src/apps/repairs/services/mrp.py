@@ -46,6 +46,8 @@ class RepairSpan:
     # «По технической причине»: замена устьевого оборудования или штока — ремонт,
     # но не отказ (в знаменатель МРП без ГТМ не входит)
     is_tech: bool = False
+    # Вид ремонта по справочнику ABAI (для списка ремонтов ЧРФ)
+    type_name: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -236,13 +238,15 @@ class WellFundInput:
     name: str
     oil_field: str
     lift_type: str | None
-    # Интервалы статуса «в работе» (WRK), местное время
+    # Интервалы статуса «в работе» (WRK), местное время. Нужны только без
+    # ``fund_months``: с фондом время работы — календарные сутки фонда.
     work_intervals: Sequence[Interval]
     # Ремонты скважины, пересекающие окно (для вычета времени и подсчёта)
     repairs: Sequence[RepairSpan]
     # Месяцы (год, месяц), в которых скважина входит в действующий фонд: на
-    # 1-е число действует режим с плановым дебитом жидкости > 0. None — фонд не
-    # ограничивается (месяц с работой в статусах).
+    # 1-е число действует категория OIL и статус «в работе» / «простой» /
+    # «периодическая». Время работы месяца в фонде — все его календарные сутки
+    # минус ремонты. None — фонд не ограничивается (месяц с работой в статусах).
     fund_months: frozenset[tuple[int, int]] | None = None
 
 
@@ -262,10 +266,37 @@ class KmgGroup:
 
 
 @dataclass(frozen=True, slots=True)
+class CrfRepair:
+    """Ремонт скважины ЧРФ в окне: чтобы заказчик мог проверить каждый."""
+
+    start: datetime
+    end: datetime | None
+    type_name: str | None
+    is_gtm: bool
+    is_tech: bool
+    # Учтён в числе ремонтов ЧРФ: не ГТМ и начат в месяц, когда скважина в фонде
+    counted: bool
+
+
+@dataclass(frozen=True, slots=True)
 class CrfWell:
     name: str
     oil_field: str
     repairs: int
+    lift_type: str | None = None
+    # Все ремонты скважины, начатые в окне, по возрастанию даты начала
+    repairs_detail: list[CrfRepair] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class CrfLiftGroup:
+    """ЧРФ одного способа добычи (ШГН, ЭВН, УЭЦН, фонтан…)."""
+
+    key: str
+    fund_at_end: int
+    wells: int
+    repairs: int
+    percent_of_fund: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,6 +316,8 @@ class CrfResult:
     shgn_wells: int = 0
     shgn_repairs: int = 0
     shgn_percent_of_fund: float | None = None
+    # ЧРФ по способам добычи: фонд, скважины ЧРФ, их ремонты, доля от фонда способа
+    by_lift_type: list[CrfLiftGroup] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,6 +393,62 @@ def is_shgn(lift_type: str | None) -> bool:
     return "ШГН" in name and not name.startswith(("ФОНТАН", "КОМБИНИР"))
 
 
+def crf_lift_key(lift_type: str | None) -> str:
+    """Группа способа добычи в ЧРФ: все штанговые (ШГН, САУ/ИСУ ШГН) — «ШГН»."""
+    if not lift_type:
+        return "не указан"
+    return "ШГН" if is_shgn(lift_type) else lift_type
+
+
+def _crf_by_lift(
+    fund_wells: Sequence[WellFundInput],
+    crf_wells: Sequence[CrfWell],
+    lift_of: dict[str, str | None],
+) -> list[CrfLiftGroup]:
+    fund: dict[str, int] = defaultdict(int)
+    for well in fund_wells:
+        fund[crf_lift_key(well.lift_type)] += 1
+    crf: dict[str, list[CrfWell]] = defaultdict(list)
+    for item in crf_wells:
+        crf[crf_lift_key(lift_of[item.name])].append(item)
+    groups = [
+        CrfLiftGroup(
+            key=key,
+            fund_at_end=fund.get(key, 0),
+            wells=len(crf.get(key, [])),
+            repairs=sum(c.repairs for c in crf.get(key, [])),
+            percent_of_fund=(len(crf.get(key, [])) / fund[key] * 100)
+            if fund.get(key)
+            else None,
+        )
+        for key in set(fund) | set(crf)
+    ]
+    return sorted(groups, key=lambda g: (-g.fund_at_end, g.key))
+
+
+def _month_work_days(
+    well: WellFundInput,
+    bounds: tuple[datetime, datetime],
+    work: list[Interval],
+    repair_cut: list[Interval],
+    now: datetime,
+) -> float:
+    """Время работы скважины в месяце, сутки.
+
+    Фонд известен (``fund_months``) — по методике заказчика это все календарные
+    сутки месяца в фонде минус сутки ремонтов (статус «в работе» или «простой»
+    не важен: простаивающая скважина тоже в фонде). Месяц считается до ``now``.
+    Фонд не задан — время работы по статусам «в работе».
+    """
+    lo, hi = bounds
+    if well.fund_months is None:
+        return _length_days(c for iv in work if (c := _clip(iv, lo, hi)))
+    end = min(hi, now)
+    if end <= lo:
+        return 0.0
+    return _length_days(_subtract([(lo, end)], repair_cut))
+
+
 def _in_fund(well: WellFundInput, year: int, month: int) -> bool:
     return well.fund_months is None or (year, month) in well.fund_months
 
@@ -399,7 +488,7 @@ def _group(
         for (year, month), (lo, hi) in zip(months, month_bounds, strict=True):
             if not _in_fund(well, year, month):
                 continue
-            days = _length_days(c for iv in work if (c := _clip(iv, lo, hi)))
+            days = _month_work_days(well, (lo, hi), work, repair_cut, now)
             work_days += days
             # Без режима фонд — месяцы с работой; с режимом — все месяцы в фонде
             if days > 0 or well.fund_months is not None:
@@ -483,11 +572,33 @@ def compute_kmg(  # noqa: PLR0913
         if n:
             counts[well.name] = n
 
+    well_by_name = {w.name: w for w in wells}
     field_of = {w.name: w.oil_field for w in wells}
     lift_of = {w.name: w.lift_type for w in wells}
+
+    def repair_details(well: WellFundInput) -> list[CrfRepair]:
+        return [
+            CrfRepair(
+                start=r.start,
+                end=r.end,
+                type_name=r.type_name,
+                is_gtm=r.is_gtm,
+                is_tech=r.is_tech,
+                counted=not r.is_gtm and _in_fund(well, r.start.year, r.start.month),
+            )
+            for r in sorted(well.repairs, key=lambda r: r.start)
+            if win_start <= r.start < win_end
+        ]
+
     crf_wells = sorted(
         (
-            CrfWell(name, field_of[name], n)
+            CrfWell(
+                name,
+                field_of[name],
+                n,
+                lift_type=lift_of[name],
+                repairs_detail=repair_details(well_by_name[name]),
+            )
             for name, n in counts.items()
             if n >= crf_min_repairs
         ),
@@ -522,6 +633,7 @@ def compute_kmg(  # noqa: PLR0913
             shgn_percent_of_fund=(len(shgn_crf) / shgn_fund_at_end * 100)
             if shgn_fund_at_end
             else None,
+            by_lift_type=_crf_by_lift(fund_wells, crf_wells, lift_of),
         ),
     )
 
@@ -613,7 +725,7 @@ def compute_month_stats(
         for i, (lo, hi) in enumerate(bounds):
             if not _in_fund(well, *months[i]):
                 continue
-            days = _length_days(c for iv in work if (c := _clip(iv, lo, hi)))
+            days = _month_work_days(well, (lo, hi), work, repair_cut, now)
             work_days[i] += days
             if days > 0 or well.fund_months is not None:
                 fund[i] += 1

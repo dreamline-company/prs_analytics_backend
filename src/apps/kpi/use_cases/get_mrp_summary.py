@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 
 from apps.kpi.dto.internal.mrp import (
     CrfDTO,
+    CrfLiftTypeDTO,
+    CrfRepairDTO,
     CrfWellDTO,
     MrpGroupDTO,
     MrpSummaryDTO,
@@ -29,9 +31,9 @@ NOTE = (
     "ГТМ — по перечню заказчика: промывка забоя, подготовка к ГИС и ГРП, ГРП, "
     "ликвидация, консервация, ввод из консервации и из бурения. «По технической "
     "причине» (замена устьевого оборудования и штока) — ремонт, но не отказ. "
-    "Фонд месяца — скважины с плановым дебитом жидкости > 0 в тех. режиме на 1-е "
-    "число, время работы — их время в статусах «в работе» (WRK/PEXP) за вычетом "
-    "ремонтов."
+    "Фонд месяца — как в ABAI: нефтяные скважины (категория OIL) в статусах "
+    "«в работе», «простой» или «периодическая» на 1-е число; время работы — все "
+    "календарные сутки месяцев в фонде за вычетом суток ремонтов."
 )
 
 
@@ -108,6 +110,19 @@ class GetMrpSummaryUseCase:
         )
 
         crf = result.crf
+        # Плановый режим ЧРФ-скважин на последний день окна — для списка ЧРФ
+        crf_names = {w.name for w in crf.wells}
+        abai_of = {w.name: w.abai_id for w in wells if w.name in crf_names}
+        last_day = (result.window_end - timedelta(days=1)).date()
+        regimes = await self.mrp_inputs_service.load_current_regimes(
+            list(abai_of.values()),
+            on_date=last_day,
+        )
+        # Горизонты на тот же день; у скважины их бывает несколько сразу
+        horizons = await self.mrp_inputs_service.load_horizons(
+            list(abai_of.values()),
+            on_date=last_day,
+        )
         return MrpSummaryDTO(
             window_start=result.window_start.date(),
             window_end=(result.window_end - timedelta(days=1)).date(),
@@ -122,7 +137,36 @@ class GetMrpSummaryUseCase:
                 repairs=crf.repairs,
                 percent_of_fund=_round(crf.percent_of_fund, 2),
                 wells=[
-                    CrfWellDTO(name=w.name, oil_field=w.oil_field, repairs=w.repairs)
+                    CrfWellDTO(
+                        name=w.name,
+                        oil_field=w.oil_field,
+                        repairs=w.repairs,
+                        lift_type=w.lift_type,
+                        horizon=", ".join(horizons.get(abai_of[w.name], [])) or None,
+                        regime_liquid=_round(
+                            getattr(regimes.get(abai_of[w.name]), "liquid", None),
+                            2,
+                        ),
+                        regime_oil=_round(
+                            getattr(regimes.get(abai_of[w.name]), "oil", None),
+                            2,
+                        ),
+                        regime_water_cut=_round(
+                            getattr(regimes.get(abai_of[w.name]), "water_cut", None),
+                            1,
+                        ),
+                        repairs_detail=[
+                            CrfRepairDTO(
+                                start=r.start,
+                                end=r.end,
+                                type_name=r.type_name,
+                                is_gtm=r.is_gtm,
+                                is_tech=r.is_tech,
+                                counted=r.counted,
+                            )
+                            for r in w.repairs_detail
+                        ],
+                    )
                     for w in crf.wells
                 ],
                 distribution=crf.distribution,
@@ -131,6 +175,16 @@ class GetMrpSummaryUseCase:
                 shgn_wells_count=crf.shgn_wells,
                 shgn_repairs=crf.shgn_repairs,
                 shgn_percent_of_fund=_round(crf.shgn_percent_of_fund, 2),
+                by_lift_type=[
+                    CrfLiftTypeDTO(
+                        key=g.key,
+                        fund_at_end=g.fund_at_end,
+                        wells_count=g.wells,
+                        repairs=g.repairs,
+                        percent_of_fund=_round(g.percent_of_fund, 2),
+                    )
+                    for g in crf.by_lift_type
+                ],
             ),
             note=NOTE,
         )
