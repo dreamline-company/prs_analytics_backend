@@ -125,7 +125,7 @@ class FakeRegimes:
     def __init__(
         self,
         current: dict[int, float | None],
-        latest: list[float | None] | None = None,
+        latest: list[tuple[date, float | None]] | None = None,
     ) -> None:
         self.current = current
         self.latest = latest or []
@@ -141,8 +141,11 @@ class FakeRegimes:
         self.on_date = on_date
         return {k: SimpleNamespace(liquid=v) for k, v in self.current.items()}
 
-    async def list_by_abai_well_id(self, abai_well_id: int) -> list[SimpleNamespace]:  # noqa: ARG002
-        return [SimpleNamespace(liquid=v) for v in self.latest]
+    async def list_by_abai_well_id(
+        self,
+        abai_well_id: int,  # noqa: ARG002
+    ) -> list[SimpleNamespace]:
+        return [SimpleNamespace(start_date=d, liquid=v) for d, v in self.latest]
 
 
 def _plan_calculator(regimes: FakeRegimes) -> RepairKPICalculator:
@@ -151,22 +154,57 @@ def _plan_calculator(regimes: FakeRegimes) -> RepairKPICalculator:
     return calc
 
 
-def test_plan_is_regime_valid_on_repair_end() -> None:
-    regimes = FakeRegimes({1: 45.0}, latest=[99.0])
+def _plan(regimes: FakeRegimes) -> float | None:
     calc = _plan_calculator(regimes)
+    return asyncio.run(calc._tech_regime_plan(_repair(END)))  # noqa: SLF001
 
-    assert asyncio.run(calc._tech_regime_plan(_repair(END))) == 45.0  # noqa: SLF001
+
+def test_plan_is_regime_valid_on_repair_end() -> None:
+    regimes = FakeRegimes({1: 45.0}, latest=[(date(2026, 10, 1), 99.0)])
+
+    assert _plan(regimes) == 45.0
     assert regimes.on_date == END.date()
 
 
 def test_plan_falls_back_to_latest_regime() -> None:
-    regimes = FakeRegimes({}, latest=[30.0, 10.0])
-    calc = _plan_calculator(regimes)
+    regimes = FakeRegimes(
+        {},
+        latest=[(date(2026, 8, 1), 10.0), (date(2026, 9, 1), 30.0)],
+    )
 
-    assert asyncio.run(calc._tech_regime_plan(_repair(END))) == 30.0  # noqa: SLF001
+    assert _plan(regimes) == 30.0
 
 
 def test_plan_without_any_regime_is_none() -> None:
-    calc = _plan_calculator(FakeRegimes({}))
+    assert _plan(FakeRegimes({})) is None
 
-    assert asyncio.run(calc._tech_regime_plan(_repair(END))) is None  # noqa: SLF001
+
+def test_empty_regime_of_the_month_does_not_erase_plan() -> None:
+    # DMB_0055: режим июля 2026 без дебита жидкости перекрывал заданные ранее
+    # режимы, и в KPI не было ни плана, ни процента отклонения
+    regimes = FakeRegimes(
+        {1: None},
+        latest=[
+            (date(2021, 11, 1), 25.0),
+            (date(2026, 7, 1), None),
+            (date(2026, 10, 1), 8.0),
+        ],
+    )
+
+    # ремонт закончился 22.09: режим октября ещё не начался
+    assert _plan(regimes) == 25.0
+
+
+def test_plan_ignores_regimes_that_start_after_repair_when_earlier_exist() -> None:
+    regimes = FakeRegimes(
+        {},
+        latest=[(date(2026, 7, 1), 12.0), (date(2026, 11, 1), 50.0)],
+    )
+
+    assert _plan(regimes) == 12.0
+
+
+def test_plan_takes_later_regime_when_nothing_started_before_repair() -> None:
+    regimes = FakeRegimes({}, latest=[(date(2026, 11, 1), 50.0)])
+
+    assert _plan(regimes) == 50.0
