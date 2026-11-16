@@ -10,9 +10,12 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     Text,
+    case,
+    null,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, MappedColumn, column_property, mapped_column
+from sqlalchemy.sql.elements import Case
 from sqlalchemy.types import UserDefinedType
 
 from shared.database.sql.models import ABAIBaseModel
@@ -735,3 +738,105 @@ class WellTech(ABAIBaseModel):
         nullable=True,
         comment="Номер отвода на ГЗУ",
     )
+
+
+class WellCategoryType(ABAIBaseModel):
+    """Справочник категорий скважины: нефтяная (OIL), нагнетательная (INJ)…"""
+
+    __tablename__ = "well_category_type"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name_ru: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name_short_ru: Mapped[str | None] = mapped_column(Text, nullable=True)
+    code: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+# Раньше этой даты в периодах ABAI только мусор: в well_geo есть 1899-12-31 и
+# даты до нашей эры. asyncpg на датах до нашей эры падает («ordinal must be
+# >= 1») и роняет весь прогон, поэтому даты периодов читаются выражением,
+# которое вместо них отдаёт NULL: сами колонки объявлены ``deferred`` и в
+# SELECT не попадают.
+ABAI_MIN_DATE = date(1900, 1, 1)
+ABAI_MIN_DATETIME = datetime(1900, 1, 1)  # noqa: DTZ001 — timestamp без пояса
+
+
+def _not_before[T: (date, datetime)](
+    column: MappedColumn[T | None],
+    bound: T,
+) -> Case[T | None]:
+    return case((column < bound, null()), else_=column)
+
+
+class WellCategory(ABAIBaseModel):
+    """Категория скважины по периодам; открытый период — ``dend`` 3333-12-31.
+
+    Даты — timestamp без пояса: у старых записей бывает время 01:00, 05:00,
+    08:00, 09:00. Раньше 1900 года дат сейчас нет; если появятся, придут NULL
+    (см. ``ABAI_MIN_DATE``).
+    """
+
+    __tablename__ = "well_category"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    well: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    category: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    raw_dbeg: Mapped[datetime | None] = mapped_column(
+        "dbeg",
+        DateTime,
+        deferred=True,
+    )
+    raw_dend: Mapped[datetime | None] = mapped_column(
+        "dend",
+        DateTime,
+        deferred=True,
+    )
+    dbeg: Mapped[datetime | None] = column_property(
+        _not_before(raw_dbeg, ABAI_MIN_DATETIME),
+    )
+    dend: Mapped[datetime | None] = column_property(
+        _not_before(raw_dend, ABAI_MIN_DATETIME),
+    )
+
+
+class GeoType(ABAIBaseModel):
+    """Тип геообъекта: горизонт (HRZ), объект (OBJ), месторождение (FLD)…"""
+
+    __tablename__ = "geo_type"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name_ru: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name_short_ru: Mapped[str | None] = mapped_column(Text, nullable=True)
+    code: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Geo(ABAIBaseModel):
+    """Геообъект. Родителя нет; ``field_code`` заполнен только у месторождений."""
+
+    __tablename__ = "geo"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name_ru: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name_short_ru: Mapped[str | None] = mapped_column(Text, nullable=True)
+    geo_type: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    field_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class WellGeo(ABAIBaseModel):
+    """Привязка скважины к геообъекту (почти всегда к горизонту) по периодам.
+
+    Даты раньше ``ABAI_MIN_DATE`` приходят NULL: на 16.11.2026 это 5 значений
+    ``dbeg`` (1899-12-31 и даты до нашей эры), в ``dend`` таких нет. Открытый
+    период закрывают две заглушки — 9999-12-31 и 3333-12-31.
+    ``share_extr_liq`` (доля добычи по горизонту) в источнике пуста и не
+    объявлена.
+    """
+
+    __tablename__ = "well_geo"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    well: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    geo: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    raw_dbeg: Mapped[date | None] = mapped_column("dbeg", Date, deferred=True)
+    raw_dend: Mapped[date | None] = mapped_column("dend", Date, deferred=True)
+    dbeg: Mapped[date | None] = column_property(_not_before(raw_dbeg, ABAI_MIN_DATE))
+    dend: Mapped[date | None] = column_property(_not_before(raw_dend, ABAI_MIN_DATE))

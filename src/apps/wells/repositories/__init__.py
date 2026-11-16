@@ -1,3 +1,10 @@
+from apps.wells.repositories.category_geo import (
+    GeoRepository,
+    GeoTypeRepository,
+    WellCategoryRepository,
+    WellCategoryTypeRepository,
+    WellGeoRepository,
+)
 from apps.wells.repositories.coords import CoordRepository, WellCoordRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
 from apps.wells.repositories.fund_revision import FundRevisionRepository
@@ -38,14 +45,19 @@ __all__ = (
     "GdisCurrentRepository",
     "GdisCurrentValueRepository",
     "GdisMetricRepository",
+    "GeoRepository",
+    "GeoTypeRepository",
     "SPORepository",
     "TechHistoryRepository",
     "TechRepository",
     "TechTypeRepository",
+    "WellCategoryRepository",
+    "WellCategoryTypeRepository",
     "WellCoordRepository",
     "WellDriveStateRepository",
     "WellExplRepository",
     "WellExplTypeRepository",
+    "WellGeoRepository",
     "WellOrgRepository",
     "WellRepository",
     "WellStateRepository",

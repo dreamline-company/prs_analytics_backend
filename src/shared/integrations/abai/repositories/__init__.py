@@ -1,6 +1,13 @@
 from shared.integrations.abai.repositories.brigades import (
     ABAIBrigadeRepository,
 )
+from shared.integrations.abai.repositories.category_geo import (
+    ABAIGeoRepository,
+    ABAIGeoTypeRepository,
+    ABAIWellCategoryRepository,
+    ABAIWellCategoryTypeRepository,
+    ABAIWellGeoRepository,
+)
 from shared.integrations.abai.repositories.coord_systems import (
     ABAICoordSystemRepository,
 )
@@ -51,6 +58,8 @@ __all__ = (
     "ABAICoordSystemRepository",
     "ABAIGdisCurrentRepository",
     "ABAIGdisCurrentValueRepository",
+    "ABAIGeoRepository",
+    "ABAIGeoTypeRepository",
     "ABAIMetricRepository",
     "ABAIOrgRepository",
     "ABAIReasonRepository",
@@ -60,8 +69,11 @@ __all__ = (
     "ABAITechModeProdOilRepository",
     "ABAITechRepository",
     "ABAITechTypeRepository",
+    "ABAIWellCategoryRepository",
+    "ABAIWellCategoryTypeRepository",
     "ABAIWellExplRepository",
     "ABAIWellExplTypeRepository",
+    "ABAIWellGeoRepository",
     "ABAIWellOrgRepository",
     "ABAIWellRepository",
     "ABAIWellStatusRepository",

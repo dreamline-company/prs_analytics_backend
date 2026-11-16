@@ -107,6 +107,11 @@ from apps.wells.tasks.analyze_dynamograms.analyze_dynamograms import (  # noqa: 
     analyze_dynamograms,
 )
 
+# Импорт регистрирует таску синхронизации категорий и горизонтов скважин из ABAI.
+from apps.wells.tasks.load_category_geo.load_category_geo import (  # noqa: F401
+    sync_category_geo,
+)
+
 # Импорт регистрирует таску инкрементальной загрузки ГДИС из ABAI.
 from apps.wells.tasks.load_gdis.load_gdis import load_gdis_incremental  # noqa: F401
 
@@ -244,6 +249,13 @@ celery_app.conf.beat_schedule = {
     "wells-tech-sync": {
         "task": "wells.tech.sync",
         "schedule": crontab(hour=5, minute=20),
+    },
+    # Категории (нефтяная, нагнетательная…) и горизонты скважин из ABAI — раз в
+    # сутки полной сверкой, как ГЗУ: таблицы маленькие, меняются по десятку
+    # периодов в месяц, а правки закрытых периодов инкрементом не поймать.
+    "wells-category-geo-sync": {
+        "task": "wells.category_geo.sync",
+        "schedule": crontab(hour=5, minute=25),
     },
     # Ежедневная догрузка периодов эксплуатации из ABAI (новые id + правки dend).
     "wells-well-expl-incremental": {

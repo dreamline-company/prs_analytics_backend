@@ -50,6 +50,13 @@ from apps.repairs.models.transport import RepairTransport
 from apps.telemetry.models.sdmo import SdmoFcData, SdmoFcReg, SdmoStation
 from apps.telemetry.models.tech_regime import TechRegime
 from apps.telemetry.models.telemetry import Telemetry
+from apps.wells.models.category_geo import (
+    Geo,
+    GeoType,
+    WellCategory,
+    WellCategoryType,
+    WellGeo,
+)
 from apps.wells.models.coords import Coord, WellCoord
 from apps.wells.models.dynamogram import Dynamogram
 from apps.wells.models.fund_revision import FundRevision
@@ -89,6 +96,8 @@ __all__ = (
     "GdisCurrent",
     "GdisCurrentValue",
     "GdisMetric",
+    "Geo",
+    "GeoType",
     "GpsMessage",
     "GpsUnit",
     "KbrsMeasure",
@@ -120,10 +129,13 @@ __all__ = (
     "Telemetry",
     "UniqueBrigade",
     "Well",
+    "WellCategory",
+    "WellCategoryType",
     "WellCoord",
     "WellDriveState",
     "WellExpl",
     "WellExplType",
+    "WellGeo",
     "WellOrg",
     "WellState",
     "WellStateRun",
