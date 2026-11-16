@@ -1,7 +1,7 @@
 """Динамика МРП через use case: окно загрузки и формат ответа."""
 
 import asyncio
-from datetime import date, datetime
+from datetime import datetime
 from types import SimpleNamespace
 
 from apps.kpi.dto.internal.mrp import MrpDynamicsDTO
@@ -58,14 +58,23 @@ class FakeStatuses:
 
 
 class FakeRegimes:
-    async def list_producing_intervals_by_abai_well_ids(
+    pass
+
+
+class FakeCategories:
+    async def list_intervals_by_code(
         self,
         abai_well_ids: list[int],
         *,
-        since: date,  # noqa: ARG002
-        until: date,  # noqa: ARG002
-    ) -> list[tuple[int, date, date]]:
-        return [(i, date(2024, 1, 1), date(2099, 12, 31)) for i in abai_well_ids]
+        code: str,  # noqa: ARG002
+        since: datetime,  # noqa: ARG002
+        until: datetime,  # noqa: ARG002
+    ) -> list[tuple[int, datetime | None, datetime]]:
+        return [(i, datetime(2020, 1, 1), OPEN_END) for i in abai_well_ids]  # noqa: DTZ001
+
+
+class FakeGeo:
+    pass
 
 
 class FakeExpl:
@@ -85,6 +94,8 @@ def _run(**query: object) -> tuple[MrpDynamicsDTO, FakeRepairs]:
             status_repository=FakeStatuses(),  # type: ignore[arg-type]
             expl_repository=FakeExpl(),  # type: ignore[arg-type]
             regime_repository=FakeRegimes(),  # type: ignore[arg-type]
+            category_repository=FakeCategories(),  # type: ignore[arg-type]
+            geo_repository=FakeGeo(),  # type: ignore[arg-type]
         ),
     )
     dto = asyncio.run(
@@ -126,6 +137,8 @@ def test_default_end_is_previous_month() -> None:
             status_repository=FakeStatuses(),  # type: ignore[arg-type]
             expl_repository=FakeExpl(),  # type: ignore[arg-type]
             regime_repository=FakeRegimes(),  # type: ignore[arg-type]
+            category_repository=FakeCategories(),  # type: ignore[arg-type]
+            geo_repository=FakeGeo(),  # type: ignore[arg-type]
         ),
     )
     dto = asyncio.run(use_case.execute(GetMrpDynamicsQuery(points=2), now=NOW))

@@ -12,7 +12,7 @@ from apps.kpi.use_cases.get_mrp_summary import (
     GetMrpSummaryUseCase,
     default_end_month,
 )
-from apps.repairs.services.mrp_inputs import MrpInputsService
+from apps.repairs.services.mrp_inputs import MrpInputsService, fund_months_of
 
 NOW = datetime(2026, 10, 5, 10, 0)  # noqa: DTZ001
 OPEN_END = datetime(3333, 12, 31)  # noqa: DTZ001
@@ -82,20 +82,49 @@ class FakeStatuses:
         return [row for row in self.rows if row[0] in abai_well_ids]
 
 
-class FakeRegimes:
-    """Режимы с плановым дебитом жидкости > 0: (abai_well_id, начало, конец)."""
+class FakeCategories:
+    """Периоды категории OIL: (abai_well_id, dbeg, dend)."""
 
-    def __init__(self, rows: list[tuple[int, date, date]]) -> None:
+    def __init__(self, rows: list[tuple[int, datetime | None, datetime]]) -> None:
         self.rows = rows
 
-    async def list_producing_intervals_by_abai_well_ids(
+    async def list_intervals_by_code(
         self,
         abai_well_ids: list[int],
         *,
-        since: date,  # noqa: ARG002
-        until: date,  # noqa: ARG002
-    ) -> list[tuple[int, date, date]]:
+        code: str,
+        since: datetime,  # noqa: ARG002
+        until: datetime,  # noqa: ARG002
+    ) -> list[tuple[int, datetime | None, datetime]]:
+        assert code == "OIL"
         return [row for row in self.rows if row[0] in abai_well_ids]
+
+
+class FakeGeo:
+    """Горизонты: ABAI id скважины → названия."""
+
+    async def list_horizon_names_by_abai_well_ids(
+        self,
+        abai_well_ids: list[int],
+        *,
+        on_date: date,  # noqa: ARG002
+    ) -> dict[int, list[str]]:
+        return {i: ["Ю-1", "Ю-2"] for i in abai_well_ids if i == 1002}
+
+
+class FakeRegimes:
+    async def get_current_by_abai_well_ids(
+        self,
+        abai_well_ids: list[int],
+        *,
+        on_date: date,  # noqa: ARG002
+        grace_days: int,  # noqa: ARG002
+    ) -> dict[int, SimpleNamespace]:
+        # Плановый режим на конец окна: жидкость, нефть, обводнённость
+        return {
+            i: SimpleNamespace(liquid=30.0, oil=15.57, water_cut=42.0)
+            for i in abai_well_ids
+        }
 
 
 class FakeExpl:
@@ -137,27 +166,32 @@ STATUSES = [
 ]
 
 
-REGIMES = [
-    (1001, date(2025, 1, 1), date(2099, 12, 31)),
-    (1002, date(2026, 7, 1), date(2099, 12, 31)),
+# Категория OIL: JLM_0002 числится нефтяной с января (до июля стояла в простое)
+CATEGORIES = [
+    (1001, _dt("2025-01-01T00:00"), OPEN_END),
+    (1002, _dt("2026-01-01T00:00"), OPEN_END),
 ]
 
 
-def _use_case(regimes: list | None = None) -> GetMrpSummaryUseCase:
+def _use_case(categories: list | None = None) -> GetMrpSummaryUseCase:
     return GetMrpSummaryUseCase(
         ngdu_wells_service=FakeNgduWells(WELLS),  # type: ignore[arg-type]
         mrp_inputs_service=MrpInputsService(
             repair_repository=FakeRepairs(REPAIRS),  # type: ignore[arg-type]
             status_repository=FakeStatuses(STATUSES),  # type: ignore[arg-type]
             expl_repository=FakeExpl(),  # type: ignore[arg-type]
-            regime_repository=FakeRegimes(REGIMES if regimes is None else regimes),  # type: ignore[arg-type]
+            regime_repository=FakeRegimes(),  # type: ignore[arg-type]
+            category_repository=FakeCategories(  # type: ignore[arg-type]
+                CATEGORIES if categories is None else categories,
+            ),
+            geo_repository=FakeGeo(),  # type: ignore[arg-type]
         ),
     )
 
 
-def _run(regimes: list | None = None, **query: object) -> MrpSummaryDTO:
+def _run(categories: list | None = None, **query: object) -> MrpSummaryDTO:
     return asyncio.run(
-        _use_case(regimes).execute(
+        _use_case(categories).execute(
             GetMrpSummaryQuery(end_month="2026-09", **query),
             now=NOW,
         ),
@@ -228,22 +262,99 @@ def test_note_explains_assumptions() -> None:
     assert "технической причине" in note
 
 
-def test_fund_is_limited_by_producing_regime() -> None:
-    # Скважина B без режима с дебитом > 0 в июле: её ремонт 21 (10 июля) и время
-    # работы июля в расчёт не входят — в фонд месяца она не попадает.
-    regimes = [
-        (1001, date(2025, 1, 1), date(2099, 12, 31)),
-        (1002, date(2026, 8, 1), date(2099, 12, 31)),
+def test_fund_is_limited_by_oil_category() -> None:
+    # JLM_0002 стала нефтяной только с августа: её ремонт 21 (10 июля) и время
+    # работы июля в расчёт не входят — в фонд июля она не попадает.
+    categories = [
+        (1001, _dt("2025-01-01T00:00"), OPEN_END),
+        (1002, _dt("2026-08-01T00:00"), OPEN_END),
     ]
-    by_field = {g.key: g for g in _run(regimes).by_oil_field}
+    by_field = {g.key: g for g in _run(categories).by_oil_field}
 
     assert by_field["JLM"].repairs == 2
     # август + сентябрь = 61 сут минус два ремонта по 1 сут
     assert by_field["JLM"].work_days == pytest.approx(59, abs=0.5)
 
 
-def test_well_without_producing_regime_is_not_in_fund() -> None:
-    summary = _run([(1001, date(2025, 1, 1), date(2099, 12, 31))])
+def test_well_without_oil_category_is_not_in_fund() -> None:
+    summary = _run([(1001, _dt("2025-01-01T00:00"), OPEN_END)])
 
     assert {g.key for g in summary.by_oil_field} == {"VMB"}
     assert summary.total.repairs == 3
+
+
+def test_crf_well_has_regime_and_repair_list() -> None:
+    well = _run().crf.wells[0]
+
+    assert well.name == "JLM_0002"
+    assert (well.regime_liquid, well.regime_oil, well.regime_water_cut) == (
+        30.0,
+        15.57,
+        42.0,
+    )
+    # горизонты скважины на последний день окна, по названию
+    assert well.horizon == "Ю-1, Ю-2"
+    # все три ремонта скважины, начатые в окне, по возрастанию даты начала
+    assert [r.start.date().isoformat() for r in well.repairs_detail] == [
+        "2026-07-10",
+        "2026-08-10",
+        "2026-09-10",
+    ]
+    assert all(r.counted and not r.is_gtm for r in well.repairs_detail)
+
+
+def test_crf_repair_list_marks_gtm_as_not_counted() -> None:
+    wells = {w.name: w for w in _run(crf_min_repairs=2).crf.wells}
+
+    # VMB_0001: ремонт 12 («по мероприятию») — ГТМ, в число ремонтов ЧРФ не входит
+    flags = {
+        r.start.date().isoformat(): (r.is_gtm, r.counted)
+        for r in wells["VMB_0001"].repairs_detail
+    }
+    assert flags["2026-06-01"] == (True, False)
+    assert flags["2026-03-10"] == (False, True)
+    assert sum(r.counted for r in wells["VMB_0001"].repairs_detail) == wells[
+        "VMB_0001"
+    ].repairs
+
+
+def _first(year: int, month: int) -> date:
+    return date(year, month, 1)
+
+
+def test_fund_month_needs_category_and_fund_status_on_the_first() -> None:
+    category = [(_dt("2026-01-01T00:00"), OPEN_END)]
+    status = [(_dt("2026-02-10T00:00"), OPEN_END)]
+
+    months = fund_months_of(
+        [_first(2026, 1), _first(2026, 2), _first(2026, 3)],
+        category,
+        status,
+    )
+
+    # 1 февраля статуса ещё нет — в фонд месяц не попадает
+    assert months == {(2026, 3)}
+
+
+def test_fund_month_ignores_well_without_category_or_status() -> None:
+    firsts = [_first(2026, 5)]
+
+    assert fund_months_of(firsts, [], [(_dt("2026-01-01T00:00"), OPEN_END)]) == set()
+    assert fund_months_of(firsts, [(_dt("2026-01-01T00:00"), OPEN_END)], []) == set()
+
+
+def test_fund_period_ends_before_the_first() -> None:
+    # период закрыт ровно в полночь 1-го числа — на эту дату уже не действует
+    category = [(None, _dt("2026-05-01T00:00"))]
+    status = [(_dt("2026-01-01T00:00"), OPEN_END)]
+
+    months = fund_months_of([_first(2026, 4), _first(2026, 5)], category, status)
+
+    assert months == {(2026, 4)}
+
+
+def test_unknown_category_start_means_since_forever() -> None:
+    category = [(None, OPEN_END)]
+    status = [(_dt("2000-01-01T00:00"), OPEN_END)]
+
+    assert fund_months_of([_first(2026, 1)], category, status) == {(2026, 1)}

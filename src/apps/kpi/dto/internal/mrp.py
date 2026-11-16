@@ -1,6 +1,6 @@
 """МРП по методике КМГ (форма ИСУ KMG-F-2429.1-10) и ЧРФ."""
 
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
@@ -28,10 +28,40 @@ class MrpGroupDTO(BaseModel):
     tech_reason: int = 0
 
 
+class CrfRepairDTO(BaseModel):
+    """Ремонт скважины ЧРФ за период: заказчик проверяет, какие ремонты учтены."""
+
+    start: datetime
+    end: datetime | None
+    type_name: str | None
+    is_gtm: bool
+    is_tech: bool
+    # Учтён в числе ремонтов ЧРФ (не ГТМ и скважина в фонде в месяц начала)
+    counted: bool
+
+
 class CrfWellDTO(BaseModel):
     name: str
     oil_field: str
     repairs: int
+    lift_type: str | None = None
+    # Плановый тех. режим на конец периода: жидкость, нефть, обводнённость
+    regime_liquid: float | None = None
+    regime_oil: float | None = None
+    regime_water_cut: float | None = None
+    # Горизонт в нашей БД пока не хранится
+    horizon: str | None = None
+    repairs_detail: list[CrfRepairDTO] = []
+
+
+class CrfLiftTypeDTO(BaseModel):
+    """ЧРФ одного способа добычи: фонд способа, скважины ЧРФ, ремонты, доля."""
+
+    key: str
+    fund_at_end: int
+    wells_count: int
+    repairs: int
+    percent_of_fund: float | None
 
 
 class CrfDTO(BaseModel):
@@ -53,6 +83,8 @@ class CrfDTO(BaseModel):
     shgn_wells_count: int = 0
     shgn_repairs: int = 0
     shgn_percent_of_fund: float | None = None
+    # ЧРФ по способам добычи (ШГН, ЭВН, УЭЦН, фонтан…), по убыванию фонда способа
+    by_lift_type: list[CrfLiftTypeDTO] = []
 
 
 class MrpSummaryDTO(BaseModel):

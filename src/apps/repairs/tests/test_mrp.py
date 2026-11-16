@@ -316,3 +316,59 @@ def test_technical_repairs_are_not_failures() -> None:
     # T=300, R=5, ГТМ=1, по тех. причине=1 -> отказов 3
     assert _mrp(300, 5) == 60
     assert _mrp(300, 5 - 1 - 1) == 100
+
+
+def _fund_well(
+    well_id: int,
+    name: str,
+    lift_type: str | None,
+    repairs: int,
+) -> WellFundInput:
+    return WellFundInput(
+        well_id=well_id,
+        name=name,
+        oil_field=name[:3],
+        lift_type=lift_type,
+        work_intervals=[(_dt("2025-01-01T00:00"), _dt("2027-01-01T00:00"))],
+        repairs=[
+            _span(
+                well_id * 100 + i,
+                f"2026-0{i + 1}-10T00:00",
+                f"2026-0{i + 1}-11T00:00",
+            )
+            for i in range(repairs)
+        ],
+    )
+
+
+def test_crf_is_split_by_lift_type() -> None:
+    wells = [
+        _fund_well(1, "VMB_0001", "ШГН", 3),
+        _fund_well(2, "VMB_0002", "САУ ШГН", 1),  # штанговые — одна группа «ШГН»
+        _fund_well(3, "VMB_0003", "ЭВН", 4),
+        _fund_well(4, "VMB_0004", "ЭВН", 0),
+        _fund_well(5, "VMB_0005", None, 3),
+    ]
+
+    result = compute_kmg(wells, end_year=2026, end_month=9, now=NOW)
+    groups = {g.key: g for g in result.crf.by_lift_type}
+
+    assert set(groups) == {"ШГН", "ЭВН", "не указан"}
+    assert (groups["ШГН"].fund_at_end, groups["ШГН"].wells, groups["ШГН"].repairs) == (
+        2,
+        1,
+        3,
+    )
+    assert groups["ШГН"].percent_of_fund == pytest.approx(50.0)
+    assert (groups["ЭВН"].fund_at_end, groups["ЭВН"].wells, groups["ЭВН"].repairs) == (
+        2,
+        1,
+        4,
+    )
+    assert groups["не указан"].wells == 1
+    # группы по убыванию фонда способа; итог совпадает с общим ЧРФ
+    assert [g.fund_at_end for g in result.crf.by_lift_type] == [2, 2, 1]
+    assert sum(g.wells for g in groups.values()) == len(result.crf.wells)
+    assert sum(g.fund_at_end for g in groups.values()) == result.crf.fund_at_end
+    # прежние поля по ШГН не изменились
+    assert result.crf.shgn_wells == groups["ШГН"].wells

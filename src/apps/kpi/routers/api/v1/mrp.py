@@ -16,6 +16,10 @@ from apps.org.repositories.org import OrgRepository
 from apps.repairs.repositories.repair import RepairRepository
 from apps.repairs.services.mrp_inputs import MrpInputsService
 from apps.telemetry.repositories.tech_regime import TechRegimeRepository
+from apps.wells.repositories.category_geo import (
+    WellCategoryRepository,
+    WellGeoRepository,
+)
 from apps.wells.repositories.well import WellRepository
 from apps.wells.repositories.well_expl import WellExplRepository
 from apps.wells.repositories.well_org import WellOrgRepository
@@ -76,6 +80,8 @@ async def get_mrp_summary(  # noqa: PLR0913, PLR0917
             status_repository=WellStatusRepository(session=app_session),
             expl_repository=WellExplRepository(session=app_session),
             regime_repository=TechRegimeRepository(session=app_session),
+            category_repository=WellCategoryRepository(session=app_session),
+            geo_repository=WellGeoRepository(session=app_session),
         ),
     )
     summary = await use_case.execute(
@@ -139,6 +145,8 @@ async def get_mrp_dynamics(  # noqa: PLR0913, PLR0917
             status_repository=WellStatusRepository(session=app_session),
             expl_repository=WellExplRepository(session=app_session),
             regime_repository=TechRegimeRepository(session=app_session),
+            category_repository=WellCategoryRepository(session=app_session),
+            geo_repository=WellGeoRepository(session=app_session),
         ),
     )
     dynamics = await use_case.execute(
