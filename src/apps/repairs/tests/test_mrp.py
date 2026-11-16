@@ -372,3 +372,72 @@ def test_crf_is_split_by_lift_type() -> None:
     assert sum(g.fund_at_end for g in groups.values()) == result.crf.fund_at_end
     # прежние поля по ШГН не изменились
     assert result.crf.shgn_wells == groups["ШГН"].wells
+
+
+def _calendar_fund_well(
+    months: set[tuple[int, int]],
+    repairs: list[RepairSpan],
+) -> WellFundInput:
+    # статусов «в работе» нет вообще: время считается по календарю фонда
+    return WellFundInput(
+        well_id=1,
+        name="W_1",
+        oil_field="W",
+        lift_type=None,
+        work_intervals=[],
+        repairs=repairs,
+        fund_months=frozenset(months),
+    )
+
+
+def test_fund_work_time_is_calendar_days_minus_repairs() -> None:
+    well = _calendar_fund_well(
+        {(2026, 8), (2026, 9)},
+        [_span(1, "2026-08-10T00:00", "2026-08-12T00:00")],  # 2 сут в августе
+    )
+
+    result = compute_kmg([well], end_year=2026, end_month=9, months=2, now=NOW)
+
+    # август 31 + сентябрь 30 − 2 сут ремонта; простой/статусы не важны
+    assert result.total.work_days == pytest.approx(31 + 30 - 2, abs=0.01)
+    assert result.total.avg_fund == pytest.approx(1.0)
+
+
+def test_fund_work_time_skips_months_outside_the_fund() -> None:
+    well = _calendar_fund_well({(2026, 9)}, [])
+
+    result = compute_kmg([well], end_year=2026, end_month=9, months=2, now=NOW)
+
+    # в фонде только сентябрь — август в расчёт не входит
+    assert result.total.work_days == pytest.approx(30, abs=0.01)
+    assert result.total.avg_fund == pytest.approx(0.5)
+
+
+def test_fund_work_time_of_unfinished_month_runs_until_now() -> None:
+    well = _calendar_fund_well({(2026, 9)}, [])
+
+    result = compute_kmg(
+        [well],
+        end_year=2026,
+        end_month=9,
+        months=1,
+        now=_dt("2026-09-11T00:00"),
+    )
+
+    # месяц ещё идёт: 1–10 сентября = 10 сут, а не 30
+    assert result.total.work_days == pytest.approx(10, abs=0.01)
+
+
+def test_without_fund_work_time_still_follows_statuses() -> None:
+    well = WellFundInput(
+        well_id=1,
+        name="W_1",
+        oil_field="W",
+        lift_type=None,
+        work_intervals=[(_dt("2026-09-01T00:00"), _dt("2026-09-11T00:00"))],
+        repairs=[],
+    )
+
+    result = compute_kmg([well], end_year=2026, end_month=9, months=1, now=NOW)
+
+    assert result.total.work_days == pytest.approx(10, abs=0.01)

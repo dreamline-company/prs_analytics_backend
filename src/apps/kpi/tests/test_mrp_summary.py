@@ -206,12 +206,12 @@ def test_window_is_inclusive_of_last_day() -> None:
     assert summary.months == 12
 
 
-def test_totals_use_work_status_minus_repairs() -> None:
+def test_totals_use_calendar_days_in_fund_minus_repairs() -> None:
     total = _run().total
 
-    # A: 365 − 5 сут ремонтов (2+1+1 ... см. ремонты 11, 12, 13) = 361;
-    # B: июль–сентябрь 92 − 3 ремонта по 1 сут = 89
-    assert total.work_days == pytest.approx(361 + 89, abs=0.3)
+    # VMB_0001: 365 сут окна − 4 сут ремонтов (ремонты 11, 12, 13) = 361;
+    # JLM_0002 в фонде с января по сентябрь: 273 сут − 3 ремонта по 1 сут = 270
+    assert total.work_days == pytest.approx(361 + 270, abs=0.3)
     assert total.repairs == 6
     assert total.gtm == 1
     assert total.failures == 5
@@ -219,11 +219,13 @@ def test_totals_use_work_status_minus_repairs() -> None:
     assert total.mrp_without_gtm == pytest.approx(total.work_days / 5, abs=0.1)
 
 
-def test_downtime_status_is_not_work() -> None:
+def test_downtime_days_in_fund_count_as_work_time() -> None:
     by_field = {g.key: g for g in _run().by_oil_field}
 
-    # JLM_0002: статус «в работе» только с 1 июля — простой до этого не считается
-    assert by_field["JLM"].work_days == pytest.approx(89, abs=0.3)
+    # JLM_0002 до июля стояла в простое, но числилась в фонде (категория OIL и
+    # статус «простой» на 1-е число): по методике время работы — календарные
+    # сутки фонда минус ремонты, простой его не уменьшает
+    assert by_field["JLM"].work_days == pytest.approx(270, abs=0.3)
 
 
 def test_groups_by_oil_field_and_lift_type() -> None:
