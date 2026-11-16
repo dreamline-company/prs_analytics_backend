@@ -23,8 +23,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from statistics import median
 from io import BytesIO
+from statistics import median
 from typing import TYPE_CHECKING, Any
 
 from markitdown import MarkItDown
@@ -72,7 +72,7 @@ settings = get_settings()
 
 _TECH_REGIME_UNIT = "м3/сут"
 # Окно после окончания ремонта, за которое считается «выход на тех. режим»: медиана
-# замеров за месяц не боится отдельных нулей (остановов), но остаётся привязанной к ремонту
+# замеров за месяц не боится отдельных нулей (остановов), но привязана к ремонту
 _TECH_REGIME_WINDOW = timedelta(days=30)
 
 
@@ -185,18 +185,25 @@ class RepairKPICalculator:
         abai_well_id = repair.abai_well_id
         if abai_well_id is None:
             return None
-        # Режим, действовавший на момент окончания ремонта (у незавершённого — на сегодня),
-        # как в сводках; режимы месячные, поэтому берётся с запасом на лаг ABAI.
+        # Режим на момент окончания ремонта (у незавершённого — на сегодня), как в
+        # сводках; режимы месячные, поэтому берётся с запасом на лаг ABAI.
         on_date = (repair.end_time or datetime.now(tz=repair.start_time.tzinfo)).date()
         current = await self.tech_regime_repo.get_current_by_abai_well_ids(
             [abai_well_id],
             on_date=on_date,
             grace_days=PLAN_GRACE_DAYS,
         )
-        if abai_well_id in current:
-            return current[abai_well_id].liquid
+        regime = current.get(abai_well_id)
+        if regime is not None and regime.liquid is not None:
+            return regime.liquid
+        # Режим месяца бывает пустым (ABAI прислал строку без дебита жидкости) —
+        # тогда план — последний заданный режим, начавшийся не позже даты ремонта.
         regimes = await self.tech_regime_repo.list_by_abai_well_id(abai_well_id)
-        return regimes[0].liquid if regimes else None
+        filled = [r for r in regimes if r.liquid is not None]
+        before = [r for r in filled if r.start_date <= on_date]
+        if before:
+            return max(before, key=lambda r: r.start_date).liquid
+        return max(filled, key=lambda r: r.start_date).liquid if filled else None
 
     async def _tech_regime_current(self, repair: Repair) -> float | None:
         # Незавершённый ремонт: «выхода на режим» ещё нет. Без end_time выборка
