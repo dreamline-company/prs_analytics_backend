@@ -7,10 +7,9 @@ from types import SimpleNamespace
 import pytest
 
 from apps.wells.dto.internal.repositories.tech import TechTypeDTO, WellTechDTO
+from apps.wells.services.abai_mirror_sync import SourceShrunkError, plan_sync
 from apps.wells.tasks.load_tech.load_tech import (
     LoadTech,
-    SourceShrunkError,
-    plan_sync,
     tech_dto,
     tech_history_dto,
     well_tech_dto,
