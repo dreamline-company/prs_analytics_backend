@@ -579,6 +579,53 @@ class SdmoFcDataRepository(
 
         return max(rows, key=lambda row: row["savetime"])
 
+    async def list_vlt_status_by_station_period(
+        self,
+        station_id: int,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> Sequence[RowMapping]:
+        """Ряд ``(savetime, r_1999)`` станции по возрастанию времени, только
+        отсчёты со статусом; при равном времени — в порядке загрузки
+        (``sdmo_id``), чтобы дубль решался последним пакетом."""
+        status = getattr(SdmoFcData, f"r_{VLT_STATUS_REGISTER}")
+        filters: list = [SdmoFcData.station_id == station_id, status.is_not(None)]
+        if start_time is not None:
+            filters.append(SdmoFcData.savetime >= start_time)
+        if end_time is not None:
+            filters.append(SdmoFcData.savetime <= end_time)
+        stmt = (
+            select(SdmoFcData.savetime, status.label("status"))
+            .where(*filters)
+            .order_by(SdmoFcData.savetime, SdmoFcData.sdmo_id)
+        )
+        return await self.fetch_all(stmt)
+
+    async def list_vlt_status_before(
+        self,
+        station_id: int,
+        *,
+        before: datetime,
+        since: datetime,
+        limit: int,
+    ) -> Sequence[RowMapping]:
+        """Отсчёты станции со статусом в [since, before) от новых к старым
+        (``savetime, status``): при равном времени первым идёт последний
+        загруженный пакет."""
+        status = getattr(SdmoFcData, f"r_{VLT_STATUS_REGISTER}")
+        stmt = (
+            select(SdmoFcData.savetime, status.label("status"))
+            .where(
+                SdmoFcData.station_id == station_id,
+                status.is_not(None),
+                SdmoFcData.savetime >= since,
+                SdmoFcData.savetime < before,
+            )
+            .order_by(SdmoFcData.savetime.desc(), SdmoFcData.sdmo_id.desc())
+            .limit(limit)
+        )
+        return await self.fetch_all(stmt)
+
     async def list_parameters_by_stations_period(
         self,
         station_ids: Sequence[int],
