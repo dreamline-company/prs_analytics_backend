@@ -214,7 +214,12 @@ def test_deviation_text_r2_total_loss_and_partial_day() -> None:
     text = texts.deviation_text(ctx, day_end=_DAY_END, partial_day=True)
     assert "до полной потери нагрузки, сильная" in text
     assert "период 31.08 05:20 – 09:20, по неполным суткам" in text
-    assert texts.status_text(ctx) == "Активен · авария"
+    # У R2 вместо уровня — стадия сигнала, следом итог проверки.
+    assert texts.status_text(ctx) == "Активен · возможный обрыв штанг"
+    ctx.outcome_ru = "Ожидает подтверждения"
+    assert texts.status_text(ctx) == (
+        "Активен · возможный обрыв штанг · ожидает подтверждения"
+    )
 
 
 def test_period_text_active_without_recent_alerts() -> None:

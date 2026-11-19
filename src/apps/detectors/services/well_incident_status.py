@@ -9,6 +9,7 @@
 from collections import defaultdict
 from collections.abc import Sequence
 
+from apps.detectors import labels
 from apps.detectors.dto.internal.well_status import (
     ActiveIncidentDTO,
     WellIncidentStatusDTO,
@@ -77,9 +78,17 @@ def build_well_incident_status(
         items.append(item)
 
     worst = items[0]
+    # У R2 шапка — стадия сигнала («Падение нагрузки» / «Возможный обрыв
+    # штанг»), а не имя правила «Обрыв штанги»: так её показывают и в
+    # состоянии скважины (причина detector_alarm / detector_warning).
+    title = (
+        worst.title_ru
+        if worst.detector_name_ru or labels.has_stages(worst.detector_code)
+        else UNKNOWN_TITLE_RU
+    )
     return WellIncidentStatusDTO(
         level=worst.level,
-        title_ru=worst.detector_name_ru or UNKNOWN_TITLE_RU,
+        title_ru=title,
         since=worst.opened_at,
         incidents=items,
     )

@@ -28,7 +28,7 @@ from apps.detectors.rod_breaks.verification.rule import (
     StatusSample,
     VerificationInput,
 )
-from apps.repairs.models.repair import Repair
+from apps.repairs.models.repair import Repair, RepairType
 from apps.telemetry.models.sdmo import SdmoFcData
 from apps.telemetry.models.tech_regime import TechRegime
 from apps.telemetry.models.telemetry import Telemetry
@@ -178,24 +178,37 @@ class R2VerificationSource:
         abai_well_id: int | None,
         t0: datetime,
     ) -> list[RepairEvent]:
+        """Ремонты от шедшего на T0 до конца окна ожидания ПРС."""
         if abai_well_id is None:
             return []
         rows = await self.session.execute(
-            select(Repair.id, Repair.start_time, Repair.work_list).where(
+            select(
+                Repair.id,
+                Repair.start_time,
+                Repair.end_time,
+                Repair.work_list,
+                Repair.abai_repair_type_id,
+                RepairType.name_ru,
+            )
+            .outerjoin(RepairType, RepairType.abai_id == Repair.repair_type_id)
+            .where(
                 Repair.abai_well_id == abai_well_id,
                 Repair.abai_deleted_at.is_(None),
-                Repair.start_time >= t0 - timedelta(hours=config.REPAIR_LOOKBACK_HOURS),
-                Repair.start_time <= t0 + timedelta(days=config.FINAL_DAYS),
-            ),
+                Repair.start_time >= t0 - timedelta(days=config.COVER_LOOKBACK_DAYS),
+                Repair.start_time <= t0 + timedelta(days=config.PRS_WAIT_DAYS),
+            )
+            .order_by(Repair.start_time),
         )
         return [
             RepairEvent(
                 repair_id=repair_id,
                 start=start,
-                rod_break=config.ROD_BREAK_PATTERN in (work_list or "").lower(),
+                end=end,
                 work_list=work_list or "",
+                abai_type_id=abai_type_id,
+                type_name=type_name or "",
             )
-            for repair_id, start, work_list in rows.all()
+            for repair_id, start, end, work_list, abai_type_id, type_name in rows.all()
         ]
 
     async def _abai_statuses(
@@ -207,7 +220,7 @@ class R2VerificationSource:
         if abai_well_id is None:
             return []
         lo = _local_to_abai(t0 - timedelta(hours=config.ABAI_LOOKBACK_HOURS))
-        hi = _local_to_abai(t0 + timedelta(days=config.FINAL_DAYS))
+        hi = _local_to_abai(t0 + timedelta(days=config.ABAI_WINDOW_DAYS))
         t0_abai = _local_to_abai(t0)
         rows = await self.session.execute(
             select(

@@ -35,7 +35,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from apps.detectors.models.incident import INCIDENT_STATUS_ACTIVE
-from apps.detectors.models.verification import VERDICT_FALSE_ALARM
+from apps.detectors.models.verification import is_false_signal
 from apps.detectors.rod_breaks.verification.rule import (
     AbaiStatusEvent,
     is_abai_failure,
@@ -131,6 +131,7 @@ class IncidentInput:
     status: str
     opened_at: datetime
     verdict: str | None = None
+    verdict_reason: str | None = None
     # Ремонты, которые проверка эпизода нашла доказательством отказа.
     repair_ids: frozenset[int] = frozenset()
 
@@ -383,7 +384,7 @@ def _attach(
     }
     rest = []
     for incident in sorted(incidents, key=lambda i: (i.opened_at, i.incident_id)):
-        if incident.verdict == VERDICT_FALSE_ALARM:
+        if is_false_signal(incident.verdict, incident.verdict_reason):
             continue
         opened = incident.opened_at
         # Тревога на ремонтируемой скважине — артефакт работ, а не сигнал.

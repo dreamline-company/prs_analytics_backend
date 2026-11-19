@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.detectors import labels
 from apps.detectors.cits_events.config import WINDOW_D as CITS_WINDOW_D
 from apps.detectors.cits_events.incident_config import FINDING_STALE
 from apps.detectors.conclusion import catalog
@@ -39,6 +40,7 @@ from apps.detectors.repositories import (
     DetectorFindingRepository,
     DetectorIncidentRepository,
     DetectorRepository,
+    DetectorVerificationRepository,
 )
 from apps.detectors.repositories.daily_sheet import DetectorDailySheetRepository
 from apps.detectors.services.daily_sheet import texts
@@ -159,6 +161,7 @@ class DailySheetBuilder:
         self.incident_repo = DetectorIncidentRepository(session)
         self.cursor_repo = DetectorCursorRepository(session)
         self.conclusion_repo = DetectorConclusionRepository(session)
+        self.verification_repo = DetectorVerificationRepository(session)
         self.finding_repo = DetectorFindingRepository(session)
         self.sheet_repo = DetectorDailySheetRepository(session)
         self.station_repo = SdmoStationRepository(session)
@@ -382,8 +385,10 @@ class DailySheetBuilder:
             day_start=day_start,
             day_end=day_end,
         )
-        conclusions = await self._conclusions(
-            [grouped[well_id][0].incident.id for well_id in well_ids],
+        primary_ids = [grouped[well_id][0].incident.id for well_id in well_ids]
+        conclusions = await self._conclusions(primary_ids)
+        verifications = await self.verification_repo.get_map_by_incident_ids(
+            primary_ids,
         )
         last_rows = await self.telemetry_repo.get_last_by_well_ids_before(
             well_ids,
@@ -407,6 +412,7 @@ class DailySheetBuilder:
             well = wells.get(well_id)
             abai_id = well.abai_id if well is not None else None
             conclusion = conclusions.get((primary.incident.id, primary.level))
+            verification = verifications.get(primary.incident.id)
             contexts.append(
                 WellContext(
                     detector_code=target.detector_code,
@@ -420,6 +426,14 @@ class DailySheetBuilder:
                         day_end=day_end,
                     ),
                     repairs=repairs_by_well.get(well_id, []),
+                    outcome_ru=(
+                        labels.outcome_text_ru(
+                            verification.verdict,
+                            verification.reason,
+                        )
+                        if verification is not None
+                        else None
+                    ),
                     **self._verdict(primary, conclusion),
                 ),
             )

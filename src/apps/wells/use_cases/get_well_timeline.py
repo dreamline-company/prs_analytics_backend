@@ -6,6 +6,7 @@
 
 from datetime import datetime, timedelta
 
+from apps.detectors import labels
 from apps.detectors.repositories import (
     DetectorIncidentRepository,
     DetectorRepository,
@@ -45,6 +46,9 @@ def _signal_dto(incident: IncidentInput) -> WellTimelineSignalDTO:
         level=incident.level,
         status=incident.status,
         verdict=incident.verdict,
+        verdict_reason=incident.verdict_reason,
+        verdict_ru=labels.verdict_label_ru(incident.verdict),
+        verdict_reason_ru=labels.reason_label_ru(incident.verdict_reason),
     )
 
 
@@ -184,12 +188,18 @@ class GetWellTimelineUseCase:
                 IncidentInput(
                     incident_id=incident.id,
                     detector_code=incident.detector_code,
-                    title=names.get(incident.detector_code) or incident.detector_code,
+                    # У R2 — стадия сигнала, у прочих — имя правила.
+                    title=labels.signal_title_ru(
+                        incident.detector_code,
+                        incident.level,
+                        names.get(incident.detector_code),
+                    ),
                     reason_code=incident.reason_code,
                     level=incident.level,
                     status=incident.status,
                     opened_at=incident.opened_at,
                     verdict=verification.verdict if verification else None,
+                    verdict_reason=verification.reason if verification else None,
                     repair_ids=frozenset(
                         item["repair_id"]
                         for item in evidence.get("repair") or []

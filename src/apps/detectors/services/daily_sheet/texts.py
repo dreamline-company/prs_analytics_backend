@@ -5,6 +5,7 @@ LLM здесь нет: всё выводится из эпизода, дебит
 
 from datetime import date, datetime, timedelta
 
+from apps.detectors import labels
 from apps.detectors.models.incident import (
     INCIDENT_LEVEL_ALARM,
     INCIDENT_STATUS_NORMALIZED,
@@ -151,15 +152,24 @@ def deviation_text(
 
 def status_text(ctx: WellContext) -> str:
     """Горит ли тревога на конец суток ведомости: «Активен · авария» /
-    «Активен · предупреждение» / «Завершён 20.09 15:45»."""
+    «Активен · предупреждение» / «Завершён 20.09 15:45»; у R2 вместо уровня —
+    стадия («Активен · возможный обрыв штанг») и итог проверки."""
     episode = ctx.primary
     normalized_at = episode.incident.normalized_at
     if episode.status == INCIDENT_STATUS_NORMALIZED and normalized_at is not None:
         if ctx.detector_code in _DAILY_CODES:
-            return f"Завершён {fmt_day(_end_day(normalized_at))}"
-        return f"Завершён {normalized_at:%d.%m %H:%M}"
-    level = "авария" if episode.level == INCIDENT_LEVEL_ALARM else "предупреждение"
-    return f"Активен · {level}"
+            text = f"Завершён {fmt_day(_end_day(normalized_at))}"
+        else:
+            text = f"Завершён {normalized_at:%d.%m %H:%M}"
+    elif labels.has_stages(ctx.detector_code):
+        stage = labels.level_label_ru(ctx.detector_code, episode.level)
+        text = f"Активен · {labels.lower_first(stage)}"
+    else:
+        level = "авария" if episode.level == INCIDENT_LEVEL_ALARM else "предупреждение"
+        text = f"Активен · {level}"
+    if ctx.outcome_ru:
+        text += f" · {labels.lower_first(ctx.outcome_ru)}"
+    return text
 
 
 def post_repair(ctx: WellContext) -> RepairInfo | None:

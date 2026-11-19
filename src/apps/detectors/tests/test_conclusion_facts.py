@@ -110,7 +110,8 @@ def test_r9_total_load_loss() -> None:
 
 
 def test_r2_facts_describe_rods_turning_without_load() -> None:
-    facts = facts_for(replace(ITEM, detector_code="R2", payload=R2_PAYLOAD))
+    item = replace(ITEM, detector_code="R2", level="alarm", payload=R2_PAYLOAD)
+    facts = facts_for(item)
 
     assert facts[:4] == [
         "Момент на штангах провалился до 0 % от обычного для этой скважины.",
@@ -119,6 +120,16 @@ def test_r2_facts_describe_rods_turning_without_load() -> None:
         "Провал момента — с 02.10 14:00 по 02.10 15:30.",
         "Между провалами момент возвращался к обычному уровню.",
     ]
+
+
+def test_r2_load_drop_facts_do_not_call_it_a_break() -> None:
+    item = replace(ITEM, detector_code="R2", level="warning", payload=R2_PAYLOAD)
+    facts = facts_for(item)
+
+    assert facts[1] == (
+        "Привод при этом продолжает вращаться, а нагрузка насоса на штангах "
+        "пропала. Если она не вернётся за 4 часа, это возможный обрыв штанг."
+    )
 
 
 def test_technical_text_is_replaced_by_facts() -> None:
@@ -150,8 +161,8 @@ def test_r2_cause_depends_on_level() -> None:
     warning = cause_for("R2", "rod_break", INCIDENT_LEVEL_WARNING)
     alarm = cause_for("R2", "rod_break", INCIDENT_LEVEL_ALARM)
 
-    assert warning.startswith("Снижение нагрузки на штангах при работающем приводе")
-    assert alarm.startswith("Обрыв или отворот штанг")
+    assert warning.startswith("Падение нагрузки на штангах при работающем приводе")
+    assert alarm.startswith("Возможный обрыв или отворот штанг")
     # у R9 уровни — только длительность: причина одна на оба
     assert cause_for("R9", "load_imbalance", INCIDENT_LEVEL_WARNING) == cause_for(
         "R9",

@@ -35,6 +35,7 @@ INCIDENT_LEVEL_ALARM = "alarm"
 CLOSE_REASON_RECOVERED = "recovered"  # метрика вернулась в норму (гистерезис)
 CLOSE_REASON_STALE = "stale"  # нет данных слишком долго (пока не автоматизировано)
 CLOSE_REASON_MANUAL = "manual"  # закрыт руками
+CLOSE_REASON_REPAIR = "repair"  # начался ремонт (R2)
 
 
 class Detector(AppBaseModel, IntPkMixin, TimedMixinModel):

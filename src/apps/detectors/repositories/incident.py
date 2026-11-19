@@ -22,7 +22,9 @@ from apps.detectors.models.incident import (
     DetectorIncident,
 )
 from apps.detectors.models.verification import (
+    FALSE_SIGNAL_REASONS,
     VERDICT_FALSE_ALARM,
+    VERDICT_NOT_CONFIRMED,
     VERDICT_PENDING,
     DetectorVerification,
 )
@@ -243,8 +245,16 @@ class DetectorIncidentRepository(
         от ленты ``list_by_well_id``: та режется лимитом, а счётчик должен быть
         честным.
         """
+        # «Ложный сигнал» — как ``is_false_signal``: не подтверждено, потому
+        # что момент/нефть вернулись (или старая отметка «ложная»).
         false_alarms = func.count(DetectorVerification.id).filter(
-            DetectorVerification.verdict == VERDICT_FALSE_ALARM,
+            or_(
+                DetectorVerification.verdict == VERDICT_FALSE_ALARM,
+                and_(
+                    DetectorVerification.verdict == VERDICT_NOT_CONFIRMED,
+                    DetectorVerification.reason.in_(FALSE_SIGNAL_REASONS),
+                ),
+            ),
         )
         stmt = (
             select(

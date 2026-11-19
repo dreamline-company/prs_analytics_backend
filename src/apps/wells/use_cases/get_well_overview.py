@@ -16,6 +16,7 @@ from apps.compensation.repositories import (
     CompensationDonorRepository,
     CompensationRecommendationRepository,
 )
+from apps.detectors import labels
 from apps.detectors.models.incident import INCIDENT_STATUS_ACTIVE, DetectorIncident
 from apps.detectors.repositories import (
     DetectorIncidentRepository,
@@ -324,12 +325,20 @@ class GetWellOverviewUseCase:
         ).get_map_by_incident_ids([incident.id for incident in incidents])
         return [
             IncidentFact(
-                title=names.get(incident.detector_code) or incident.detector_code,
+                # У R2 — стадия сигнала, у прочих — имя правила.
+                title=labels.signal_title_ru(
+                    incident.detector_code,
+                    incident.level,
+                    names.get(incident.detector_code),
+                ),
                 level=incident.level,
                 opened_at=incident.opened_at,
                 active=incident.status == INCIDENT_STATUS_ACTIVE,
                 verdict=(
                     verdicts[incident.id].verdict if incident.id in verdicts else None
+                ),
+                verdict_reason=(
+                    verdicts[incident.id].reason if incident.id in verdicts else None
                 ),
             )
             for incident in incidents

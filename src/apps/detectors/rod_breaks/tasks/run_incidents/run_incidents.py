@@ -10,15 +10,18 @@
 import asyncio
 from datetime import datetime, timedelta
 
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.celery_app import celery_app, run_async
 from apps.detectors.conclusion.notify import notify_conclusion
 from apps.detectors.dto.internal.repositories.incident import OpenIncidentDTO
 from apps.detectors.models.incident import (
+    CLOSE_REASON_RECOVERED,
     INCIDENT_LEVEL_ALARM,
     INCIDENT_LEVEL_WARNING,
     INCIDENT_STATUS_NORMALIZED,
+    DetectorIncident,
 )
 from apps.detectors.repositories import (
     DetectorCursorRepository,
@@ -33,15 +36,19 @@ from apps.detectors.rod_breaks.services.episode import (
     ACTION_NORMALIZE,
     ACTION_OPEN_ALARM,
     ACTION_OPEN_WARNING,
+    ActiveEpisode,
     EpisodeAction,
+    RepairWindow,
     evaluate_episode,
 )
 from apps.detectors.rod_breaks.services.telemetry_source import (
     RodBreakTelemetrySource,
 )
 from apps.models_registry import *  # noqa: F403
+from apps.repairs.models.repair import Repair
 from apps.telemetry.models.sdmo import SdmoStation
 from apps.telemetry.repositories.sdmo import SdmoStationRepository
+from apps.wells.models.well import Well
 from core import get_logger
 from core.settings import get_settings
 from shared.database.sql.setup import session_makers
@@ -54,7 +61,20 @@ DETECTOR_CODE = "R2"
 TARGET_TYPE_1900 = 6
 
 _BUCKET_SPAN = timedelta(hours=config.BUCKET_HOURS)
-_CONTEXT = timedelta(hours=config.MEDIAN_WINDOW_HOURS)
+# Контекст до курсора: прогрев суточной медианы и сутки до T0 для базы эпизода
+# (+ запас: серия может начаться на пару корзин раньше курсора).
+_CONTEXT = timedelta(
+    hours=max(config.MEDIAN_WINDOW_HOURS, incident_config.BASE_HOURS) + 2,
+)
+_BASE_WINDOW = timedelta(hours=incident_config.BASE_HOURS)
+
+# Ключи payload, которые живут весь эпизод: payload перезаписывается каждым
+# upsert'ом, поэтому их переносят из активного эпизода.
+EPISODE_PAYLOAD_KEYS = ("base_t0", "base_t0_samples", "stage_check")
+
+
+def _round(value: float | None) -> float | None:
+    return round(value, 1) if value is not None else None
 
 
 async def target_stations(
@@ -170,12 +190,28 @@ class RodBreakIncidentRunner:
             well_id=station.well_id,
             reason_code=incident_config.REASON_ROD_BREAK,
         )
+        extras = await self._episode_extras(station, active)
+        repair_from = min(window_start, active.opened_at) if active else window_start
+        repairs = await self._repair_windows(station.well_id, repair_from, now)
+        closed_floor = None if active else await self._last_closed_at(station.well_id)
 
         actions = evaluate_episode(
             series,
             cursor_ts=cursor_ts,
-            active_level=active.level if active else None,
-            base_moment=base_moment,
+            active=(
+                ActiveEpisode(
+                    level=active.level,
+                    opened_at=active.opened_at,
+                    base=extras.get("base_t0"),
+                    base_samples=extras.get("base_t0_samples") or 0,
+                )
+                if active
+                else None
+            ),
+            fallback_base=base_moment,
+            repairs=repairs,
+            closed_floor=closed_floor,
+            now=now,
         )
 
         opened = escalated = normalized = 0
@@ -201,6 +237,10 @@ class RodBreakIncidentRunner:
                     continue
                 active_opened_at = action.at
                 active_detected_at = now
+                extras = {
+                    "base_t0": _round(action.base),
+                    "base_t0_samples": action.base_samples,
+                }
                 opened += 1
             elif suppress:
                 continue
@@ -211,14 +251,17 @@ class RodBreakIncidentRunner:
                     well_id=station.well_id,
                     reason_code=incident_config.REASON_ROD_BREAK,
                     normalized_at=action.at,
+                    close_reason=action.close_reason or CLOSE_REASON_RECOVERED,
                 )
                 active_opened_at = None
                 active_detected_at = None
+                extras = {}
                 normalized += 1
                 continue
 
             if action.kind == ACTION_ESCALATE:
                 escalated += 1
+                extras = {**extras, "stage_check": action.evidence}
 
             await self.incident_repo.upsert_active(
                 self._build_upsert(
@@ -229,6 +272,7 @@ class RodBreakIncidentRunner:
                     now=now,
                     opened_at=active_opened_at or action.at,
                     detected_at=active_detected_at or now,
+                    extras=extras,
                 ),
             )
 
@@ -241,6 +285,68 @@ class RodBreakIncidentRunner:
         )
         return opened, escalated, normalized
 
+    async def _episode_extras(
+        self,
+        station: SdmoStation,
+        active: DetectorIncident | None,
+    ) -> dict:
+        """Ключи эпизода из payload активного; базы нет (эпизод открыт до
+        замороженной базы) — досчитать по суткам до его T0."""
+        if active is None:
+            return {}
+        payload = active.payload or {}
+        extras = {key: payload[key] for key in EPISODE_PAYLOAD_KEYS if key in payload}
+        if "base_t0" not in extras:
+            base, samples = await self.source.get_working_mean(
+                station.id,
+                active.opened_at - _BASE_WINDOW,
+                active.opened_at,
+            )
+            extras["base_t0"] = _round(base)
+            extras["base_t0_samples"] = samples
+        return extras
+
+    async def _repair_windows(
+        self,
+        well_id: int,
+        since: datetime,
+        until: datetime,
+    ) -> list[RepairWindow]:
+        """Ремонты скважины (ABAI, местное время), шедшие в ``[since, until]``.
+
+        Ремонты связаны со скважиной через ``abai_well_id``: ``well_id`` у
+        ремонтов не заполняется. Начатые раньше ``since`` берутся с запасом
+        ``REPAIR_OPEN_MAX_DAYS`` — они могут ещё идти.
+        """
+        lookback = timedelta(days=incident_config.REPAIR_OPEN_MAX_DAYS)
+        stmt = (
+            select(Repair.start_time, Repair.end_time)
+            .join(Well, Well.abai_id == Repair.abai_well_id)
+            .where(
+                Well.id == well_id,
+                Repair.abai_deleted_at.is_(None),
+                Repair.start_time >= since - lookback,
+                Repair.start_time <= until,
+                or_(Repair.end_time.is_(None), Repair.end_time >= since),
+            )
+            .order_by(Repair.start_time)
+        )
+        return [
+            RepairWindow(start=start, end=end)
+            for start, end in (await self.session.execute(stmt)).all()
+        ]
+
+    async def _last_closed_at(self, well_id: int) -> datetime | None:
+        """Когда закрылся последний эпизод R2 скважины — новый не раньше."""
+        return await self.session.scalar(
+            select(func.max(DetectorIncident.normalized_at)).where(
+                DetectorIncident.detector_code == DETECTOR_CODE,
+                DetectorIncident.well_id == well_id,
+                DetectorIncident.reason_code == incident_config.REASON_ROD_BREAK,
+                DetectorIncident.status == INCIDENT_STATUS_NORMALIZED,
+            ),
+        )
+
     def _build_upsert(  # noqa: PLR0913
         self,
         *,
@@ -251,6 +357,7 @@ class RodBreakIncidentRunner:
         now: datetime,
         opened_at: datetime,
         detected_at: datetime,
+        extras: dict,
     ) -> OpenIncidentDTO:
         is_alarm = action.kind in (ACTION_OPEN_ALARM, ACTION_ESCALATE)
         level = INCIDENT_LEVEL_ALARM if is_alarm else INCIDENT_LEVEL_WARNING
@@ -280,6 +387,7 @@ class RodBreakIncidentRunner:
             opened_at=opened_at,
             now=now,
         )
+        payload.update(extras)
         return OpenIncidentDTO(
             detector_code=DETECTOR_CODE,
             well_id=station.well_id,

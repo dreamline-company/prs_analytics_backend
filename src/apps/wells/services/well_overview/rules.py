@@ -21,7 +21,7 @@ from apps.compensation.constants import (
     RISK_LOW,
     RISK_MEDIUM,
 )
-from apps.detectors.models.verification import VERDICT_FALSE_ALARM
+from apps.detectors.models.verification import is_false_signal
 from apps.repairs.services.mrp import MERGE_GAP, RepairSpan, compute_well_mrp
 from apps.telemetry.services.well_rates import FRESH_TELEMETRY_DAYS, water_cut
 from apps.wells.dto.internal.well_overview import (
@@ -98,6 +98,7 @@ class IncidentFact:
     opened_at: datetime
     active: bool
     verdict: str | None  # отметка проверки R2
+    verdict_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -519,7 +520,9 @@ def _detectors(inputs: OverviewInputs, overview: _Overview) -> None:
         )
         return
     false_alarms = sum(
-        1 for item in inputs.incidents if item.verdict == VERDICT_FALSE_ALARM
+        1
+        for item in inputs.incidents
+        if is_false_signal(item.verdict, item.verdict_reason)
     )
     text = f"За {INCIDENTS_WINDOW_DAYS} суток эпизодов: {count}, все закрыты"
     if false_alarms:

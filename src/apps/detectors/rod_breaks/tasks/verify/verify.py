@@ -1,7 +1,8 @@
 """Проверка эпизодов R2 независимыми данными — ежечасно в :30.
 
-Берёт эпизоды R2 за последние ``FINAL_DAYS`` суток и старые неокончательные,
-по каждому заново считает отметку (``verification.rule.evaluate``) и
+Берёт эпизоды R2 за последние ``PRS_WAIT_DAYS`` суток (окно ожидания ПРС) и
+старые неокончательные, по каждому заново считает отметку
+(``verification.rule.evaluate``) и
 записывает её в ``detectors_verification``; смена отметки, причины или
 окончательности — строка в ``detectors_verification_history``. Время в :30 —
 после статусов ABAI (:10) и замеров ЦИТС (:20).
@@ -14,8 +15,9 @@
     python -m apps.detectors.rod_breaks.tasks.verify.verify --recheck-days 60 --dry-run
 
 ``--recheck-days`` пересчитывает и окончательные отметки за столько суток —
-после смены правила (``RULE_VERSION``). Подтверждённый отказ и тогда не
-снимается.
+после смены правила (``RULE_VERSION``). Отметка старой версии правила
+пересчитывается и без флага, если эпизод в окне ``PRS_WAIT_DAYS``;
+«Подтверждено» текущей версии не снимается никогда.
 """
 
 import argparse
@@ -35,7 +37,7 @@ from apps.detectors.dto.internal.repositories.verification import (
 )
 from apps.detectors.models.incident import DetectorIncident
 from apps.detectors.models.verification import (
-    VERDICT_FAILURE_CONFIRMED,
+    VERDICT_CONFIRMED,
     DetectorVerification,
 )
 from apps.detectors.repositories import (
@@ -70,6 +72,7 @@ class VerificationRef:
     decided_at: datetime
     final_at: datetime | None
     evidence: dict | None
+    rule_version: str
 
     @classmethod
     def of(cls, row: DetectorVerification) -> "VerificationRef":
@@ -82,6 +85,7 @@ class VerificationRef:
             decided_at=row.decided_at,
             final_at=row.final_at,
             evidence=row.evidence,
+            rule_version=row.rule_version,
         )
 
 
@@ -173,7 +177,15 @@ class R2VerificationRunner:
         (первичное заполнение истории); ``recheck_days`` — все эпизоды за
         столько суток, в том числе с окончательной отметкой.
         """
-        recent = DetectorIncident.opened_at >= now - timedelta(days=config.FINAL_DAYS)
+        # Свежие — пока окно ожидания ПРС не истекло: без отметки или с
+        # отметкой старой версии правила (окончательные текущей — не трогаем).
+        recent = and_(
+            DetectorIncident.opened_at >= now - timedelta(days=config.PRS_WAIT_DAYS),
+            or_(
+                DetectorVerification.id.is_(None),
+                DetectorVerification.rule_version != config.RULE_VERSION,
+            ),
+        )
         not_final = and_(
             DetectorVerification.id.is_not(None),
             DetectorVerification.is_final.is_(False),
@@ -241,19 +253,15 @@ class R2VerificationRunner:
             await self._log(row.id, None, None, result, now)
             return f"new->{result.verdict}"
 
-        # Окончательная отметка не меняется (кроме явного пересчёта после смены
-        # правила). Подтверждённый отказ ещё дополняется (позже пришёл ремонт
-        # «обрыв»), пока не истёк срок.
+        # Окончательная отметка текущего правила не меняется (кроме явного
+        # пересчёта). Отметка старой версии правила пересчитывается.
         if (
             current.is_final
-            and current.verdict != VERDICT_FAILURE_CONFIRMED
+            and current.rule_version == config.RULE_VERSION
             and not self.recheck
         ):
             return None
-        if (
-            current.verdict == VERDICT_FAILURE_CONFIRMED
-            and result.verdict != VERDICT_FAILURE_CONFIRMED
-        ):
+        if current.verdict == VERDICT_CONFIRMED and result.verdict != VERDICT_CONFIRMED:
             logger.warning(
                 "R2 verify: incident %s lost confirmation (repair/status removed "
                 "in ABAI?) — verdict kept",
@@ -265,6 +273,7 @@ class R2VerificationRunner:
             current.verdict != result.verdict
             or current.reason != result.reason
             or current.is_final != result.is_final
+            or current.rule_version != config.RULE_VERSION
         )
         if changed:
             await self.verifications.update(
@@ -276,9 +285,7 @@ class R2VerificationRunner:
                     decided_at=now
                     if current.verdict != result.verdict
                     else current.decided_at,
-                    final_at=now
-                    if result.is_final and not current.is_final
-                    else current.final_at,
+                    final_at=self._final_at(current, result, now),
                     evidence=result.evidence,
                     rule_version=config.RULE_VERSION,
                 ),
@@ -299,6 +306,20 @@ class R2VerificationRunner:
                 filters=(DetectorVerification.id == current.id,),
             )
         return None
+
+    @staticmethod
+    def _final_at(
+        current: VerificationRef,
+        result: VerificationResult,
+        now: datetime,
+    ) -> datetime | None:
+        """Когда отметка стала окончательной: у неокончательной — нет; новое
+        правило закрепляет заново."""
+        if not result.is_final:
+            return None
+        if current.is_final and current.rule_version == config.RULE_VERSION:
+            return current.final_at
+        return now
 
     async def _log(
         self,

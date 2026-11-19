@@ -22,6 +22,10 @@ class WellTimelineSignalDTO(BaseModel):
     status: str
     # Отметка проверки (пока только у R2); None — не проверялся.
     verdict: str | None
+    verdict_reason: str | None = None
+    # «Подтверждено» / «Не подтверждено» / «Ожидает подтверждения» и причина.
+    verdict_ru: str | None = None
+    verdict_reason_ru: str | None = None
 
 
 class WellTimelineBreakdownDTO(BaseModel):
