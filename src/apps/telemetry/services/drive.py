@@ -12,9 +12,14 @@
 
 Проверка тревог R2 держит свой набор кодов (``rod_breaks/verification``) —
 у неё своя версия правила.
+
+``vlt_status_kind`` — разбор того же кода по битам (таблица РЭ VFD-OSA,
+параметр 19-99 DRIVE STATUS): для отрезков состояния привода на графике.
+Состояние скважины и сводки пока живут на явных наборах кодов выше.
 """
 
 import math
+from enum import StrEnum
 
 DRIVE_RUNNING_VLT_CODES = frozenset({1, 2, 4, 8, 16, 32, 40, 48, 55, 63})
 DRIVE_STOPPED_VLT_CODES = frozenset(
@@ -63,3 +68,50 @@ def drive_running(vlt: float | None, rpm: float | None) -> bool | None:
     if rpm is None:
         return None
     return rpm > 0
+
+
+# --- Разбор кода 1999 по битам ---------------------------------------------
+#
+# Код — битовая маска: каждый код РЭ — степень двойки. На проде (18.05–18.11.2026,
+# 68,6 млн отсчётов) 99,99 % значений — одиночные коды, суммы редки, но
+# раскладываются осмысленно (3 = 1 + 2, 40 = 8 + 32, 63…). Предупреждения 8 / 32 /
+# 256 приходят БЕЗ бита работы, хотя привод вращается (частота > 0 почти всегда):
+# поэтому бит предупреждения тоже значит «работает».
+
+VLT_RUN_BITS = 1 | 2 | 4
+VLT_WARNING_BITS = 8 | 16 | 32 | 64 | 256
+VLT_STATE_BITS = 128 | 16384 | 1048576
+VLT_ALARM_BITS = 512 | 1024 | 4096 | 8192 | 32768 | 65536 | 262144 | 524288
+VLT_KNOWN_BITS = VLT_RUN_BITS | VLT_WARNING_BITS | VLT_STATE_BITS | VLT_ALARM_BITS
+
+# Заполнитель источника: все его биты есть в таблице, но смысла сумма не несёт
+# (авто, ручной, накопление, два предупреждения и три аварии сразу), частота при
+# нём всегда 0. Прочий
+# мусор (−1, 9999999, 134250496) отсекается знаком и неизвестными битами.
+VLT_FILLER_CODES = frozenset({9999})
+
+
+class VltStatusKind(StrEnum):
+    RUN = "run"
+    STOP = "stop"
+    ALARM = "alarm"
+
+
+def vlt_status_kind(value: float | None) -> VltStatusKind | None:
+    """Состояние привода по битам кода 1999; ``None`` — кода нет или он мусор.
+
+    Есть аварийный бит — авария; иначе бит работы или предупреждения — работает;
+    иначе (0, автоперезапуск 16384, задержка перезапуска 1048576, продувка 128) —
+    стоит. Дробное значение (REAL хранит целые коды точно) — тоже мусор.
+    """
+    value = _finite(value)
+    if value is None or not float(value).is_integer():
+        return None
+    code = int(value)
+    if code < 0 or code in VLT_FILLER_CODES or code & ~VLT_KNOWN_BITS:
+        return None
+    if code & VLT_ALARM_BITS:
+        return VltStatusKind.ALARM
+    if code & (VLT_RUN_BITS | VLT_WARNING_BITS):
+        return VltStatusKind.RUN
+    return VltStatusKind.STOP
