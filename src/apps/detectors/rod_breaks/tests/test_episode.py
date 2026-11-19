@@ -32,7 +32,7 @@ T0 = datetime(2026, 1, 10)  # noqa: DTZ001
 SPAN = timedelta(hours=config.BUCKET_HOURS)
 PER_HOUR = int(1 / config.BUCKET_HOURS)  # корзин в часе
 ESCALATE_N = incident_config.STAGE_ESCALATE_HOURS * PER_HOUR  # 16 корзин = 4 ч
-SAMPLES = 8  # отсчётов в корзине (СДМО пишет ~раз в 2 мин)
+SAMPLES = 8  # отсчётов в корзине (на проде обычно ~3: раз в 5 мин)
 
 MED = 500.0
 SPD = 190.0
@@ -533,3 +533,27 @@ def test_stage_escalation_none_when_closed_before_four_hours() -> None:
     )
 
     assert action is None
+
+
+def test_sparse_station_twelve_samples_per_hour_still_decides() -> None:
+    """Станция пишет раз в 5 минут (3 отсчёта в корзине) — час полный."""
+    sparse = 3
+
+    def bucket(idx: int, mom: float) -> Bucket2h:
+        return Bucket2h(
+            start_ts=T0 + idx * SPAN,
+            mom_min=mom,
+            spd=SPD,
+            mom_med24=MED,
+            spd_med24=SPD,
+            mom_med=mom,
+            mom_sum=mom * sparse,
+            mom_n=sparse,
+            work_sum=mom * sparse,
+            work_n=sparse,
+        )
+
+    moments = [MOM_OK] * 30 + [MOM_ALARM] * (ESCALATE_N + 2)
+    actions = _run([bucket(i, mom) for i, mom in enumerate(moments)])
+
+    assert ACTION_ESCALATE in _kinds(actions)

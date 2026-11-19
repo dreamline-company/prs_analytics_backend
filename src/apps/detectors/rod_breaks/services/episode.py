@@ -174,6 +174,7 @@ def stage_check(
         if b.mom_sum is not None and start <= b.start_ts and b.start_ts < end
     ]
     samples = sum(b.mom_n for b in window)
+    filled = sum(1 for b in window if b.mom_n > 0)
     level = sum(b.mom_sum for b in window) / samples if samples else None
     share = level / base if level is not None and base else None
     base_ok = (
@@ -181,7 +182,10 @@ def stage_check(
         and base >= incident_config.BASE_MIN
         and base_samples >= incident_config.BASE_MIN_SAMPLES
     )
-    window_ok = samples >= incident_config.STAGE_WINDOW_MIN_SAMPLES
+    window_ok = (
+        filled >= incident_config.STAGE_WINDOW_MIN_BUCKETS
+        and samples >= incident_config.STAGE_WINDOW_MIN_SAMPLES
+    )
     recovered = (
         base_ok
         and window_ok
@@ -196,6 +200,7 @@ def stage_check(
             "window_to": end.isoformat(),
             "level": _round(level),
             "samples": samples,
+            "buckets": filled,
             "base": _round(base),
             "base_samples": base_samples,
             "share_of_base": _round(share, 3),
