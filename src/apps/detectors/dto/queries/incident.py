@@ -5,9 +5,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 IncidentStatus = Literal["active", "normalized"]
 IncidentLevel = Literal["warning", "alarm"]
-# Отметка проверки; pending включает и ещё не проверенные эпизоды.
+# Отметка проверки; pending включает и ещё не проверенные эпизоды. С
+# r2-verify-v3 ставятся pending / confirmed / not_confirmed; старые значения
+# остаются у отметок, ещё не пересчитанных новым правилом.
 IncidentVerdict = Literal[
     "pending",
+    "confirmed",
+    "not_confirmed",
     "false_alarm",
     "failure_likely",
     "failure_confirmed",

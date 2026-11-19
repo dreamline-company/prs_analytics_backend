@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
+
+from apps.detectors import labels
 
 
 class ConclusionRecommendationDTO(BaseModel):
@@ -40,6 +42,12 @@ class DetectorConclusionDTO(BaseModel):
     prompt_version: str
     created_at: datetime
     updated_at: datetime
+
+    @computed_field
+    @property
+    def level_ru(self) -> str:
+        """У R2 — стадия («Падение нагрузки» / «Возможный обрыв штанг»)."""
+        return labels.level_label_ru(self.detector_code, self.level)
 
 
 class WellAiConclusionDTO(BaseModel):

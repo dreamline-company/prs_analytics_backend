@@ -660,7 +660,8 @@ def test_use_case_maps_rows_and_evidence() -> None:
         opened_at=stop - timedelta(days=20),
     )
     verification = SimpleNamespace(
-        verdict="failure_confirmed",
+        verdict="confirmed",
+        reason="repair_rod_break",
         evidence={"repair": [{"repair_id": 5, "start": "2026-10-27T09:00:00"}]},
     )
 
@@ -688,7 +689,11 @@ def test_use_case_maps_rows_and_evidence() -> None:
     assert case.signal is not None
     assert (case.signal.incident_id, case.signal.title, case.signal.verdict) == (
         11,
-        "Обрыв штанг",
-        "failure_confirmed",
+        "Возможный обрыв штанг",  # у R2 — стадия, а не имя правила
+        "confirmed",
+    )
+    assert (case.signal.verdict_ru, case.signal.verdict_reason_ru) == (
+        "Подтверждено",
+        "ПРС с обрывом штанг",
     )
     assert [s.incident_id for s in case.signals] == [11]

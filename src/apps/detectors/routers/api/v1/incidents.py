@@ -51,6 +51,7 @@ async def get_detector_incidents(  # noqa: PLR0913
         Query(
             description=(
                 "Filter: verification verdict — pending (incl. not yet verified) | "
+                "confirmed | not_confirmed; legacy (before r2-verify-v3): "
                 "false_alarm | failure_likely | failure_confirmed | undetermined"
             ),
         ),

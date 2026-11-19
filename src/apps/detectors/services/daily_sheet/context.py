@@ -52,6 +52,8 @@ class WellContext:
     repairs: list[RepairInfo] = field(default_factory=list)
     confidence: float = 0.5
     cause: str = ""
+    # Итог проверки главного эпизода («Ожидает подтверждения» …); у R9/R10 — None.
+    outcome_ru: str | None = None
 
     @property
     def primary(self) -> Episode:

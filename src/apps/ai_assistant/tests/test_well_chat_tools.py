@@ -75,6 +75,7 @@ def _incident(**overrides: object) -> SimpleNamespace:
         "detector_name_ru": "Обрыв штанг",
         "reason_code": "rod_break",
         "level": "alarm",
+        "level_ru": "Возможный обрыв штанг",
         "status": "active",
         "opened_at": datetime(2026, 10, 26, 3, 15),  # noqa: DTZ001
         "last_seen_at": datetime(2026, 10, 26, 9, 0),  # noqa: DTZ001
@@ -87,8 +88,9 @@ def _incident(**overrides: object) -> SimpleNamespace:
             "evidence": [{"bucket": "…"}] * 8,
         },
         "verification": SimpleNamespace(
-            verdict="false_alarm",
+            verdict="not_confirmed",
             reason="moment_recovered",
+            reason_ru="Момент восстановился",
             is_final=True,
         ),
     }
@@ -99,10 +101,12 @@ def test_incident_brief_keeps_key_facts_and_verdict() -> None:
     brief = incident_brief(_incident())  # type: ignore[arg-type]
 
     assert brief["facts"] == {"current_ratio": 0.05, "base_moment": 210.0}
+    assert brief["level_ru"] == "Возможный обрыв штанг"
     assert brief["verification"] == {
-        "verdict": "false_alarm",
-        "verdict_ru": "ложная тревога",
+        "verdict": "not_confirmed",
+        "verdict_ru": "не подтверждено",
         "reason": "moment_recovered",
+        "reason_ru": "Момент восстановился",
         "is_final": True,
     }
 

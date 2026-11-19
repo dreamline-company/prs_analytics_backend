@@ -53,7 +53,8 @@ def test_single_incident_drives_title_and_since() -> None:
     status = build_well_incident_status([_incident(detector_code="R2")], NAMES)
 
     assert status.level == INCIDENT_LEVEL_WARNING
-    assert status.title_ru == "Обрыв штанги"
+    # У R2 шапка — стадия сигнала, а не имя правила.
+    assert status.title_ru == "Падение нагрузки"
     assert status.since == DAY
     assert len(status.incidents) == 1
     assert status.incidents[0].detector_name_ru == "Обрыв штанги"

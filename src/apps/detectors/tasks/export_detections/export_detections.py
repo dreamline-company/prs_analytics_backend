@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.detectors import labels
 from apps.detectors.models.verification import (
     REASON_LABELS_RU,
     VERDICT_LABELS_RU,
@@ -211,6 +212,7 @@ def _incident_row(
         "detector_source": row["detector_source"],
         "reason_code": row["reason_code"],
         "level": row["level"],
+        "level_ru": labels.level_label_ru(row["detector_code"], row["level"]),
         "status": row["status"],
         "opened_at": _ts(row["opened_at"]),
         "detected_at": _ts(row["detected_at"]),
@@ -218,6 +220,11 @@ def _incident_row(
         "escalated_at": _ts(row["escalated_at"]),
         "normalized_at": _ts(end),
         "close_reason": row["close_reason"] or "",
+        "close_reason_ru": (
+            labels.closed_label_ru(row["detector_code"], row["close_reason"])
+            if end is not None
+            else ""
+        ),
         "duration_days": round(
             ((end or row["last_seen_at"]) - row["opened_at"]).total_seconds() / 86400,
             2,
@@ -247,6 +254,10 @@ def _incident_row(
         "r2_failure_dt": _get(p, "failure_dt"),
         "r2_lead_time_hours": _get(p, "lead_time_hours"),
         "r2_low_confidence": _get(p, "low_confidence"),
+        "r2_base_t0": _get(p, "base_t0"),
+        "r2_base_t0_samples": _get(p, "base_t0_samples"),
+        "r2_stage_share_of_base": _get(p, "stage_check", "share_of_base"),
+        "r2_stage_window_to": _get(p, "stage_check", "window_to"),
         "r10_event": _get(p, "event"),
         "r10_klass": _get(p, "klass"),
         "r10_dev": _get(p, "dev"),

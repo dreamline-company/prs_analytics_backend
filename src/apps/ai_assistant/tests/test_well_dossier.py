@@ -54,12 +54,14 @@ def _incident(**overrides: object) -> SimpleNamespace:
         "detector_code": "R2",
         "detector_name_ru": "Обрыв штанг",
         "level": "alarm",
+        "level_ru": "Возможный обрыв штанг",
         "status": "active",
         "opened_at": NOW - timedelta(hours=10),
         "last_seen_at": NOW - timedelta(hours=1),
         "verification": SimpleNamespace(
-            verdict="false_alarm",
+            verdict="not_confirmed",
             reason="moment_recovered",
+            reason_ru="Момент восстановился",
         ),
     }
     return SimpleNamespace(**{**base, **overrides})
@@ -99,10 +101,12 @@ def test_render_dossier_full() -> None:
     assert "Ремонт сейчас не идёт." in text
     assert "нефть 3.2 т/сут при плане 4.5 т/сут, отклонение -1.3 т/сут" in text
     assert "статус станции 4 — работает" in text
-    assert "проверка: ложная тревога (moment_recovered)" in text
-    assert "Эпизодов за 90 суток: R2 — 34, R9 — 2; проверка признала ложными: 21." in (
-        text
-    )
+    assert "Обрыв штанг: Возможный обрыв штанг" in text
+    assert "проверка: не подтверждено (Момент восстановился)" in text
+    assert (
+        "Эпизодов за 90 суток: R2 — 34, R9 — 2; "
+        "сигнала на деле не было (момент или нефть вернулись, тревога в ремонте): 21."
+    ) in text
 
 
 def test_render_dossier_skips_failed_sections() -> None:

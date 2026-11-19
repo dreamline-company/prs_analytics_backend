@@ -263,7 +263,8 @@ def _render_incidents(
         false_alarms = sum(false for _, false in counts.values())
         lines.append(
             f"Эпизодов за {INCIDENTS_WINDOW_DAYS} суток: {summary}; "
-            f"проверка признала ложными: {false_alarms}.",
+            "сигнала на деле не было (момент или нефть вернулись, тревога в "
+            f"ремонте): {false_alarms}.",
         )
     elif counts is not None:
         lines.append(f"Эпизодов за {INCIDENTS_WINDOW_DAYS} суток не было.")
@@ -283,10 +284,10 @@ def _render_active(incidents: Sequence[DetectorIncidentDTO]) -> list[str]:
             verdict = item.verification.verdict
             check = (
                 f"; проверка: {VERDICT_RU.get(verdict, verdict)}"
-                f" ({item.verification.reason})"
+                f" ({item.verification.reason_ru or item.verification.reason})"
             )
         lines.append(
-            f"- {item.detector_code} {item.detector_name_ru or ''}: {item.level}, "
+            f"- {item.detector_code} {item.detector_name_ru or ''}: {item.level_ru}, "
             f"открыт {_dt(item.opened_at)}, последнее подтверждение "
             f"{_dt(item.last_seen_at)}{check} (incident_id {item.id}).",
         )

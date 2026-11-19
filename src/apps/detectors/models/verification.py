@@ -26,15 +26,20 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.database.sql.models import AppBaseModel, IntPkMixin, TimedMixinModel
 
-# Отметки. pending — окно проверки ещё не закрылось и решать рано.
+# Отметки (с 19.11.2026, правило заказчика, RULE_VERSION r2-verify-v3).
+# pending — подтверждать ещё рано (ждём ПРС, ремонт не закрыт).
 VERDICT_PENDING = "pending"
+VERDICT_CONFIRMED = "confirmed"  # ПРС с обрывом штанг
+VERDICT_NOT_CONFIRMED = "not_confirmed"  # всё остальное — с причиной
+
+# Отметки правил до r2-verify-v3: остаются в старых строках и журнале.
 VERDICT_FALSE_ALARM = "false_alarm"
 VERDICT_FAILURE_LIKELY = "failure_likely"
 VERDICT_FAILURE_CONFIRMED = "failure_confirmed"
 VERDICT_UNDETERMINED = "undetermined"
 
-VERDICTS = (
-    VERDICT_PENDING,
+VERDICTS = (VERDICT_PENDING, VERDICT_CONFIRMED, VERDICT_NOT_CONFIRMED)
+LEGACY_VERDICTS = (
     VERDICT_FALSE_ALARM,
     VERDICT_FAILURE_LIKELY,
     VERDICT_FAILURE_CONFIRMED,
@@ -42,12 +47,16 @@ VERDICTS = (
 )
 
 # Причины отметки.
-REASON_OIL_OK_DRIVE_OK = "oil_ok_drive_ok"  # нефть в норме, привод работал
+REASON_REPAIR_ROD_BREAK = "repair_rod_break"  # ПРС, в работах обрыв штанг
 REASON_MOMENT_RECOVERED = "moment_recovered"  # момент вернулся к обычному за 1–6 ч
+REASON_OIL_OK_DRIVE_OK = "oil_ok_drive_ok"  # нефть в норме, привод работал
+REASON_REPAIR_OTHER = "repair_other"  # первый ремонт — другого вида
+REASON_DURING_REPAIR = "during_repair"  # сигнал во время открытого ремонта
+REASON_NO_ROD_BREAK_REPAIR = "no_rod_break_repair"  # окно ПРС истекло
+# Причины правил до r2-verify-v3.
 REASON_DRIVE_STOPPED = "drive_stopped"  # оператор надолго выключил привод
 REASON_ABAI_STATUS = "abai_status"  # в ABAI простой с причиной-отказом
 REASON_REPAIR = "repair"  # начался ремонт
-REASON_REPAIR_ROD_BREAK = "repair_rod_break"  # ремонт, в работах «обрыв»
 REASON_NO_STATUS = "no_status"  # СДМО не присылает статус привода
 REASON_NO_MEASUREMENT = "no_measurement"  # нет замера в окне
 REASON_OIL_NOT_MEASURED = "oil_not_measured"  # нефть в замерах пустая или 0
@@ -55,21 +64,34 @@ REASON_OIL_LOW = "oil_low"  # нефть есть, но меньше полов�
 REASON_NO_OIL_NORM = "no_oil_norm"  # нет ни техрежима, ни замеров до тревоги
 REASON_DRIVE_UNSTABLE = "drive_unstable"  # нефть в норме, но привод работал < порога
 
-# Подписи для людей (выгрузки, фронт).
+# «Не подтверждено» по этим причинам значит, что сигнала на деле не было
+# (момент или нефть вернулись, тревога — артефакт ремонта). Остальные
+# «не подтверждено» — отказ другого вида или неизвестный: скважина может и
+# не добывать (отчёт недобора их не исключает).
+FALSE_SIGNAL_REASONS = frozenset(
+    {REASON_MOMENT_RECOVERED, REASON_OIL_OK_DRIVE_OK, REASON_DURING_REPAIR},
+)
+
+# Подписи для людей (API, выгрузки, ИИ-чат).
 VERDICT_LABELS_RU = {
-    VERDICT_PENDING: "Ожидает проверки",
+    VERDICT_PENDING: "Ожидает подтверждения",
+    VERDICT_CONFIRMED: "Подтверждено",
+    VERDICT_NOT_CONFIRMED: "Не подтверждено",
     VERDICT_FALSE_ALARM: "Тревога ложная",
     VERDICT_FAILURE_LIKELY: "Скорее всего поломка",
     VERDICT_FAILURE_CONFIRMED: "Поломка подтверждена",
     VERDICT_UNDETERMINED: "Не удалось проверить",
 }
 REASON_LABELS_RU = {
+    REASON_REPAIR_ROD_BREAK: "ПРС с обрывом штанг",
+    REASON_MOMENT_RECOVERED: "Момент восстановился",
     REASON_OIL_OK_DRIVE_OK: "Нефть в норме, привод работал",
-    REASON_MOMENT_RECOVERED: "Момент восстановился после тревоги",
+    REASON_REPAIR_OTHER: "Ремонт другого вида",
+    REASON_DURING_REPAIR: "Сигнал во время ремонта",
+    REASON_NO_ROD_BREAK_REPAIR: "ПРС с обрывом штанг не было",
     REASON_DRIVE_STOPPED: "Привод стоял 10+ часов",
     REASON_ABAI_STATUS: "В ABAI поставили простой",
     REASON_REPAIR: "Начался ремонт",
-    REASON_REPAIR_ROD_BREAK: "Начался ремонт, в работах «обрыв»",
     REASON_NO_STATUS: "СДМО не присылал статус привода",
     REASON_NO_MEASUREMENT: "Не было замера нефти",
     REASON_OIL_NOT_MEASURED: "Нефть в замерах пустая или 0",
@@ -77,6 +99,13 @@ REASON_LABELS_RU = {
     REASON_NO_OIL_NORM: "Не с чем сравнить нефть",
     REASON_DRIVE_UNSTABLE: "Нефть в норме, но привод останавливали",
 }
+
+
+def is_false_signal(verdict: str | None, reason: str | None) -> bool:
+    """Проверка признала, что сигнала на деле не было (в т.ч. старой отметкой)."""
+    if verdict == VERDICT_FALSE_ALARM:
+        return True
+    return verdict == VERDICT_NOT_CONFIRMED and reason in FALSE_SIGNAL_REASONS
 
 
 class DetectorVerification(AppBaseModel, IntPkMixin, TimedMixinModel):

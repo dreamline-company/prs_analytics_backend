@@ -15,8 +15,10 @@ from apps.ai_assistant.ai.well_chat_assistant.tools._common import (
     iso,
     local_now,
 )
+from apps.detectors import labels
 from apps.detectors.dto.internal.incident import DetectorIncidentDTO
 from apps.detectors.dto.queries.incident import ListIncidentsByWellIdQuery
+from apps.detectors.models.verification import VERDICT_LABELS_RU
 from apps.detectors.repositories import (
     DetectorConclusionRepository,
     DetectorIncidentRepository,
@@ -60,12 +62,9 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Отметки проверки строчными — для текста ответа (и старые отметки тоже).
 VERDICT_RU = {
-    "pending": "ожидает проверки",
-    "false_alarm": "ложная тревога",
-    "failure_likely": "скорее всего отказ",
-    "failure_confirmed": "отказ подтверждён",
-    "undetermined": "не удалось проверить",
+    verdict: labels.lower_first(label) for verdict, label in VERDICT_LABELS_RU.items()
 }
 
 
@@ -79,6 +78,7 @@ def incident_brief(incident: DetectorIncidentDTO) -> dict[str, Any]:
         "detector_name": incident.detector_name_ru,
         "reason_code": incident.reason_code,
         "level": incident.level,
+        "level_ru": incident.level_ru,
         "status": incident.status,
         "opened_at": iso(incident.opened_at),
         "last_seen_at": iso(incident.last_seen_at),
@@ -99,6 +99,7 @@ def incident_brief(incident: DetectorIncidentDTO) -> dict[str, Any]:
             "verdict": verification.verdict,
             "verdict_ru": VERDICT_RU.get(verification.verdict),
             "reason": verification.reason,
+            "reason_ru": verification.reason_ru,
             "is_final": verification.is_final,
         }
     )
@@ -152,9 +153,11 @@ async def get_incidents(
     больше 20 свежих (``shown`` из них показано) плюс все активные.
     По каждому эпизоду: уровень (warning/alarm), статус (active/normalized),
     даты, причина закрытия, ключевые цифры в ``facts`` и отметка проверки
-    тревоги в ``verification`` (пока только R2): verdict_ru — «ложная тревога»,
-    «отказ подтверждён» и т. п. Используй для вопросов «были ли тревоги»,
-    «подтвердился ли обрыв», «почему закрылся эпизод».
+    сигнала в ``verification`` (пока только R2): verdict_ru — «подтверждено»,
+    «не подтверждено», «ожидает подтверждения», reason_ru — почему. У R2
+    ``level_ru`` — стадия: «Падение нагрузки» / «Возможный обрыв штанг».
+    Используй для вопросов «были ли тревоги», «подтвердился ли обрыв»,
+    «почему закрылся эпизод».
     """
     well_id = get_well_id(config)
     days = clamp(days, 1, INCIDENTS_MAX_DAYS)

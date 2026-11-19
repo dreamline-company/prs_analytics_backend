@@ -11,6 +11,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 from apps.detectors.load_imbalance import config as r9_config
+from apps.detectors.models.incident import INCIDENT_LEVEL_ALARM
 
 if TYPE_CHECKING:
     from apps.detectors.conclusion.summary import ConclusionSummaryInput
@@ -82,7 +83,7 @@ def _r9_facts(payload: dict) -> list[str]:
     return facts
 
 
-def _r2_facts(payload: dict) -> list[str]:
+def _r2_facts(payload: dict, level: str) -> list[str]:
     buckets = [
         b
         for b in payload.get("evidence") or []
@@ -100,9 +101,14 @@ def _r2_facts(payload: dict) -> list[str]:
         f"{_pct(deepest)} от обычного для этой скважины.",
     ]
     if all(b.get("spd") for b in dips):
+        # Первые 4 часа («Падение нагрузки») обрыв не называем фактом.
         facts.append(
             "Привод при этом продолжает вращаться: он крутит штанги без "
-            "нагрузки насоса — так выглядит обрыв или отворот штанг.",
+            "нагрузки насоса — так выглядит обрыв или отворот штанг."
+            if level == INCIDENT_LEVEL_ALARM
+            else "Привод при этом продолжает вращаться, а нагрузка насоса на "
+            "штангах пропала. Если она не вернётся за 4 часа, это возможный "
+            "обрыв штанг.",
         )
     when = (
         f"{first:%d.%m %H:%M}"
@@ -141,8 +147,12 @@ def _rate_facts(item: "ConclusionSummaryInput") -> list[str]:
 def facts_for(item: "ConclusionSummaryInput") -> list[str]:
     """Физические факты эпизода в порядке важности."""
     payload = item.payload or {}
-    by_detector = {"R2": _r2_facts, "R9": _r9_facts}.get(item.detector_code)
-    detector_facts = by_detector(payload) if by_detector else []
+    if item.detector_code == "R2":
+        detector_facts = _r2_facts(payload, item.level)
+    elif item.detector_code == "R9":
+        detector_facts = _r9_facts(payload)
+    else:
+        detector_facts = []
     return detector_facts + _rate_facts(item)
 
 

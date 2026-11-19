@@ -46,6 +46,11 @@ def build_series(raw: Sequence[RawBucket]) -> list[Bucket2h]:
                 spd=bucket.spd,
                 mom_med24=mom_med24,
                 spd_med24=spd_med24,
+                mom_med=bucket.mom_med,
+                mom_sum=bucket.mom_sum,
+                mom_n=bucket.sample_count,
+                work_sum=bucket.work_sum,
+                work_n=bucket.work_n,
             ),
         )
 

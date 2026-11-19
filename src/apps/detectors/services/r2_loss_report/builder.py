@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.detectors import labels
 from apps.detectors.dto.internal.r2_loss_report import R2LossReportDTO
 from apps.detectors.dto.internal.repositories.r2_loss_report import (
     UpsertR2LossReportDTO,
@@ -21,6 +22,7 @@ from apps.detectors.models.r2_loss_report import (
     R2_LOSS_REPORT_STATUS_COMPLETED,
     R2_LOSS_REPORT_STATUS_FAILED,
 )
+from apps.detectors.models.verification import is_false_signal
 from apps.detectors.repositories import (
     DetectorIncidentRepository,
     DetectorVerificationRepository,
@@ -174,12 +176,30 @@ class R2LossReportBuilder:
         )
         episodes = eligible_episodes(
             incidents,
-            verdicts={key: row.verdict for key, row in verifications.items()},
+            false_signal_ids={
+                key
+                for key, row in verifications.items()
+                if is_false_signal(row.verdict, row.reason)
+            },
             repairs=await self._repairs(incidents, wells, day),
             day_end=day_end,
         )
         facts = await self._not_producing(episodes, wells, day)
         await self._enrich(facts, wells, day)
+        by_id = {incident.id: incident for incident in incidents}
+        for item in facts:
+            incident = by_id.get(item.incident_id)
+            verification = verifications.get(item.incident_id)
+            if incident is not None:
+                item.stage_ru = labels.level_label_ru(
+                    incident.detector_code,
+                    incident.level,
+                )
+            if verification is not None:
+                item.outcome_ru = labels.outcome_text_ru(
+                    verification.verdict,
+                    verification.reason,
+                )
         rows = sort_rows([build_row(item, report_date=report_date) for item in facts])
         report = R2LossReportDTO(
             report_date=report_date,

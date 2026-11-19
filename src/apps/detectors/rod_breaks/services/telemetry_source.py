@@ -59,12 +59,17 @@ class RodBreakTelemetrySource:
         speed = self._speed_expr()
         bucket = self._bucket_expr()
 
+        working = speed > config.FAILURE_SPD_ABS
         query = (
             select(
                 bucket.label("start_ts"),
                 func.min(moment).label("mom_min"),
                 func.percentile_cont(_MEDIAN).within_group(speed).label("spd"),
                 func.count().label("sample_count"),
+                func.percentile_cont(_MEDIAN).within_group(moment).label("mom_med"),
+                func.sum(moment).label("mom_sum"),
+                func.sum(moment).filter(working).label("work_sum"),
+                func.count().filter(working).label("work_n"),
             )
             .where(
                 SdmoFcData.station_id == station_id,
@@ -84,9 +89,37 @@ class RodBreakTelemetrySource:
                 mom_min=float(row["mom_min"]),
                 spd=float(row["spd"]) if row["spd"] is not None else 0.0,
                 sample_count=int(row["sample_count"]),
+                mom_med=float(row["mom_med"]) if row["mom_med"] is not None else None,
+                mom_sum=float(row["mom_sum"] or 0.0),
+                work_sum=float(row["work_sum"] or 0.0),
+                work_n=int(row["work_n"] or 0),
             )
             for row in rows
         ]
+
+    async def get_working_mean(
+        self,
+        station_id: int,
+        window_start: datetime,
+        window_end: datetime,
+    ) -> tuple[float | None, int]:
+        """Средний момент на рабочих отсчётах в ``[window_start, window_end)``.
+
+        База эпизода R2 (сутки до T0), когда корзин того окна в памяти нет —
+        у эпизода, открытого старым кодом. Возвращает среднее и число отсчётов.
+        """
+        moment = self._moment_expr()
+        speed = self._speed_expr()
+        query = select(func.avg(moment), func.count()).where(
+            SdmoFcData.station_id == station_id,
+            SdmoFcData.savetime >= window_start,
+            SdmoFcData.savetime < window_end,
+            moment >= config.MOMENT_CLIP_MIN,
+            moment <= config.MOMENT_CLIP_MAX,
+            speed > config.FAILURE_SPD_ABS,
+        )
+        mean, count = (await self.session.execute(query)).one()
+        return (float(mean) if mean is not None else None), int(count or 0)
 
     async def get_base_moment(
         self,

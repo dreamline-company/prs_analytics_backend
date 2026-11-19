@@ -8,12 +8,12 @@
 
 import re
 import statistics
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 from apps.detectors.dto.internal.r2_loss_report import R2LossRowDTO
-from apps.detectors.models.verification import VERDICT_FALSE_ALARM
+from apps.detectors.labels import lower_first
 from apps.detectors.rod_breaks.verification.config import (
     ABAI_FAILURE_REASON_PATTERNS,
     ABAI_WORK_STATUS_CODES,
@@ -95,6 +95,9 @@ class WellFacts:
     measures_after: list[Measure] = field(default_factory=list)
     status: AbaiStatus | None = None
     drive: DriveFacts = field(default_factory=DriveFacts)
+    # Стадия сигнала и итог проверки эпизода — последней фразой «Что происходит».
+    stage_ru: str | None = None
+    outcome_ru: str | None = None
 
 
 # Соседние интервалы статусов ABAI с таким зазором — один простой.
@@ -155,14 +158,16 @@ def repair_covers(
 def eligible_episodes(
     incidents: Sequence[IncidentLike],
     *,
-    verdicts: dict[int, str],
+    false_signal_ids: Collection[int],
     repairs: dict[int, Sequence[RepairSpan]],
     day_end: datetime,
 ) -> dict[int, list[IncidentLike]]:
     """Эпизоды по скважинам (по времени), которые могут быть отказом без ремонта.
 
     Подходит эпизод R2, открытый за ``LOOKBACK_DAYS`` до конца дня, если
-    проверка не признала его ложной тревогой и он не по ремонту. Закрыт ли
+    проверка не признала сигнал ложным (момент или нефть вернулись, тревога в
+    ремонте — ``is_false_signal``) и он не по ремонту. «Не подтверждено» по
+    другим причинам (простой «Нет подачи» без ремонта) остаётся. Закрыт ли
     эпизод — не важно: добывает ли скважина, решает :func:`is_producing`.
     """
     since = day_end - timedelta(days=config.LOOKBACK_DAYS)
@@ -170,7 +175,7 @@ def eligible_episodes(
     for incident in incidents:
         if not since <= incident.opened_at < day_end:
             continue
-        if verdicts.get(incident.id) == VERDICT_FALSE_ALARM:
+        if incident.id in false_signal_ids:
             continue
         if repair_covers(
             incident.opened_at,
@@ -397,9 +402,20 @@ def what_happens(facts: WellFacts, *, report_date: date) -> str:
             _abai_text(facts, report_date=report_date),
             _gzu_text(facts),
             _untypical_text(facts),
+            _signal_text(facts),
         )
         if part
     )
+
+
+def _signal_text(facts: WellFacts) -> str:
+    """«Сигнал: возможный обрыв штанг, ожидает подтверждения.»"""
+    if not facts.stage_ru:
+        return ""
+    text = f"Сигнал: {lower_first(facts.stage_ru)}"
+    if facts.outcome_ru:
+        text += f", {lower_first(facts.outcome_ru)}"
+    return text + "."
 
 
 def _station_text(facts: WellFacts, *, report_date: date) -> str:

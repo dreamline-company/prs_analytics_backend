@@ -9,10 +9,6 @@ from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 from apps.detectors.dto.internal.r2_loss_report import R2LossReportDTO
-from apps.detectors.models.verification import (
-    VERDICT_FAILURE_CONFIRMED,
-    VERDICT_FALSE_ALARM,
-)
 from apps.detectors.services.r2_loss_report.builder import cdng_name
 from apps.detectors.services.r2_loss_report.config import CONFIG_VERSION
 from apps.detectors.services.r2_loss_report.mail import (
@@ -104,7 +100,7 @@ def test_eligible_skips_false_alarms_repairs_and_old_episodes() -> None:
             incident(8, 18, datetime(2026, 10, 22, 12, 0)),
             incident(9, 10, datetime(2026, 9, 10)),
         ],
-        verdicts={1: VERDICT_FAILURE_CONFIRMED, 2: VERDICT_FALSE_ALARM},
+        false_signal_ids={2},
         repairs={
             12: [RepairSpan(datetime(2026, 10, 26, 9, 0), None)],
             16: [RepairSpan(datetime(2026, 9, 1, 9, 0), datetime(2026, 9, 3))],

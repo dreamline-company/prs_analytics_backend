@@ -150,7 +150,7 @@ def test_incident_row_unpacks_verification() -> None:
     )
 
     assert row["verify_verdict_ru"] == "Поломка подтверждена"
-    assert row["verify_reason_ru"] == "Начался ремонт, в работах «обрыв»"
+    assert row["verify_reason_ru"] == "ПРС с обрывом штанг"
     assert row["verify_hours_after_t0"] == 27.2
     assert (row["verify_repair_id"], row["verify_repair_rod_break"]) == (64021, True)
     assert row["verify_repair_start"] == "2026-09-28 18:30:00"
@@ -238,7 +238,7 @@ def test_incident_row_moment_recovered_columns() -> None:
         {},
     )
 
-    assert row["verify_reason_ru"] == "Момент восстановился после тревоги"
+    assert row["verify_reason_ru"] == "Момент восстановился"
     assert (row["verify_moment_base"], row["verify_moment_level"]) == (118.4, 110.2)
     assert row["verify_moment_share_of_base"] == 0.931
     assert row["verify_oil_qm_oil"] == ""

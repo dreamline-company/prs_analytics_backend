@@ -1,50 +1,49 @@
-"""Чистая логика проверки эпизода R2: данные после срабатывания → отметка.
+"""Чистая логика проверки эпизода R2: данные после срабатывания → итог.
 
 Без I/O. Каждый вызов считает отметку заново по всем данным на момент ``now``,
 поэтому повторный прогон идемпотентен, а отметка меняется только с приходом
 новых данных.
 
-Порядок решения:
+Правило заказчика (19.11.2026, ``r2-verify-v3``): «Подтверждено» — только ПРС
+с обрывом штанг в описании работ, всё остальное — «Не подтверждено» с
+причиной. Порядок решения:
 
-1. Ремонт или статус простоя ABAI с причиной-отказом → «поломка подтверждена».
-2. Ложная тревога — по первому из двух признаков:
-   а) момент вернулся: средний момент в окне T0+1…6 ч ≥ 75 % среднего за
-      24 ч до T0 (решается в T0 + 6 ч);
-   б) годный замер нефти не раньше T0 + 4 ч, нефть ≥ 50 % нормы, и привод
-      работал ≥ 90 % времени от T0 до замер + 12 ч.
-3. «Скорее всего поломка»: привод полностью стоял ≥ 10 часов в окне 96 ч.
-   Если выполнены и 2, и 3 — побеждает то, что установлено раньше по времени
-   данных.
-4. Окно 96 ч закрылось, а ни 1–3 нет → «не удалось проверить» с причиной.
-5. Иначе — «ожидает».
+1. Момент вернулся: средний момент в окне T0 + 1…6 ч ≥ 75 % среднего за 24 ч
+   до T0 → «Не подтверждено» (``moment_recovered``), окончательно в T0 + 6 ч.
+2. Первый ремонт после сигнала (или ремонт, шедший на T0):
+   ПРС с обрывом штанг → «Подтверждено»; шёл на T0 → «Не подтверждено»
+   (``during_repair``); другого вида → «Не подтверждено» (``repair_other``)
+   после закрытия ремонта + 2 сут (работы дописывают позже), до того — ждём.
+3. Годный замер нефти не раньше T0 + 4 ч, нефть ≥ 50 % нормы, привод работал
+   ≥ 90 % до замер + 12 ч → «Не подтверждено» (``oil_ok_drive_ok``).
+4. Прошло 45 сут, ПРС с обрывом не было → «Не подтверждено»
+   (``no_rod_break_repair``).
+5. Иначе — «Ожидает подтверждения» (в доказательствах — что известно: часы
+   остановки привода, простой ABAI).
 """
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from statistics import fmean, median
 
 from apps.detectors.models.verification import (
-    REASON_ABAI_STATUS,
-    REASON_DRIVE_STOPPED,
-    REASON_DRIVE_UNSTABLE,
+    REASON_DURING_REPAIR,
     REASON_MOMENT_RECOVERED,
-    REASON_NO_MEASUREMENT,
-    REASON_NO_OIL_NORM,
-    REASON_NO_STATUS,
-    REASON_OIL_LOW,
-    REASON_OIL_NOT_MEASURED,
+    REASON_NO_ROD_BREAK_REPAIR,
     REASON_OIL_OK_DRIVE_OK,
-    REASON_REPAIR,
+    REASON_REPAIR_OTHER,
     REASON_REPAIR_ROD_BREAK,
-    VERDICT_FAILURE_CONFIRMED,
-    VERDICT_FAILURE_LIKELY,
-    VERDICT_FALSE_ALARM,
+    VERDICT_CONFIRMED,
+    VERDICT_NOT_CONFIRMED,
     VERDICT_PENDING,
-    VERDICT_UNDETERMINED,
 )
 from apps.detectors.rod_breaks import config as r2_config
+from apps.detectors.rod_breaks import incident_config
 from apps.detectors.rod_breaks.verification import config
+
+_REPAIR_OPEN_MAX = timedelta(days=incident_config.REPAIR_OPEN_MAX_DAYS)
 
 _HOUR = timedelta(hours=1)
 
@@ -75,12 +74,67 @@ class Measurement:
     qv_liquid: float | None
 
 
+_ROD_EVENT_RE = re.compile(config.ROD_BREAK_EVENTS)
+_ROD_PART_RE = re.compile(config.ROD_BREAK_PARTS)
+_NOT_ROD_RE = re.compile(config.ROD_BREAK_NOT_PARTS)
+_PHRASE_END_RE = re.compile(r"[.;]")
+
+
+def mentions_rod_break(text: str) -> bool:
+    """В тексте работ — обрыв (отворот, слом, срыв резьбы) штанги.
+
+    Событие, а следом в той же фразе (≤ ``ROD_BREAK_GAP`` символов) — штанга,
+    шток или центратор; НКТ, кабель, ротор, плунжер между ними — не штанги.
+    Примеры с прода: «обрыв 34-ой штанги 22мм», «обрыв 61-штанги», «обрыв
+    короткий штаги», «слом на 17-ой штанге», «срыв резьбы 16-ой штанги».
+    """
+    low = text.lower().replace("ё", "е")
+    for event in _ROD_EVENT_RE.finditer(low):
+        tail = low[event.end() : event.end() + config.ROD_BREAK_GAP]
+        tail = _PHRASE_END_RE.split(tail, maxsplit=1)[0]
+        part = _ROD_PART_RE.search(tail)
+        if part and not _NOT_ROD_RE.search(tail[: part.start()]):
+            return True
+    return False
+
+
 @dataclass(frozen=True, slots=True)
 class RepairEvent:
+    """Ремонт ABAI (время местное; ``end=None`` — не закрыт)."""
+
     repair_id: int
     start: datetime
-    rod_break: bool
     work_list: str
+    end: datetime | None = None
+    abai_type_id: int | None = None
+    type_name: str = ""
+
+    def covers(self, moment: datetime) -> bool:
+        """Ремонт начался раньше и ещё шёл в ``moment``.
+
+        Не закрытый в ABAI ремонт считается идущим не дольше
+        ``REPAIR_OPEN_MAX_DAYS`` (как в прогоне R2): висящие ремонты без конца
+        иначе забирали бы все последующие сигналы.
+        """
+        end = self.end or self.start + _REPAIR_OPEN_MAX
+        return self.start < moment < end
+
+    @property
+    def is_prs(self) -> bool:
+        if self.abai_type_id is not None:
+            return self.abai_type_id == config.ABAI_REPAIR_TYPE_PRS
+        return self.type_name.lower().startswith(config.PRS_WORK_TYPE_PREFIX)
+
+    @property
+    def has_text(self) -> bool:
+        return bool(self.work_list.strip())
+
+    @property
+    def rod_break(self) -> bool:
+        """Обрыв штанг: по тексту работ, а без текста — по виду работ."""
+        if self.has_text:
+            return mentions_rod_break(self.work_list)
+        return config.ROD_BREAK_WORK_TYPE in self.type_name.lower()
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,84 +341,6 @@ def _iso(moment: datetime | None) -> str | None:
     return moment.isoformat() if moment else None
 
 
-def _confirmation(inp: VerificationInput, now: datetime) -> VerificationResult | None:
-    """Ремонт или статус простоя ABAI после тревоги.
-
-    Статус-отказ, уже стоявший на момент тревоги (например, «Нет подачи» с
-    позавчера — в КМГ привод при этом часто не выключают), тоже подтверждает:
-    правило поймало известную поломку.
-    """
-    until = min(now, inp.t0 + timedelta(days=config.FINAL_DAYS))
-    repairs = [
-        r
-        for r in inp.repairs
-        if inp.t0 - timedelta(hours=config.REPAIR_LOOKBACK_HOURS) <= r.start <= until
-    ]
-    statuses = [
-        s
-        for s in inp.abai_statuses
-        if is_abai_failure(s)
-        and (
-            inp.t0 - timedelta(hours=config.ABAI_LOOKBACK_HOURS) <= s.since <= until
-            or s.covers(inp.t0)
-        )
-    ]
-    if not repairs and not statuses:
-        return None
-
-    rod_breaks = [r for r in repairs if r.rod_break]
-    if rod_breaks:
-        reason = REASON_REPAIR_ROD_BREAK
-        evidence_at = min(r.start for r in rod_breaks)
-    elif repairs:
-        reason = REASON_REPAIR
-        evidence_at = min(r.start for r in repairs)
-    else:
-        reason = REASON_ABAI_STATUS
-        evidence_at = min(s.since for s in statuses)
-
-    evidence: dict = {}
-    if repairs:
-        evidence["repair"] = [
-            {
-                "repair_id": r.repair_id,
-                "start": _iso(r.start),
-                "rod_break": r.rod_break,
-                "work_list": r.work_list[:200],
-            }
-            for r in sorted(repairs, key=lambda r: r.start)
-        ]
-    if statuses:
-        evidence["abai"] = [
-            {
-                "since": _iso(s.since),
-                "until": _iso(s.until),
-                "status": s.code,
-                "reason": s.reason,
-            }
-            for s in sorted(statuses, key=lambda s: s.since)
-        ]
-    return VerificationResult(
-        verdict=VERDICT_FAILURE_CONFIRMED,
-        reason=reason,
-        is_final=True,
-        evidence_at=evidence_at,
-        evidence=evidence,
-    )
-
-
-def is_final_at(inp: VerificationInput, now: datetime) -> bool:
-    """Отметку пора закрепить: прошло ``FINAL_DAYS``, и копия статусов ABAI по
-    скважине не выглядит дырявой (есть статус на T0) — иначе ждём ещё
-    ``FINAL_STATUS_GAP_GRACE_DAYS``."""
-    if now < inp.t0 + timedelta(days=config.FINAL_DAYS):
-        return False
-    if any(status.covers(inp.t0) for status in inp.abai_statuses):
-        return True
-    grace = config.FINAL_DAYS + config.FINAL_STATUS_GAP_GRACE_DAYS
-    return now >= inp.t0 + timedelta(days=grace)
-
-
 def _block_at(inp: VerificationInput) -> datetime | None:
     """Первое после T0 событие, после которого замеры описывают другое состояние.
 
@@ -441,29 +417,6 @@ def _oil_check(
     return _OilCheck(rejected_by_drive=rejected)
 
 
-def _undetermined_reason(
-    inp: VerificationInput,
-    norm: float | None,
-    block: datetime | None,
-    oil: _OilCheck | None,
-) -> str:
-    window_end = inp.t0 + timedelta(hours=config.WINDOW_HOURS)
-    if not any(inp.t0 <= s.at < window_end for s in inp.status_samples):
-        return REASON_NO_STATUS
-    lo, hi = _measurement_window(inp, block)
-    in_window = [m for m in inp.measurements if lo < m.at <= hi]
-    if not in_window:
-        return REASON_NO_MEASUREMENT
-    with_oil = [m for m in in_window if is_valid_measurement(m) and m.qm_oil]
-    if not with_oil:
-        return REASON_OIL_NOT_MEASURED
-    if norm is None:
-        return REASON_NO_OIL_NORM
-    if oil is not None and oil.rejected_by_drive:
-        return REASON_DRIVE_UNSTABLE
-    return REASON_OIL_LOW
-
-
 def _round(value: float | None, digits: int = 3) -> float | None:
     return round(value, digits) if value is not None else None
 
@@ -474,66 +427,187 @@ def evaluate(inp: VerificationInput, now: datetime) -> VerificationResult:
     return _with_moment(_evaluate(inp, now, moment), moment)
 
 
-def _evaluate(  # noqa: PLR0911 — по ветке на каждую отметку
-    inp: VerificationInput,
-    now: datetime,
-    moment: _MomentCheck | None,
+def first_repair(inp: VerificationInput) -> RepairEvent | None:
+    """Первый ремонт эпизода: начатый после T0 (не позже окна ПРС) или шедший
+    на T0 (начат не раньше ``COVER_LOOKBACK_DAYS``)."""
+    until = inp.t0 + timedelta(days=config.PRS_WAIT_DAYS)
+    cover_from = inp.t0 - timedelta(days=config.COVER_LOOKBACK_DAYS)
+    candidates = [
+        r
+        for r in inp.repairs
+        if inp.t0 <= r.start <= until or (r.start >= cover_from and r.covers(inp.t0))
+    ]
+    return min(candidates, key=lambda r: r.start, default=None)
+
+
+def _repair_evidence(repair: RepairEvent) -> dict:
+    return {
+        "repair_id": repair.repair_id,
+        "start": _iso(repair.start),
+        "end": _iso(repair.end),
+        "is_prs": repair.is_prs,
+        "rod_break": repair.rod_break,
+        "type_name": repair.type_name[:120],
+        "work_list": repair.work_list[:200],
+    }
+
+
+def _result(
+    verdict: str,
+    reason: str | None,
+    evidence_at: datetime | None,
+    evidence: dict,
 ) -> VerificationResult:
-    final = is_final_at(inp, now)
+    return VerificationResult(
+        verdict=verdict,
+        reason=reason,
+        is_final=verdict != VERDICT_PENDING,
+        evidence_at=evidence_at,
+        evidence=evidence,
+    )
 
-    confirmed = _confirmation(inp, now)
-    if confirmed is not None:
-        return confirmed
 
-    block = _block_at(inp)
-    norm, norm_source = oil_norm(inp)
-    oil = _oil_check(inp, now, norm, block) if norm is not None else None
+def _repair_verdict(
+    inp: VerificationInput,
+    repair: RepairEvent,
+    now: datetime,
+    evidence: dict,
+) -> VerificationResult:
+    """Итог по первому ремонту: подтверждён ли обрыв штанг."""
+    evidence = {**evidence, "repair": [_repair_evidence(repair)]}
+    wait_until = inp.t0 + timedelta(days=config.PRS_WAIT_DAYS)
+    # Работы ещё не записаны, ремонт идёт — решать не по чему; после окна
+    # ожидания решает вид работ (висящий в ABAI ремонт без текста).
+    if not repair.has_text and repair.end is None and now < wait_until:
+        return _result(
+            VERDICT_PENDING,
+            None,
+            None,
+            {**evidence, "waiting": "repair_works"},
+        )
+    if repair.is_prs and repair.rod_break:
+        return _result(
+            VERDICT_CONFIRMED,
+            REASON_REPAIR_ROD_BREAK,
+            repair.start,
+            evidence,
+        )
+    if repair.covers(inp.t0):
+        return _result(
+            VERDICT_NOT_CONFIRMED,
+            REASON_DURING_REPAIR,
+            inp.t0,
+            evidence,
+        )
+    grace = timedelta(days=config.REPAIR_TEXT_GRACE_DAYS)
+    if repair.end is not None and now >= repair.end + grace:
+        return _result(
+            VERDICT_NOT_CONFIRMED,
+            REASON_REPAIR_OTHER,
+            repair.end,
+            evidence,
+        )
+    if now >= wait_until:
+        return _result(
+            VERDICT_NOT_CONFIRMED,
+            REASON_REPAIR_OTHER,
+            wait_until,
+            evidence,
+        )
+    # Ремонт другого вида не закрыт (или закрыт только что): работы ещё
+    # дописывают, обрыв может появиться.
+    return _result(
+        VERDICT_PENDING,
+        None,
+        None,
+        {**evidence, "waiting": "repair_works"},
+    )
 
+
+def _interim(inp: VerificationInput, now: datetime) -> dict:
+    """Что известно, пока ждём: остановка привода и простой ABAI."""
     window_end = inp.t0 + timedelta(hours=config.WINDOW_HOURS)
     stop_until = min(now, window_end)
-    likely_at, stopped_hours = stopped_hours_reached(
+    _, stopped = stopped_hours_reached(
         inp.status_samples,
         inp.t0,
         stop_until,
         config.DRIVE_STOPPED_HOURS_LIKELY,
     )
-    window = {
-        "t0": _iso(inp.t0),
-        "measurement_from": _iso(
-            inp.t0 + timedelta(hours=config.MEASUREMENT_MIN_DELAY_HOURS),
-        ),
-        "measurement_to": _iso(_measurement_window(inp, block)[1]),
-        "block_at": _iso(block),
+    share, samples = work_share(inp.status_samples, inp.t0, stop_until)
+    evidence: dict = {
+        "drive": {
+            "from": _iso(inp.t0),
+            "to": _iso(stop_until),
+            "stopped_hours": stopped,
+            "work_share": _round(share),
+            "samples": samples,
+        },
     }
+    failures = [
+        s
+        for s in inp.abai_statuses
+        if is_abai_failure(s)
+        and (
+            s.since >= inp.t0 - timedelta(hours=config.ABAI_LOOKBACK_HOURS)
+            or s.covers(inp.t0)
+        )
+    ]
+    if failures:
+        evidence["abai"] = [
+            {
+                "since": _iso(s.since),
+                "until": _iso(s.until),
+                "status": s.code,
+                "reason": s.reason,
+            }
+            for s in sorted(failures, key=lambda s: s.since)
+        ]
+    return evidence
 
-    # Ложная и «скорее всего поломка» — побеждает установленное раньше.
-    # Момент решается в T0 + 6 ч — раньше и замера нефти (≥ T0 + 16 ч), и
-    # 10 часов остановки, поэтому из двух признаков ложной первым идёт он.
-    if (
-        moment is not None
-        and moment.recovered
-        and (likely_at is None or moment.decided_at <= likely_at)
-    ):
-        return VerificationResult(
-            verdict=VERDICT_FALSE_ALARM,
-            reason=REASON_MOMENT_RECOVERED,
-            is_final=final,
-            evidence_at=moment.decided_at,
-            evidence={"window": window, "moment": moment.evidence},
+
+def _evaluate(
+    inp: VerificationInput,
+    now: datetime,
+    moment: _MomentCheck | None,
+) -> VerificationResult:
+    wait_until = inp.t0 + timedelta(days=config.PRS_WAIT_DAYS)
+    repair = first_repair(inp)
+    started = repair if repair is not None and repair.start <= now else None
+    window = {"t0": _iso(inp.t0), "prs_wait_until": _iso(wait_until)}
+
+    # 1. Момент вернулся за 1–6 ч — сигнала не было. Исключение — ПРС с обрывом
+    #    начался раньше, чем окно момента закрылось (окно поймало ремонт).
+    early_rod_break = (
+        started is not None
+        and started.is_prs
+        and started.rod_break
+        and moment is not None
+        and started.start <= moment.decided_at
+    )
+    if moment is not None and moment.recovered and not early_rod_break:
+        return _result(
+            VERDICT_NOT_CONFIRMED,
+            REASON_MOMENT_RECOVERED,
+            moment.decided_at,
+            {"window": window, "moment": moment.evidence},
         )
 
-    if (
-        oil is not None
-        and oil.decided_at is not None
-        and (likely_at is None or oil.decided_at <= likely_at)
-    ):
+    # 2. Первый ремонт решает.
+    if started is not None:
+        return _repair_verdict(inp, started, now, {"window": window})
+
+    # 3. Нефть в норме при работающем приводе.
+    block = _block_at(inp)
+    norm, norm_source = oil_norm(inp)
+    oil = _oil_check(inp, now, norm, block) if norm is not None else None
+    if oil is not None and oil.decided_at is not None:
         m = oil.measurement
-        return VerificationResult(
-            verdict=VERDICT_FALSE_ALARM,
-            reason=REASON_OIL_OK_DRIVE_OK,
-            is_final=final,
-            evidence_at=oil.decided_at,
-            evidence={
+        return _result(
+            VERDICT_NOT_CONFIRMED,
+            REASON_OIL_OK_DRIVE_OK,
+            oil.decided_at,
+            {
                 "window": window,
                 "oil": {
                     "measured_at": _iso(m.at),
@@ -552,63 +626,19 @@ def _evaluate(  # noqa: PLR0911 — по ветке на каждую отмет
             },
         )
 
-    if likely_at is not None:
-        return VerificationResult(
-            verdict=VERDICT_FAILURE_LIKELY,
-            reason=REASON_DRIVE_STOPPED,
-            is_final=final,
-            evidence_at=likely_at,
-            evidence={
-                "window": window,
-                "drive": {
-                    "from": _iso(inp.t0),
-                    "to": _iso(stop_until),
-                    "stopped_hours": stopped_hours,
-                    "threshold_hours": config.DRIVE_STOPPED_HOURS_LIKELY,
-                },
-            },
+    # 4. Окно ПРС истекло.
+    if now >= wait_until:
+        return _result(
+            VERDICT_NOT_CONFIRMED,
+            REASON_NO_ROD_BREAK_REPAIR,
+            wait_until,
+            {"window": window, **_interim(inp, now)},
         )
 
-    if oil is not None and oil.waiting is not None:
-        m = oil.waiting
-        return VerificationResult(
-            verdict=VERDICT_PENDING,
-            reason=None,
-            is_final=False,
-            evidence_at=None,
-            evidence={
-                "window": window,
-                "waiting": "drive_after_measurement",
-                "oil": {
-                    "measured_at": _iso(m.at),
-                    "qm_oil": _round(m.qm_oil),
-                    "norm": _round(norm),
-                    "norm_source": norm_source,
-                },
-                "decide_at": _iso(
-                    m.at + timedelta(hours=config.DRIVE_AFTER_MEASUREMENT_HOURS),
-                ),
-            },
-        )
-
-    if now >= window_end:
-        share, n = work_share(inp.status_samples, inp.t0, window_end)
-        return VerificationResult(
-            verdict=VERDICT_UNDETERMINED,
-            reason=_undetermined_reason(inp, norm, block, oil),
-            is_final=final,
-            evidence_at=window_end,
-            evidence={
-                "window": window,
-                "oil": {"norm": _round(norm), "norm_source": norm_source},
-                "drive": {"work_share": _round(share), "samples": n},
-            },
-        )
-
-    return VerificationResult(
-        verdict=VERDICT_PENDING,
-        reason=None,
-        is_final=False,
-        evidence_at=None,
-        evidence={"window": window, "waiting": "measurement"},
+    # 5. Ждём ПРС.
+    return _result(
+        VERDICT_PENDING,
+        None,
+        None,
+        {"window": window, "waiting": "prs", **_interim(inp, now)},
     )
