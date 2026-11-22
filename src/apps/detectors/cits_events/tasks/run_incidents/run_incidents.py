@@ -30,6 +30,12 @@ CATCHUP_DAYS), потому что эпизод следующих суток з
 утреннего расчёта закрытых суток, иначе эпизод мигал бы от вечернего замера.
 Пока вчерашние сутки не рассчитаны, ежечасный прогон пропускается — порядок
 «сначала закрытые сутки, потом сегодняшние» не нарушается.
+
+Уведомления (``r10.liquid_drop`` / ``r10.zero_liquid`` / ``r10.closed``)
+пишутся в транзакцию суток прямо перед её commit. Шлёт только celery-таска
+(beat, диспетчер); ручной запуск, явная дата и первый прогон без курсора —
+нет. Догнанные старые сутки
+датируются своим концом и отбрасываются эмиттером (старше 24 ч).
 """
 
 import argparse
@@ -64,6 +70,7 @@ from apps.detectors.dto.internal.repositories import (
     CreateDetectorFindingDTO,
     OpenIncidentDTO,
 )
+from apps.detectors.dto.internal.repositories.incident import IncidentStateDTO
 from apps.detectors.models.incident import (
     CLOSE_REASON_STALE,
     INCIDENT_LEVEL_ALARM,
@@ -77,6 +84,15 @@ from apps.detectors.repositories import (
     DetectorIncidentRepository,
 )
 from apps.models_registry import *  # noqa: F403
+from apps.notifications.producers.detectors import (
+    TRANSITION_CLOSED,
+    TRANSITION_ESCALATED,
+    TRANSITION_OPENED,
+    IncidentTransition,
+    emit_transitions,
+    publish_safely,
+    r10_run_notifies,
+)
 from apps.telemetry.repositories import TelemetryRepository
 from core import get_logger
 from core.settings import get_settings
@@ -136,9 +152,17 @@ class DayStats:
 
 
 class CitsEventsRunner:
-    def __init__(self, session: AsyncSession, *, now: datetime | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        now: datetime | None = None,
+        notify: bool = False,
+    ) -> None:
         self.session = session
         self.now = now or _local_now()
+        # Уведомления шлёт только celery-таска; явная дата — нет (см. run).
+        self.notify = notify
         self.source = CitsEventsDataSource(session)
         self.incident_repo = DetectorIncidentRepository(session)
         self.finding_repo = DetectorFindingRepository(session)
@@ -173,19 +197,40 @@ class CitsEventsRunner:
         now = self.now
         target = fix_date or now.date() - timedelta(days=1)
         for ngdu in incident_config.TARGET_NGDU_IDS:
+            notify = r10_run_notifies(
+                notify=self.notify,
+                fix_date=fix_date,
+                has_cursor=bool(
+                    await self.cursor_repo.get_map(DETECTOR_CODE, [int(ngdu)]),
+                ),
+            )
             days = [target] if fix_date else await self._pending_days(ngdu, target)
             for day in days:
                 if not await self.feed_fresh(int(ngdu), _day_end(day)):
                     # Следующие сутки опираются на эти — ждём дозагрузки.
                     break
+                transitions: list[IncidentTransition] = []
+                notification_ids: list[int] = []
                 try:
-                    stats = await self._run_day(int(ngdu), day, now)
+                    stats = await self._run_day(
+                        int(ngdu),
+                        day,
+                        now,
+                        transitions=transitions,
+                    )
+                    if notify:
+                        # Прямо перед commit, в транзакции суток.
+                        notification_ids = await emit_transitions(
+                            self.session,
+                            transitions,
+                        )
                     await self.session.commit()
                 except Exception:
                     await self.session.rollback()
                     # Следующие сутки опираются на эпизоды этих — дальше не идём.
                     logger.exception("R10 NGDU %s day %s failed", ngdu, day)
                     break
+                await publish_safely(notification_ids)
                 logger.info(
                     "R10 NGDU %s %s: opened=%s, escalated=%s, normalized=%s, "
                     "findings=%s",
@@ -210,13 +255,29 @@ class CitsEventsRunner:
                 continue
             if not await self.feed_fresh(int(ngdu), self.now):
                 continue
+            transitions: list[IncidentTransition] = []
+            notification_ids: list[int] = []
             try:
-                stats = await self._run_day(int(ngdu), today, self.now, intraday=True)
+                stats = await self._run_day(
+                    int(ngdu),
+                    today,
+                    self.now,
+                    intraday=True,
+                    transitions=transitions,
+                )
+                # Курсор есть (проверен выше) и даты нет — плановый прогон.
+                if self.notify:
+                    # Прямо перед commit, в транзакции суток.
+                    notification_ids = await emit_transitions(
+                        self.session,
+                        transitions,
+                    )
                 await self.session.commit()
             except Exception:
                 await self.session.rollback()
                 logger.exception("R10 NGDU %s intraday %s failed", ngdu, today)
                 continue
+            await publish_safely(notification_ids)
             logger.info(
                 "R10 NGDU %s %s intraday: opened=%s, escalated=%s",
                 int(ngdu),
@@ -245,7 +306,10 @@ class CitsEventsRunner:
         now: datetime,
         *,
         intraday: bool = False,
+        transitions: list[IncidentTransition] | None = None,
     ) -> DayStats:
+        """``transitions`` — сюда кладутся открытия, эскалации и закрытия
+        эпизодов для уведомлений."""
         records = await self.source.load_wells(day, ngdu)
         su_data = await self.source.load_su(
             su_requests([record.well for record in records], day),
@@ -272,6 +336,7 @@ class CitsEventsRunner:
                 now=now,
                 stats=stats,
                 intraday=intraday,
+                transitions=transitions,
             )
         if intraday:
             return stats
@@ -279,7 +344,15 @@ class CitsEventsRunner:
         for well_id, incident in active.items():
             if (incident.payload or {}).get("abai_ngdu_id") != ngdu:
                 continue
-            await self._close(well_id, day, CLOSE_REASON_STALE)
+            closed = await self._close(well_id, day, CLOSE_REASON_STALE)
+            self._record(
+                transitions,
+                TRANSITION_CLOSED,
+                closed,
+                day=day,
+                now=now,
+                ngdu=ngdu,
+            )
             stats.normalized += 1
 
         findings = [
@@ -325,12 +398,22 @@ class CitsEventsRunner:
         now: datetime,
         stats: DayStats,
         intraday: bool,
+        transitions: list[IncidentTransition] | None = None,
     ) -> None:
         last_seen = active.last_seen_at.date() - timedelta(days=1) if active else None
         decision = decide(verdict, fix=day, active_last_seen=last_seen)
 
         if decision.action == ACTION_CLOSE and not intraday:
-            await self._close(record.well_id, day, decision.close_reason)
+            closed = await self._close(record.well_id, day, decision.close_reason)
+            self._record(
+                transitions,
+                TRANSITION_CLOSED,
+                closed,
+                day=day,
+                now=now,
+                ngdu=ngdu,
+                well_name=record.well.name,
+            )
             stats.normalized += 1
             return
         if decision.action != ACTION_UPSERT:
@@ -342,7 +425,7 @@ class CitsEventsRunner:
             and active.level == INCIDENT_LEVEL_WARNING
             and decision.level == INCIDENT_LEVEL_ALARM
         )
-        await self.incident_repo.upsert_active(
+        state = await self.incident_repo.upsert_active(
             OpenIncidentDTO(
                 detector_code=DETECTOR_CODE,
                 well_id=record.well_id,
@@ -366,14 +449,55 @@ class CitsEventsRunner:
             stats.opened += 1
         elif escalates:
             stats.escalated += 1
+        if active is None or escalates:
+            self._record(
+                transitions,
+                TRANSITION_OPENED if active is None else TRANSITION_ESCALATED,
+                state,
+                day=day,
+                now=now,
+                ngdu=ngdu,
+                well_name=record.well.name,
+            )
 
-    async def _close(self, well_id: int, day: date, reason: str | None) -> None:
-        await self.incident_repo.normalize(
+    async def _close(
+        self,
+        well_id: int,
+        day: date,
+        reason: str | None,
+    ) -> IncidentStateDTO | None:
+        return await self.incident_repo.normalize(
             detector_code=DETECTOR_CODE,
             well_id=well_id,
             reason_code=incident_config.REASON_LIQUID_LOSS,
             normalized_at=_day_end(day),
             close_reason=reason,
+        )
+
+    @staticmethod
+    def _record(  # noqa: PLR0913
+        transitions: list[IncidentTransition] | None,
+        kind: str,
+        incident: IncidentStateDTO | None,
+        *,
+        day: date,
+        now: datetime,
+        ngdu: int,
+        well_name: str | None = None,
+    ) -> None:
+        """Переход для уведомления. Событие стало известно в конце расчётных
+        суток (у сегодняшних неполных — сейчас)."""
+        if transitions is None or incident is None:
+            return
+        transitions.append(
+            IncidentTransition(
+                kind=kind,
+                incident=incident,
+                at=min(_day_end(day), now),
+                detected_at=now,
+                well_name=well_name,
+                abai_ngdu_id=ngdu,
+            ),
         )
 
     @staticmethod
@@ -418,9 +542,18 @@ class CitsEventsRunner:
         return rows
 
 
-async def main(fix_date: date | None = None, *, intraday: bool = False) -> None:
+async def main(
+    fix_date: date | None = None,
+    *,
+    intraday: bool = False,
+    notify: bool = False,
+) -> None:
+    """``notify`` — только из celery-таски: ручной запуск не шлёт."""
     async with session_makers["app"]() as session:
-        await CitsEventsRunner(session).run(fix_date=fix_date, intraday=intraday)
+        await CitsEventsRunner(session, notify=notify).run(
+            fix_date=fix_date,
+            intraday=intraday,
+        )
 
 
 @celery_app.task(name="detectors.cits_events.run_incidents")
@@ -433,7 +566,11 @@ def run_cits_events_incidents(
     """``entity_ids`` — подпись диспетчера; R10 считает НГДУ целиком."""
     _ = entity_ids
     run_async(
-        main(date.fromisoformat(fix_date) if fix_date else None, intraday=intraday),
+        main(
+            date.fromisoformat(fix_date) if fix_date else None,
+            intraday=intraday,
+            notify=True,
+        ),
     )
 
 

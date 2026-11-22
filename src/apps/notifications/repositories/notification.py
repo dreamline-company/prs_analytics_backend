@@ -185,6 +185,38 @@ class NotificationRepository(
         )
         return dict(result.tuples().all())
 
+    async def get_last_feed_row(
+        self,
+        event_code: str,
+        *,
+        source_type: str,
+        abai_ngdu_id: int,
+    ) -> NotificationRowDTO | None:
+        """Последнее уведомление вида по НГДУ: открытый сбой источника.
+
+        Дёшево: ``source_type`` идёт по индексу источника, а строк одного
+        источника сбоев — единицы в месяц.
+        """
+        stmt = (
+            _rows_query()
+            .where(
+                Notification.source_type == source_type,
+                Notification.event_code == event_code,
+                Notification.abai_ngdu_id == abai_ngdu_id,
+            )
+            .order_by(Notification.id.desc())
+            .limit(1)
+        )
+        rows = await self._rows(stmt)
+        return rows[0] if rows else None
+
+    async def has_dedup_key(self, key: str) -> bool:
+        """Есть ли уже строка с таким ``dedup_key`` (уникальный индекс)."""
+        result = await self.session.execute(
+            select(Notification.id).where(Notification.dedup_key == key),
+        )
+        return result.scalar_one_or_none() is not None
+
     async def is_present(self, notification_id: int) -> bool:
         result = await self.session.execute(
             select(Notification.id).where(Notification.id == notification_id),

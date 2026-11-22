@@ -9,6 +9,11 @@
 пометку теряет (ложная пометка иначе была бы вечной).
 Ремонты, закрытые нами по телеметрии (``closed_by_telemetry_at``), тоже
 сверяются: дата окончания из ABAI заменяет нашу, пометка снимается.
+
+Сработавшая защита (``too_many_gone``) шлёт ``feed.abai_guard`` (``notify=True``
+— плановый ``repairs.sync``), не чаще раза в час. В число пропавших для
+уведомления входят и батчи, на которые ABAI ответил пусто: их ремонты не
+помечаются и сейчас, но молча.
 """
 
 import asyncio
@@ -16,8 +21,16 @@ from collections.abc import AsyncIterator, Sequence
 from datetime import datetime
 
 from sqlalchemy import or_
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.models_registry import *  # noqa
+from apps.models_registry import *  # noqa: F403
+from apps.notifications.constants import local_now
+from apps.notifications.producers.common import emit_all
+from apps.notifications.producers.feeds import (
+    ABAI_GUARD_REPAIRS,
+    abai_guard_notification,
+)
+from apps.notifications.services.publisher import publish_notifications
 from apps.repairs.dto.internal.repositories.repair import UpdateRepairDTO
 from apps.repairs.models.repair import Repair
 from apps.repairs.repositories.repair import RepairRepository
@@ -45,12 +58,15 @@ class UpdateNotFinishedRepairs:
     MAX_GONE = 3
     MAX_GONE_SHARE = 0.1
 
+    def __init__(self, *, notify: bool = False) -> None:
+        self.notify = notify
+
     async def run(self) -> None:
         logger.info("UpdateNotFinishedRepairs task started.")
         now = datetime.now(tz=settings.ZONE_INFO).replace(tzinfo=None)
         async with session_makers["abai"]() as abai_session:
             abai_repairs_repo = ABAIWellWorkoverRepository(abai_session)
-            updated = deleted = restored = checked = 0
+            updated = deleted = restored = checked = unanswered = 0
             gone: list[int] = []
             async with session_makers["app"]() as app_session:
                 app_repairs_repo = RepairRepository(app_session)
@@ -72,6 +88,7 @@ class UpdateNotFinishedRepairs:
                         # Пустой ответ на весь батч — скорее сбой ABAI, чем
                         # удаление всех ремонтов разом: ничего не помечаем.
                         if not abai_repairs:
+                            unanswered += len(nf_repairs_abai_ids)
                             continue
                         found_ids = {ar.id for ar in abai_repairs}
                         gone.extend(
@@ -107,6 +124,12 @@ class UpdateNotFinishedRepairs:
                         app_repairs_repo,
                         abai_repairs_repo,
                     )
+                    ids = await self._emit_guard(
+                        app_session,
+                        gone=len(gone) + unanswered,
+                        checked=checked,
+                        marked=deleted,
+                    )
                     if updated or deleted or restored:
                         await app_session.commit()
 
@@ -117,12 +140,53 @@ class UpdateNotFinishedRepairs:
                             deleted,
                             restored,
                         )
+                    elif ids:
+                        await app_session.commit()
                     logger.info(
                         "UPdating of non finished repairs is done successfully.",
                     )
                 except Exception:
                     logger.exception("Update of Not finished repairs is failed.")
                     await app_session.rollback()
+                else:
+                    await self._publish(ids)
+
+    async def _emit_guard(
+        self,
+        session: AsyncSession,
+        *,
+        gone: int,
+        checked: int,
+        marked: int,
+    ) -> list[int]:
+        """Защита сработала (пропало слишком много, ничего не помечено) —
+        ``feed.abai_guard`` прямо перед commit."""
+        if not self.notify or marked or not too_many_gone(gone, checked):
+            return []
+        try:
+            return await emit_all(
+                session,
+                [
+                    abai_guard_notification(
+                        guard=ABAI_GUARD_REPAIRS,
+                        gone=gone,
+                        checked=checked,
+                        now=local_now(),
+                    ),
+                ],
+            )
+        except Exception:
+            logger.exception("ABAI guard notification not written")
+            return []
+
+    @staticmethod
+    async def _publish(ids: list[int]) -> None:
+        if not ids:
+            return
+        try:
+            await publish_notifications(ids)
+        except Exception:
+            logger.exception("ABAI guard notification signal failed")
 
     async def _mark_gone(
         self,
@@ -202,8 +266,8 @@ class UpdateNotFinishedRepairs:
                 break
 
 
-async def main() -> None:
-    await UpdateNotFinishedRepairs().run()
+async def main(*, notify: bool = False) -> None:
+    await UpdateNotFinishedRepairs(notify=notify).run()
 
 
 if __name__ == "__main__":

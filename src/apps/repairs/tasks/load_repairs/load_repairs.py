@@ -10,13 +10,26 @@
 
 Ошибка не глотается: ``repairs.sync`` прерывается, шаги по неполным данным
 не выполняются.
+
+Уведомление ``well.repair_started`` (``notify=True`` — плановый
+``repairs.sync``) — о каждом новом и дочитанном ремонте, начатом не раньше
+суток назад; пишется перед ``commit`` своего шага, публикуется после. Сбой
+уведомления загрузку не роняет.
 """
 
 import asyncio
 from collections.abc import AsyncGenerator, Sequence
 from datetime import datetime, timedelta
 
-from apps.models_registry import *  # noqa
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from apps.models_registry import *  # noqa: F403
+from apps.notifications.producers.common import emit_all
+from apps.notifications.producers.repairs import (
+    recent_starts,
+    repair_started_notification,
+)
+from apps.notifications.services.publisher import publish_notifications
 from apps.repairs.dto.internal.repositories.repair import CreateRepairDTO
 from apps.repairs.repositories.repair import RepairRepository
 from apps.wells.repositories.well import WellRepository
@@ -48,6 +61,11 @@ class LoadRepairs:
     ITER_SIZE = 5000
     RESTORE_DAYS = 60
 
+    def __init__(self, *, notify: bool = False) -> None:
+        self.notify = notify
+        # (abai_id, начало) дочитанных ремонтов прогона — для уведомлений.
+        self.restored_starts: list[tuple[int, datetime]] = []
+
     async def run(self, *, now: datetime | None = None) -> None:
         logger.info("LoadRepairs task started.")
         now = now or datetime.now(tz=settings.ZONE_INFO).replace(tzinfo=None)
@@ -74,7 +92,12 @@ class LoadRepairs:
                     await app_repairs_repo.bulk_create(
                         data=[repair_dto(r) for r in loadable],
                     )
+                    ids = await self._emit_started(
+                        app_session,
+                        recent_starts(((r.id, r.dbeg) for r in loadable), now),
+                    )
                     await app_session.commit()
+                    await self._publish(ids)
                     created += len(loadable)
                 restored = await self._restore_missing(
                     app_repairs_repo,
@@ -82,7 +105,12 @@ class LoadRepairs:
                     known_wells,
                     since=now - timedelta(days=self.RESTORE_DAYS),
                 )
+                ids = await self._emit_started(
+                    app_session,
+                    recent_starts(self.restored_starts, now),
+                )
                 await app_session.commit()
+                await self._publish(ids)
             except Exception:
                 await app_session.rollback()
                 logger.exception("Failed to load repairs.")
@@ -114,10 +142,43 @@ class LoadRepairs:
         missing = [
             row for row in source if row.id not in existing and row.well in known_wells
         ]
+        self.restored_starts = [(row.id, row.dbeg) for row in missing]
         if missing:
             logger.warning("Repairs missing locally, restored: %s", len(missing))
             await app_repairs_repo.bulk_create(data=[repair_dto(r) for r in missing])
         return len(missing)
+
+    async def _emit_started(
+        self,
+        session: AsyncSession,
+        abai_ids: Sequence[int],
+    ) -> list[int]:
+        """Уведомления о начале ремонтов ``abai_ids`` — в транзакцию шага,
+        прямо перед его commit. Чтение и запись — в savepoint: сбой
+        откатывает только уведомления, загруженные ремонты остаются."""
+        if not self.notify or not abai_ids:
+            return []
+        try:
+            async with session.begin_nested():
+                started = await RepairRepository(session).list_started_by_abai_ids(
+                    abai_ids,
+                )
+            return await emit_all(
+                session,
+                [repair_started_notification(repair) for repair in started],
+            )
+        except Exception:
+            logger.exception("Repair started notifications not written")
+            return []
+
+    @staticmethod
+    async def _publish(ids: list[int]) -> None:
+        if not ids:
+            return
+        try:
+            await publish_notifications(ids)
+        except Exception:
+            logger.exception("Repair started notifications signal failed")
 
     @classmethod
     async def _iter_abai_repairs(
@@ -145,8 +206,8 @@ class LoadRepairs:
                 break
 
 
-async def main() -> None:
-    await LoadRepairs().run()
+async def main(*, notify: bool = False) -> None:
+    await LoadRepairs(notify=notify).run()
 
 
 if __name__ == "__main__":

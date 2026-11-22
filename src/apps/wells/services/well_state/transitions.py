@@ -40,6 +40,9 @@ class OpenState:
     reason_ru: str
     started_at: datetime
     reason_detail_ru: str | None = None
+    # Входы на момент последней записи строки. В решении перехода не
+    # участвуют — нужны уведомлениям (остановка при WRK в ABAI).
+    evidence: dict | None = None
 
 
 @dataclass(frozen=True, slots=True)

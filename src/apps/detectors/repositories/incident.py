@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from apps.detectors.dto.internal.repositories.incident import (
     CreateDetectorCursorDTO,
     CreateDetectorDTO,
+    IncidentStateDTO,
     OpenIncidentDTO,
     UpdateDetectorCursorDTO,
     UpdateDetectorDTO,
@@ -31,6 +32,23 @@ from apps.detectors.models.verification import (
 from apps.telemetry.models.sdmo import SdmoStation
 from apps.wells.models.well import Well
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
+
+# Что upsert и закрытие возвращают (RETURNING): по ним раннеры строят
+# уведомления, не перечитывая эпизод.
+_STATE_COLUMNS = (
+    DetectorIncident.id,
+    DetectorIncident.detector_code,
+    DetectorIncident.well_id,
+    DetectorIncident.entity_id,
+    DetectorIncident.level,
+    DetectorIncident.status,
+    DetectorIncident.opened_at,
+    DetectorIncident.detected_at,
+    DetectorIncident.escalated_at,
+    DetectorIncident.normalized_at,
+    DetectorIncident.close_reason,
+    DetectorIncident.payload,
+)
 
 
 class DetectorRepository(
@@ -98,7 +116,7 @@ class DetectorIncidentRepository(
             ),
         )
 
-    async def upsert_active(self, data: OpenIncidentDTO) -> None:
+    async def upsert_active(self, data: OpenIncidentDTO) -> IncidentStateDTO:
         """Открыть эпизод или обновить существующий активный — один оператор.
 
         Конфликт по частичному уникальному индексу (активный эпизод уже есть)
@@ -107,6 +125,8 @@ class DetectorIncidentRepository(
           - level только повышается (alarm не деградирует в warning);
           - escalated_at ставится один раз (первая эскалация);
           - opened_at/detected_at исходного эпизода сохраняются.
+
+        Возвращает эпизод после записи (id, уровень, payload) — для уведомлений.
         """
         stmt = pg_insert(DetectorIncident).values(
             detector_code=data.detector_code,
@@ -141,8 +161,9 @@ class DetectorIncidentRepository(
                 "payload": stmt.excluded.payload,
                 "updated_at": func.now(),
             },
-        )
-        await self.session.execute(stmt)
+        ).returning(*_STATE_COLUMNS)
+        row = (await self.session.execute(stmt)).one()
+        return IncidentStateDTO.model_validate(row, from_attributes=True)
 
     async def normalize(
         self,
@@ -152,8 +173,9 @@ class DetectorIncidentRepository(
         reason_code: str,
         normalized_at: datetime,
         close_reason: str = CLOSE_REASON_RECOVERED,
-    ) -> None:
-        await self.session.execute(
+    ) -> IncidentStateDTO | None:
+        """Закрыть активный эпизод; вернуть его после закрытия (None — не было)."""
+        result = await self.session.execute(
             update(DetectorIncident)
             .where(
                 DetectorIncident.detector_code == detector_code,
@@ -165,8 +187,13 @@ class DetectorIncidentRepository(
                 status=INCIDENT_STATUS_NORMALIZED,
                 normalized_at=normalized_at,
                 close_reason=close_reason,
-            ),
+            )
+            .returning(*_STATE_COLUMNS),
         )
+        row = result.one_or_none()
+        if row is None:
+            return None
+        return IncidentStateDTO.model_validate(row, from_attributes=True)
 
     async def list_by_well_id(  # noqa: PLR0913
         self,

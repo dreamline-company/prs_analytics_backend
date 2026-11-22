@@ -17,6 +17,14 @@
 Ошибка одного НГДУ логируется и не обрывает остальные; лимит времени таски
 (``SoftTimeLimitExceeded``) прерывает прогон целиком. Все времена — местные
 наивные (СДМО, ABAI и ремонты пишутся в местном).
+
+Уведомления (``notify=True`` — только плановый прогон, не dry-run и не
+ручной первый запуск): остановка и пуск привода при WRK в ABAI — на замене
+строки (``producers.wells``), сбой СДМО по НГДУ и его конец — на смене
+``sdmo_outage_since`` относительно прошлого прогона (``producers.feeds``).
+Пишутся в той же транзакции прямо перед её ``commit``, публикуются после.
+Пуск пишется, только если по закрытой строке записана остановка — в журнале
+или раньше в той же пачке.
 """
 
 import time
@@ -24,7 +32,7 @@ from collections import Counter, defaultdict
 from collections.abc import Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +42,11 @@ from apps.detectors.models.incident import INCIDENT_LEVEL_ALARM
 from apps.detectors.repositories import DetectorIncidentRepository, DetectorRepository
 from apps.detectors.services import WellIncidentStatusService
 from apps.detectors.services.well_incident_status import WELL_STATE_NORMAL
+from apps.notifications.producers.common import emit_all
+from apps.notifications.producers.feeds import sdmo_feed_notification
+from apps.notifications.producers.wells import replace_notifications, stop_dedup_key
+from apps.notifications.repositories.notification import NotificationRepository
+from apps.notifications.services.publisher import publish_notifications
 from apps.org.repositories.oil_field import OilFieldRepository
 from apps.org.repositories.org import OrgRepository
 from apps.repairs.dto.internal.repair import CurrentRepairDTO
@@ -92,6 +105,9 @@ from apps.wells.services.well_state.transitions import (
 from core import get_logger
 from shared.constants.ngdu import NGDU_ORG_TYPE
 
+if TYPE_CHECKING:
+    from apps.notifications.dto.internal.notification import NotificationCreateDTO
+
 logger = get_logger(__name__)
 
 # Сбой СДМО по НГДУ: окно короче порога «нет связи» (60 минут), чтобы сбой
@@ -127,6 +143,7 @@ class WellRef:
 
     id: int
     abai_id: int
+    name: str | None = None
 
 
 @dataclass(slots=True)
@@ -191,18 +208,26 @@ def active_repairs(
     }
 
 
-def detect_outage(last_seen: Iterable[datetime | None], now: datetime) -> bool:
-    """Сбой СДМО по НГДУ: из станций, отчитывавшихся за 7 суток, за последние
-    20 минут отчиталось меньше половины."""
+def reporting_stations(
+    last_seen: Iterable[datetime | None],
+    now: datetime,
+) -> tuple[int, int]:
+    """(отчитались за 20 минут, база — отчитывались за 7 суток)."""
     base = [
         moment
         for moment in last_seen
         if moment is not None and moment >= now - OUTAGE_BASE_WINDOW
     ]
+    return sum(1 for moment in base if moment >= now - OUTAGE_WINDOW), len(base)
+
+
+def detect_outage(last_seen: Iterable[datetime | None], now: datetime) -> bool:
+    """Сбой СДМО по НГДУ: из станций, отчитывавшихся за 7 суток, за последние
+    20 минут отчиталось меньше половины."""
+    reporting, base = reporting_stations(last_seen, now)
     if not base:
         return False
-    reporting = sum(1 for moment in base if moment >= now - OUTAGE_WINDOW)
-    return reporting * 2 < len(base)
+    return reporting * 2 < base
 
 
 def incident_input(status: WellIncidentStatusDTO | None) -> IncidentInput | None:
@@ -242,6 +267,7 @@ def _open_of(row: WellState) -> OpenState:
         reason_ru=row.reason_ru,
         started_at=row.started_at,
         reason_detail_ru=row.reason_detail_ru,
+        evidence=row.evidence,
     )
 
 
@@ -279,7 +305,27 @@ class WellStateRefresher:
         self.unknown_abai_codes: Counter = Counter()
         self.future_samples = 0
 
-    async def run(self, *, dry_run: bool = False) -> list[NgduResult]:
+        # Уведомления: копятся за транзакцию и пишутся перед её commit.
+        self.notify = False
+        self.pending: list[NotificationCreateDTO] = []
+        # Кандидаты в пуск: dedup_key пуска → dedup_key остановки, без
+        # которой пуск не пишется. Отдельно от payload журнала.
+        self.start_candidates: dict[str, str] = {}
+        # Сбой СДМО НГДУ — в транзакцию его скважин: там же сохраняется
+        # ``sdmo_outage_since``, по которому решается следующий прогон.
+        self.feed_events: dict[int, NotificationCreateDTO] = {}
+        # sdmo_outage_since прошлого прогона; нет ключа — первый прогон НГДУ.
+        self.stored_outage: dict[int, datetime | None] = {}
+        self.well_names: dict[int, str | None] = {}
+
+    async def run(
+        self,
+        *,
+        dry_run: bool = False,
+        notify: bool = False,
+    ) -> list[NgduResult]:
+        """``notify`` — слать уведомления (плановый прогон); dry-run не шлёт."""
+        self.notify = notify and not dry_run
         orgs = await self.org_repository.list_all()
         # Снимки до цикла: после commit/rollback ORM-объекты протухают.
         ngdus = sorted(
@@ -289,15 +335,17 @@ class WellStateRefresher:
             ngdu_id: run.sdmo_outage_since
             for ngdu_id, run in (await self.run_repository.get_map()).items()
         }
+        self.stored_outage = dict(self.outage_since_by_ngdu)
         wells_by_ngdu: dict[int, list[WellRef]] = {}
         seen: set[int] = set()
         for org_id, abai_ngdu_id in ngdus:
             wells = [
-                WellRef(id=well.id, abai_id=well.abai_id)
+                WellRef(id=well.id, abai_id=well.abai_id, name=well.name)
                 for well in await self.ngdu_wells_service.list_wells(org_id)
                 if well.id not in seen
             ]
             seen.update(well.id for well in wells)
+            self.well_names.update((well.id, well.name) for well in wells)
             wells_by_ngdu[abai_ngdu_id] = wells
         results = {abai_ngdu_id: NgduResult(abai_ngdu_id) for _, abai_ngdu_id in ngdus}
         started = {abai_ngdu_id: time.monotonic() for abai_ngdu_id in results}
@@ -360,16 +408,19 @@ class WellStateRefresher:
         *,
         dry_run: bool,
     ) -> None:
+        ids: list[int] = []
         try:
             await work
             if dry_run:
                 await self.session.rollback()
             else:
+                ids = await self._emit_pending()
                 await self.session.commit()
         except SoftTimeLimitExceeded:
             await self.session.rollback()
             raise
         except Exception as error:
+            ids = []
             await self.session.rollback()
             if result is not None:
                 result.error = repr(error)
@@ -377,6 +428,50 @@ class WellStateRefresher:
                 "Well state ngdu=%s failed",
                 result.abai_ngdu_id if result is not None else None,
             )
+        finally:
+            self.pending.clear()
+            self.start_candidates.clear()
+        await self._publish(ids)
+
+    async def _emit_pending(self) -> list[int]:
+        """Накопленные уведомления — в транзакцию, прямо перед commit, по
+        порядку: остановка из той же пачки к проверке её пуска уже записана.
+        Сбой записи прогон не роняет: эмиттер и проверка — в savepoint."""
+        ids: list[int] = []
+        try:
+            for item in self.pending:
+                stop_key = self.start_candidates.get(item.dedup_key)
+                if stop_key is not None and not await self._is_written(stop_key):
+                    continue
+                ids.extend(await emit_all(self.session, [item]))
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception:
+            logger.exception("Well state: notifications not written")
+        return ids
+
+    async def _is_written(self, key: str) -> bool:
+        """Есть ли в журнале строка с ``key`` — по уникальному индексу.
+        Сбой чтения — «нет»: пуск пропадает, остальная пачка пишется."""
+        try:
+            async with self.session.begin_nested():
+                return await NotificationRepository(self.session).has_dedup_key(key)
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception:
+            logger.exception("Well state: journal check %s failed", key)
+            return False
+
+    @staticmethod
+    async def _publish(ids: list[int]) -> None:
+        if not ids:
+            return
+        try:
+            await publish_notifications(ids)
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception:
+            logger.exception("Well state: notifications signal failed")
 
     # --- СДМО ---
 
@@ -445,15 +540,46 @@ class WellStateRefresher:
                 advance(self.snapshots[station_id], station_samples, self.drive_stats),
             )
 
-        outage = detect_outage(
-            (self.snapshots[station.id].last_seen_at for station in stations),
-            self.now,
-        )
+        last_seen = [self.snapshots[station.id].last_seen_at for station in stations]
+        outage = detect_outage(last_seen, self.now)
         previous = self.outage_since_by_ngdu.get(abai_ngdu_id)
         outage_since = (previous or self.now - OUTAGE_WINDOW) if outage else None
         self.outage_since_by_ngdu[abai_ngdu_id] = outage_since
         result.outage_since = outage_since
+        self._note_sdmo_feed(abai_ngdu_id, previous, outage_since, last_seen)
         await self._save_snapshots(stations)
+
+    def _note_sdmo_feed(
+        self,
+        abai_ngdu_id: int,
+        previous: datetime | None,
+        current: datetime | None,
+        last_seen: Sequence[datetime | None],
+    ) -> None:
+        """Смена сбоя СДМО НГДУ — уведомление в транзакцию его скважин.
+        Первый прогон НГДУ (нет строки ``wells_state_run``) не шлёт."""
+        if not self.notify or abai_ngdu_id not in self.stored_outage:
+            return
+        try:
+            reporting, base = reporting_stations(last_seen, self.now)
+            item = sdmo_feed_notification(
+                abai_ngdu_id=abai_ngdu_id,
+                previous_since=previous,
+                current_since=current,
+                now=self.now,
+                reporting=reporting,
+                base=base,
+            )
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception:
+            logger.exception(
+                "Well state ngdu=%s: SDMO feed notice failed",
+                abai_ngdu_id,
+            )
+            return
+        if item is not None:
+            self.feed_events[abai_ngdu_id] = item
 
     async def _init_station(self, station_id: int) -> DriveSnapshot:
         """Порции отсчётов назад, пока не найдётся последняя подтверждённая
@@ -523,6 +649,8 @@ class WellStateRefresher:
                 last_duration_ms=round((time.monotonic() - started) * 1000),
             ),
         )
+        if (feed_event := self.feed_events.pop(result.abai_ngdu_id, None)) is not None:
+            self.pending.append(feed_event)
 
     async def _refresh_wells(
         self,
@@ -632,6 +760,7 @@ class WellStateRefresher:
                 reason_code=decision.reason_code,
                 reason_ru=decision.reason_ru,
                 reason_detail_ru=decision.reason_detail_ru,
+                evidence=decision.evidence,
             )
         if kind == KIND_REPLACE:
             await self.state_repository.update_by_id(
@@ -646,8 +775,40 @@ class WellStateRefresher:
                     **fields,
                 ),
             )
-            return _open_of(row)
+            opened = _open_of(row)
+            if kind == KIND_REPLACE:
+                self._note_replace(well_id, result.abai_ngdu_id, open_state, opened)
+            return opened
         return open_state
+
+    def _note_replace(
+        self,
+        well_id: int,
+        abai_ngdu_id: int,
+        closed: OpenState,
+        opened: OpenState,
+    ) -> None:
+        """Замена строки — остановка / кандидат в пуск. Первая строка
+        скважины (open) и правка на месте сюда не попадают."""
+        if not self.notify:
+            return
+        try:
+            notices = replace_notifications(
+                well_id=well_id,
+                well_name=self.well_names.get(well_id),
+                abai_ngdu_id=abai_ngdu_id,
+                closed=closed,
+                opened=opened,
+            )
+            if (start := notices.start_candidate) is not None:
+                self.start_candidates[start.dedup_key] = stop_dedup_key(closed.id)
+                self.pending.append(start)
+            if notices.stopped is not None:
+                self.pending.append(notices.stopped)
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception:
+            logger.exception("Well state well=%s: drive notice failed", well_id)
 
     async def _collect_inputs(
         self,

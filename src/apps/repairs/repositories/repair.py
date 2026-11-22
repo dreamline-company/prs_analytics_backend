@@ -3,7 +3,7 @@ from datetime import date, datetime, time
 
 from sqlalchemy import func, or_, select, update
 
-from apps.repairs.dto.internal.repair import CurrentRepairDTO
+from apps.repairs.dto.internal.repair import CurrentRepairDTO, StartedRepairDTO
 from apps.repairs.dto.internal.repositories.repair import (
     CreateRepairDTO,
     CreateRepairTypeDTO,
@@ -11,6 +11,7 @@ from apps.repairs.dto.internal.repositories.repair import (
     UpdateRepairTypeDTO,
 )
 from apps.repairs.models.repair import Repair, RepairType
+from apps.wells.models.well import Well
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
 
 
@@ -308,6 +309,32 @@ class RepairRepository(
             )
             existing.update(result.scalars())
         return existing
+
+    async def list_started_by_abai_ids(
+        self,
+        abai_ids: Sequence[int],
+    ) -> list[StartedRepairDTO]:
+        """Ремонты по ``abai_id`` с нашим id, скважиной и видом работ — для
+        уведомления о начале ремонта сразу после загрузки."""
+        if not abai_ids:
+            return []
+        stmt = (
+            select(
+                Repair.id,
+                Repair.abai_id,
+                Repair.start_time,
+                Repair.abai_repair_type_id,
+                RepairType.name_ru.label("repair_type_name_ru"),
+                Well.id.label("well_id"),
+                Well.name.label("well_name"),
+            )
+            .join(RepairType, RepairType.abai_id == Repair.repair_type_id, isouter=True)
+            .join(Well, Well.abai_id == Repair.abai_well_id, isouter=True)
+            .where(Repair.abai_id.in_(list(abai_ids)))
+            .order_by(Repair.abai_id.asc())
+        )
+        result = await self.session.execute(stmt)
+        return [StartedRepairDTO.model_validate(dict(row)) for row in result.mappings()]
 
     async def get_last_by_abai_id(self) -> Repair | None:
         rs = await self.get_list(

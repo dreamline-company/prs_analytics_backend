@@ -18,6 +18,11 @@
 после смены правила (``RULE_VERSION``). Отметка старой версии правила
 пересчитывается и без флага, если эпизод в окне ``PRS_WAIT_DAYS``;
 «Подтверждено» текущей версии не снимается никогда.
+
+Первое «Подтверждено» эпизода шлёт уведомление ``r2.confirmed`` — прямо перед
+commit отметки. Шлёт только ежечасная celery-таска: ручной запуск,
+``--incident-ids``, ``--backfill-days``, ``--recheck-days``, ``--dry-run`` и
+подтверждение по улике старше 48 ч (пересчёт истории) — нет.
 """
 
 import argparse
@@ -51,6 +56,12 @@ from apps.detectors.rod_breaks.verification.data_source import (
 )
 from apps.detectors.rod_breaks.verification.rule import VerificationResult, evaluate
 from apps.models_registry import *  # noqa: F403
+from apps.notifications.producers.detectors import (
+    emit_r2_confirmed,
+    is_new_confirmation,
+    publish_safely,
+    verify_run_notifies,
+)
 from core import get_logger
 from core.settings import get_settings
 from shared.database.sql.setup import session_makers
@@ -100,10 +111,14 @@ class R2VerificationRunner:
         *,
         dry_run: bool = False,
         recheck: bool = False,
+        notify: bool = False,
     ) -> None:
         self.session = session
         self.dry_run = dry_run
         self.recheck = recheck
+        # Уведомления о подтверждении шлёт только ежечасная celery-таска; с
+        # флагами пересчёта run их выключает.
+        self.notify = notify
         self.source = R2VerificationSource(session)
         self.verifications = DetectorVerificationRepository(session)
         self.history = DetectorVerificationHistoryRepository(session)
@@ -116,6 +131,16 @@ class R2VerificationRunner:
         recheck_days: int | None = None,
     ) -> Counter:
         now = local_now()
+        notify = (
+            self.notify
+            and not self.recheck
+            and verify_run_notifies(
+                dry_run=self.dry_run,
+                incident_ids=incident_ids,
+                backfill_days=backfill_days,
+                recheck_days=recheck_days,
+            )
+        )
         incidents = await self._targets(now, incident_ids, backfill_days, recheck_days)
         existing = {
             incident_id: VerificationRef.of(row)
@@ -127,24 +152,44 @@ class R2VerificationRunner:
         }
         stats: Counter = Counter()
         for incident in incidents:
+            notification_ids: list[int] = []
             try:
                 data = await self.source.load(incident)
                 result = evaluate(data, now)
-                change = await self._save(
-                    incident,
-                    existing.get(incident.id),
-                    result,
-                    now,
-                )
+                current = existing.get(incident.id)
+                change = await self._save(incident, current, result, now)
                 if self.dry_run:
                     await self.session.rollback()
                 else:
+                    if notify and is_new_confirmation(
+                        verdict_before=current.verdict if current else None,
+                        verdict_after=result.verdict,
+                        written=change is not None,
+                        now=now,
+                        evidence_at=result.evidence_at,
+                        evidence=result.evidence,
+                        rule_changed=(
+                            current is not None
+                            and current.rule_version != config.RULE_VERSION
+                        ),
+                    ):
+                        # Прямо перед commit отметки, в её транзакции.
+                        notification_ids = await emit_r2_confirmed(
+                            self.session,
+                            incident_id=incident.id,
+                            well_id=incident.well_id,
+                            station_id=incident.entity_id,
+                            opened_at=incident.opened_at,
+                            confirmed_at=now,
+                            evidence=result.evidence,
+                        )
                     await self.session.commit()
             except Exception:
                 await self.session.rollback()
                 logger.exception("R2 verify: incident %s failed", incident.id)
                 stats["failed"] += 1
                 continue
+            await publish_safely(notification_ids)
             stats[result.verdict] += 1
             if change:
                 stats[f"changed:{change}"] += 1
@@ -350,12 +395,15 @@ async def main(
     backfill_days: int | None = None,
     recheck_days: int | None = None,
     dry_run: bool = False,
+    notify: bool = False,
 ) -> None:
+    """``notify`` — только из celery-таски: ручной запуск не шлёт."""
     async with session_makers["app"]() as session:
         runner = R2VerificationRunner(
             session,
             dry_run=dry_run,
             recheck=recheck_days is not None,
+            notify=notify,
         )
         await runner.run(
             incident_ids=incident_ids,
@@ -366,7 +414,7 @@ async def main(
 
 @celery_app.task(name="detectors.rod_breaks.verify")
 def verify_rod_break_incidents() -> None:
-    run_async(main())
+    run_async(main(notify=True))
 
 
 def _parse_args() -> argparse.Namespace:
