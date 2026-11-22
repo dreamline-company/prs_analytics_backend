@@ -2,6 +2,10 @@
 
 Протокол: клиент шлёт JSON-объекты; ``{"chat_id", "well_id"}`` привязывает
 скважину (новый thread у агента), ``{"chat_id", "message"}`` — вопрос.
+Привязка может нести ``notification_id`` («Обсудить с ИИ» из карточки
+уведомления): тред запоминает его, и на каждый вопрос в системный промпт
+рядом с досье идёт короткий блок об этом уведомлении. Без ``notification_id``
+всё как раньше.
 """
 
 import json
@@ -19,6 +23,9 @@ from apps.ai_assistant.ai.well_chat_assistant.agent import (
     well_chat_assistant_agent,
 )
 from apps.ai_assistant.ai.well_chat_assistant.dossier import well_dossier_provider
+from apps.ai_assistant.ai.well_chat_assistant.notification import (
+    notification_block_provider,
+)
 from apps.ai_assistant.dto.commands.ask_well_chat_assistant import (
     AskWellChatAssistantCommand,
 )
@@ -63,9 +70,11 @@ class WellChatSession:
     chat_id: str
     well_id: int | None = None
     thread_id: str | None = None
+    notification_id: int | None = None
 
-    def bind_well(self, well_id: int) -> None:
+    def bind_well(self, well_id: int, notification_id: int | None = None) -> None:
         self.well_id = well_id
+        self.notification_id = notification_id
         self.thread_id = _new_thread_id(self.chat_id)
 
     def ensure_thread(self) -> str:
@@ -111,6 +120,7 @@ async def _handle_message(
                 chat_id=session.chat_id,
                 thread_id=thread_id,
                 well_id=session.well_id,
+                notification_id=session.notification_id,
                 message=HumanMessageDTO(content=request.message),
             ),
         )
@@ -135,11 +145,12 @@ async def _handle_set_well(
     session: WellChatSession,
     request: SetWellRequestDTO,
 ) -> None:
-    session.bind_well(request.well_id)
+    session.bind_well(request.well_id, request.notification_id)
     await ws.send_json(
         WellSetAckDTO(
             chat_id=session.chat_id,
             well_id=request.well_id,
+            notification_id=request.notification_id,
         ).model_dump(mode="json"),
     )
 
@@ -154,6 +165,7 @@ async def well_assistant_chat_websocket(
         agent=well_chat_assistant_agent,
         config_factory=get_well_agent_config,
         dossier_provider=well_dossier_provider.get,
+        notification_provider=notification_block_provider.get,
     )
     session = WellChatSession(chat_id=chat_id)
 

@@ -15,3 +15,4 @@ class WellSetAckDTO(BaseModel):
     type: Literal["well_set"] = "well_set"
     chat_id: str
     well_id: int
+    notification_id: int | None = None

@@ -9,3 +9,5 @@ class AskWellChatAssistantCommand:
     thread_id: str
     message: HumanMessageDTO
     well_id: int | None = None
+    # Уведомление, из карточки которого открыли чат; None — обычный чат.
+    notification_id: int | None = None

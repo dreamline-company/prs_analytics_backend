@@ -32,6 +32,7 @@ EXPECTED_TOOLS = {
     "get_compensation_contour": set(),
     "get_donor_role": set(),
     "list_field_donors": {"status"},
+    "list_well_notifications": {"days"},
 }
 
 
