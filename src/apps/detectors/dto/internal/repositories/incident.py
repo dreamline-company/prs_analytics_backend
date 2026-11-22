@@ -34,6 +34,23 @@ class OpenIncidentDTO(RepositoryDTO):
     payload: dict | None = None
 
 
+class IncidentStateDTO(RepositoryDTO):
+    """Эпизод сразу после upsert/закрытия (RETURNING) — для уведомлений."""
+
+    id: int
+    detector_code: str
+    well_id: int
+    entity_id: int | None = None
+    level: str
+    status: str
+    opened_at: datetime
+    detected_at: datetime
+    escalated_at: datetime | None = None
+    normalized_at: datetime | None = None
+    close_reason: str | None = None
+    payload: dict | None = None
+
+
 class UpdateIncidentDTO(RepositoryDTO):
     status: str | None = None
     level: str | None = None

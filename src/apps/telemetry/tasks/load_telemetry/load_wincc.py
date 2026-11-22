@@ -15,6 +15,12 @@
 
 Замеры с датой позже ``future_limit()`` (опечатка в ЦИТС) не грузятся и не
 сдвигают курсор: иначе загрузка НГДУ встала бы до этой даты.
+
+Плановый прогон Celery (``notify=True``) после каждого НГДУ — и после
+упавшей загрузки тоже — сверяет последний замер НГДУ у нас: нет новых
+замеров ``CITS_STALE_AFTER`` — ``feed.cits_stale``, снова пошли —
+``feed.cits_restored`` (``producers.feeds``). Ручной запуск и догрузка
+истории (``--since``) не шлют.
 """
 
 import argparse
@@ -24,6 +30,18 @@ from datetime import datetime, timedelta
 
 from apps.celery_app import celery_app, run_async
 from apps.models_registry import *  # noqa: F403
+from apps.notifications.constants import local_now
+from apps.notifications.producers.common import SOURCE_FEED_CITS, dedup_key, emit_all
+from apps.notifications.producers.feeds import (
+    CITS_CLOCK_TOLERANCE,
+    EVENT_CITS_RESTORED,
+    EVENT_CITS_STALE,
+    CitsLoadResult,
+    cits_feed_notification,
+    cits_stale_ref,
+)
+from apps.notifications.repositories.notification import NotificationRepository
+from apps.notifications.services.publisher import publish_notifications
 from apps.telemetry.dto.internal.repositories import CreateTelemetryDTO
 from apps.telemetry.repositories import TelemetryRepository
 from apps.telemetry.services.clock import future_limit
@@ -54,6 +72,12 @@ logger = get_logger(__name__)
 WINCC_FIELD_ALIASES = {"ZNT": "ZHT"}
 
 NGDU_NAMES = ("KMG", "DMG", "ZHMG", "ZHLMG")
+NGDU_IDS = {
+    "KMG": AbaiNGDUIDsEnum.KMG,
+    "DMG": AbaiNGDUIDsEnum.DMG,
+    "ZHMG": AbaiNGDUIDsEnum.ZHMG,
+    "ZHLMG": AbaiNGDUIDsEnum.ZHlMG,
+}
 
 type TelemetryKey = tuple[int, datetime]
 
@@ -81,10 +105,14 @@ class WinccLoadTelemetry:
         *,
         ngdus: Sequence[str] = NGDU_NAMES,
         since: datetime | None = None,
+        notify: bool = False,
     ) -> None:
         self.ngdus = tuple(ngdus)
         # Явная дата — разовая догрузка истории вместо перечитки окна.
         self.since = since
+        # Уведомления о сбое ЦИТС — только плановый прогон, не догрузка.
+        self.notify = notify and since is None
+        self.load_results: dict[int, CitsLoadResult] = {}
 
     async def run(self) -> None:
         async with session_makers["app"]() as app_session:
@@ -104,8 +132,66 @@ class WinccLoadTelemetry:
         for name in self.ngdus:
             try:
                 await loaders[name](app_wells_ids)
-            except Exception:
+            except Exception as error:
                 logger.exception("WinCC telemetry load [%s] failed; continuing", name)
+                self.load_results.setdefault(
+                    NGDU_IDS[name],
+                    CitsLoadResult(error=repr(error)),
+                )
+            if self.notify:
+                await self._check_cits_feed(NGDU_IDS[name])
+
+    async def _check_cits_feed(self, ngdu_id: int) -> None:
+        """Свежесть замеров НГДУ у нас → ``feed.cits_stale`` / ``feed.cits_restored``.
+
+        Своя короткая сессия только для уведомления; сбой пишется в лог и
+        загрузку не роняет. Последний замер — по индексу
+        ``(abai_ngdu_id, date_time)``, не позже «сейчас» + час (а не
+        ``future_limit()`` загрузки), открытый сбой — по журналу.
+        """
+        try:
+            ids: list[int] = []
+            now = local_now()
+            async with session_makers["app"]() as session:
+                last_tm = await TelemetryRepository(session).get_last_by_ngdu_id(
+                    abai_ngdu_id=ngdu_id,
+                    until=now + CITS_CLOCK_TOLERANCE,
+                )
+                if last_tm is None:
+                    return
+                journal = NotificationRepository(session)
+                row = await journal.get_last_feed_row(
+                    EVENT_CITS_STALE,
+                    source_type=SOURCE_FEED_CITS,
+                    abai_ngdu_id=ngdu_id,
+                )
+                previous = None
+                if row is not None and row.source_id is not None:
+                    previous = cits_stale_ref(
+                        source_id=row.source_id,
+                        payload=row.payload,
+                        restored=await journal.has_dedup_key(
+                            dedup_key(
+                                EVENT_CITS_RESTORED,
+                                SOURCE_FEED_CITS,
+                                row.source_id,
+                            ),
+                        ),
+                    )
+                item = cits_feed_notification(
+                    abai_ngdu_id=ngdu_id,
+                    last_measure_at=last_tm.date_time,
+                    now=now,
+                    previous=previous,
+                    load=self.load_results.get(ngdu_id),
+                )
+                if item is None:
+                    return
+                ids = await emit_all(session, [item])
+                await session.commit()
+            await publish_notifications(ids)
+        except Exception:
+            logger.exception("CITS feed check for NGDU #%s failed", ngdu_id)
 
     async def _load_dmg(
         self,
@@ -204,10 +290,16 @@ class WinccLoadTelemetry:
                         c,
                         saved,
                     )
-            except Exception:
+            except Exception as error:
                 logger.exception("Error while loading NGDU #%s telemetry.", ngdu_id)
                 await app_session.rollback()
+                self.load_results[ngdu_id] = CitsLoadResult(
+                    read=n,
+                    added=added,
+                    error=repr(error),
+                )
             else:
+                self.load_results[ngdu_id] = CitsLoadResult(read=n, added=added)
                 logger.info(
                     "NGDU #%s telemetry loaded: read=%s, added=%s, since=%s",
                     ngdu_id,
@@ -329,14 +421,16 @@ class WinccLoadTelemetry:
 async def main(
     ngdus: Sequence[str] = NGDU_NAMES,
     since: datetime | None = None,
+    *,
+    notify: bool = False,
 ) -> None:
-    await WinccLoadTelemetry(ngdus=ngdus, since=since).run()
+    await WinccLoadTelemetry(ngdus=ngdus, since=since, notify=notify).run()
 
 
 @celery_app.task(name="telemetry.wincc.incremental_load")
 def load_wincc_incremental() -> None:
     """Инкремент замеров дебитов из WinCC всех НГДУ (с перечиткой окна)."""
-    run_async(main())
+    run_async(main(notify=True))
 
 
 if __name__ == "__main__":

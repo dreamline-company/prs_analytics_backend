@@ -20,15 +20,27 @@
 Время копируется как есть — UTC, открытый интервал до 3333-12-31. Строки по
 скважине, которой нет в нашем ``wells_well``, пропускаются (FK на
 ``wells_well.abai_id``).
+
+Сработавшая защита шага 4 шлёт ``feed.abai_guard`` (``notify=True`` — плановый
+прогон Celery), не чаще раза в час: пишется перед ``commit``, публикуется
+после.
 """
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.celery_app import celery_app, run_async
 from apps.models_registry import *  # noqa: F403
+from apps.notifications.constants import local_now
+from apps.notifications.producers.common import emit_all
+from apps.notifications.producers.feeds import (
+    ABAI_GUARD_STATUSES,
+    abai_guard_notification,
+)
+from apps.notifications.services.publisher import publish_notifications
 from apps.wells.dto.internal.repositories.well_status import (
     CreateWellStatusDTO,
     CreateWellStatusReasonDTO,
@@ -59,6 +71,9 @@ from shared.integrations.abai.repositories import (
     ABAIWellStatusTypeRepository,
 )
 
+if TYPE_CHECKING:
+    from apps.notifications.dto.internal.notification import NotificationCreateDTO
+
 logger = get_logger(__name__)
 
 
@@ -73,7 +88,13 @@ class LoadWellStatus:
     MAX_GONE = 50
     MAX_GONE_SHARE = 0.05
 
-    def __init__(self, abai_session: AsyncSession, app_session: AsyncSession) -> None:
+    def __init__(
+        self,
+        abai_session: AsyncSession,
+        app_session: AsyncSession,
+        *,
+        notify: bool = False,
+    ) -> None:
         self.abai_status_repo = ABAIWellStatusRepository(session=abai_session)
         self.abai_type_repo = ABAIWellStatusTypeRepository(session=abai_session)
         self.abai_reason_repo = ABAIReasonRepository(session=abai_session)
@@ -85,6 +106,9 @@ class LoadWellStatus:
         self.known_well_ids: set[int] = set()
         self.known_type_ids: set[int] = set()
         self.known_reason_ids: set[int] = set()
+        self.notify = notify
+        # Сработавшая защита — уведомление, пишется перед commit прогона.
+        self.guard_events: list[NotificationCreateDTO] = []
 
     async def run(self, *, now: datetime | None = None) -> None:
         now = now or datetime.now(UTC).replace(tzinfo=None)
@@ -96,11 +120,13 @@ class LoadWellStatus:
             created, skipped = await self._load_new_rows()
             restored = await self._restore_missing(now)
             updated, deleted = await self._refresh_open_intervals(now)
+            ids = await self._emit_guard()
             await self.app_session.commit()
         except Exception:
             await self.app_session.rollback()
             logger.exception("Error while loading well statuses")
             raise
+        await self._publish(ids)
 
         logger.info(
             "Well status sync finished: created=%s, restored=%s, updated=%s, "
@@ -269,11 +295,48 @@ class LoadWellStatus:
                 len(gone),
                 len(abai_ids),
             )
+            self._note_guard(len(gone), len(abai_ids))
             return updated, 0
         if gone:
             logger.info("Well statuses deleted in source: %s", len(gone))
             await self.status_repo.delete_by_abai_ids(gone)
         return updated, len(gone)
+
+    def _note_guard(self, gone: int, checked: int) -> None:
+        if not self.notify:
+            return
+        try:
+            self.guard_events.append(
+                abai_guard_notification(
+                    guard=ABAI_GUARD_STATUSES,
+                    gone=gone,
+                    checked=checked,
+                    now=local_now(),
+                ),
+            )
+        except Exception:
+            logger.exception("ABAI guard notification not built")
+
+    async def _emit_guard(self) -> list[int]:
+        """Уведомление защиты — в транзакцию прогона, прямо перед commit."""
+        if not self.guard_events:
+            return []
+        try:
+            return await emit_all(self.app_session, self.guard_events)
+        except Exception:
+            logger.exception("ABAI guard notification not written")
+            return []
+        finally:
+            self.guard_events = []
+
+    @staticmethod
+    async def _publish(ids: list[int]) -> None:
+        if not ids:
+            return
+        try:
+            await publish_notifications(ids)
+        except Exception:
+            logger.exception("ABAI guard notification signal failed")
 
     def _create_dto(self, row: ABAIWellStatus) -> CreateWellStatusDTO:
         return CreateWellStatusDTO(
@@ -320,7 +383,7 @@ class LoadWellStatus:
         )
 
 
-async def main() -> None:
+async def main(*, notify: bool = False) -> None:
     async with (
         session_makers["abai"]() as abai_session,
         session_makers["app"]() as app_session,
@@ -328,12 +391,13 @@ async def main() -> None:
         await LoadWellStatus(
             abai_session=abai_session,
             app_session=app_session,
+            notify=notify,
         ).run()
 
 
 @celery_app.task(name="wells.well_status.incremental_load")
 def load_well_status_incremental() -> None:
-    run_async(main())
+    run_async(main(notify=True))
 
 
 if __name__ == "__main__":

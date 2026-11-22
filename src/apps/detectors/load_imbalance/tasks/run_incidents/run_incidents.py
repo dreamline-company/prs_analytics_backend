@@ -6,6 +6,11 @@
 эпизода -> upsert инцидентов -> сдвиг курсора. Инциденты и курсор пишутся в
 одной транзакции; повторная обработка того же окна идемпотентна (частичный
 уникальный индекс инцидентов + детерминированный opened_at).
+
+Уведомления (``r9.opened`` / ``r9.alarm`` / ``r9.closed``) пишутся в ту же
+транзакцию станции прямо перед её commit. Шлёт только celery-таска (beat,
+диспетчер); ручной запуск и первый прогон станции (курсора нет — разбор
+истории) — нет.
 """
 
 import asyncio
@@ -44,6 +49,15 @@ from apps.detectors.repositories import (
     DetectorIncidentRepository,
 )
 from apps.models_registry import *  # noqa: F403
+from apps.notifications.producers.detectors import (
+    TRANSITION_CLOSED,
+    TRANSITION_ESCALATED,
+    TRANSITION_OPENED,
+    IncidentTransition,
+    emit_transitions,
+    live_run_notifies,
+    publish_safely,
+)
 from apps.telemetry.models.sdmo import SdmoStation
 from apps.telemetry.repositories.sdmo import SdmoStationRepository
 from core import get_logger
@@ -54,6 +68,12 @@ from shared.repository.sqlalchemy import QuerySpec
 logger = get_logger(__name__)
 
 DETECTOR_CODE = "R9"
+
+# Действия state machine, о которых шлются уведомления (закрытие — отдельно).
+_TRANSITION_BY_ACTION = {
+    ACTION_OPEN_WARNING: TRANSITION_OPENED,
+    ACTION_ESCALATE: TRANSITION_ESCALATED,
+}
 
 
 def _day_start(day: date) -> datetime:
@@ -92,8 +112,10 @@ async def target_stations(
 
 
 class LoadImbalanceIncidentRunner:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, notify: bool = False) -> None:
         self.session = session
+        # Уведомления шлёт только celery-таска (beat 04:10, диспетчер).
+        self.notify = notify
         self.source = LoadImbalanceTelemetrySource(session)
         self.incident_repo = DetectorIncidentRepository(session)
         self.cursor_repo = DetectorCursorRepository(session)
@@ -108,11 +130,24 @@ class LoadImbalanceIncidentRunner:
         opened = escalated = normalized = 0
         for station in stations:
             cursor = cursors.get(station.id)
+            cursor_ts = cursor.last_event_at if cursor else None
+            transitions: list[IncidentTransition] = []
+            notification_ids: list[int] = []
             try:
                 counts = await self._run_station(
                     station,
-                    cursor_ts=cursor.last_event_at if cursor else None,
+                    cursor_ts=cursor_ts,
+                    transitions=transitions,
                 )
+                if live_run_notifies(
+                    notify=self.notify,
+                    has_cursor=cursor_ts is not None,
+                ):
+                    # Прямо перед commit, в транзакции станции.
+                    notification_ids = await emit_transitions(
+                        self.session,
+                        transitions,
+                    )
                 await self.session.commit()
             except Exception:
                 await self.session.rollback()
@@ -121,6 +156,7 @@ class LoadImbalanceIncidentRunner:
                     station.id,
                 )
                 continue
+            await publish_safely(notification_ids)
             opened += counts[0]
             escalated += counts[1]
             normalized += counts[2]
@@ -151,7 +187,10 @@ class LoadImbalanceIncidentRunner:
         station: SdmoStation,
         *,
         cursor_ts: datetime | None,
+        transitions: list[IncidentTransition] | None = None,
     ) -> tuple[int, int, int]:
+        """``transitions`` — сюда кладутся открытия, эскалации и закрытия
+        эпизодов для уведомлений."""
         # Местное время: сутки СДМО (savetime) и расписание — по Атырау; по
         # UTC в 04:10 «сегодня» ещё вчера, и вчерашние сутки не оценивались.
         now = datetime.now(get_settings().ZONE_INFO).replace(tzinfo=None)
@@ -201,6 +240,7 @@ class LoadImbalanceIncidentRunner:
             verdicts=verdicts,
             active=active,
             now=now,
+            transitions=transitions,
         )
         if is_open:
             normalized += await self._close_if_stale(
@@ -208,6 +248,8 @@ class LoadImbalanceIncidentRunner:
                 days=days,
                 as_of=as_of,
                 fallback=active.last_seen_at.date() if active else None,
+                now=now,
+                transitions=transitions,
             )
 
         await self.cursor_repo.upsert(
@@ -218,7 +260,7 @@ class LoadImbalanceIncidentRunner:
         )
         return (opened, escalated, normalized)
 
-    async def _apply(
+    async def _apply(  # noqa: PLR0913
         self,
         *,
         station: SdmoStation,
@@ -226,8 +268,13 @@ class LoadImbalanceIncidentRunner:
         verdicts: list[DayVerdict],
         active: DetectorIncident | None,
         now: datetime,
+        transitions: list[IncidentTransition] | None = None,
     ) -> tuple[int, int, int, bool]:
-        """Записать действия state machine. Возвращает счётчики и «эпизод открыт»."""
+        """Записать действия state machine. Возвращает счётчики и «эпизод открыт».
+
+        Переходы для уведомлений датируются концом суток, по которым принято
+        решение (тогда событие стало известно).
+        """
         opened = escalated = normalized = 0
         opened_at = active.opened_at if active else None
         detected_at = active.detected_at if active else None
@@ -259,12 +306,21 @@ class LoadImbalanceIncidentRunner:
                 continue
 
             if action.kind == ACTION_NORMALIZE:
-                await self.incident_repo.normalize(
+                closed = await self.incident_repo.normalize(
                     detector_code=DETECTOR_CODE,
                     well_id=station.well_id,
                     reason_code=incident_config.REASON_LOAD_IMBALANCE,
                     normalized_at=_day_end(action.day),
                 )
+                if transitions is not None and closed is not None:
+                    transitions.append(
+                        IncidentTransition(
+                            kind=TRANSITION_CLOSED,
+                            incident=closed,
+                            at=_day_end(action.day),
+                            detected_at=now,
+                        ),
+                    )
                 opened_at = detected_at = None
                 is_open = False
                 normalized += 1
@@ -273,7 +329,7 @@ class LoadImbalanceIncidentRunner:
             if action.kind == ACTION_ESCALATE:
                 escalated += 1
 
-            await self.incident_repo.upsert_active(
+            state = await self.incident_repo.upsert_active(
                 self._build_upsert(
                     station=station,
                     action=action,
@@ -282,22 +338,35 @@ class LoadImbalanceIncidentRunner:
                     detected_at=detected_at or now,
                 ),
             )
+            kind = _TRANSITION_BY_ACTION.get(action.kind)
+            if transitions is not None and kind is not None:
+                transitions.append(
+                    IncidentTransition(
+                        kind=kind,
+                        incident=state,
+                        at=_day_end(action.day),
+                        detected_at=now,
+                    ),
+                )
 
         return (opened, escalated, normalized, is_open)
 
-    async def _close_if_stale(
+    async def _close_if_stale(  # noqa: PLR0913
         self,
         *,
         station: SdmoStation,
         days: list[DayAggregate],
         as_of: date,
         fallback: date | None,
+        now: datetime | None = None,
+        transitions: list[IncidentTransition] | None = None,
     ) -> int:
         """Закрыть повисший эпизод, если валидных суток давно нет.
 
         Пока станция молчит (снята, идёт ПРС, умер канал), сутки уходят в
         «не определено»: ни сработки, ни восстановления, и эпизод висел бы
-        вечно.
+        вечно. Закрытие по давности решается настенными часами — переход для
+        уведомления датируется моментом прогона.
         """
         last_valid = max(
             (day.day for day in days if rule.is_valid(day)),
@@ -308,13 +377,22 @@ class LoadImbalanceIncidentRunner:
         if (as_of - last_valid).days <= incident_config.STALE_DAYS:
             return 0
 
-        await self.incident_repo.normalize(
+        closed = await self.incident_repo.normalize(
             detector_code=DETECTOR_CODE,
             well_id=station.well_id,
             reason_code=incident_config.REASON_LOAD_IMBALANCE,
             normalized_at=_day_end(last_valid),
             close_reason=CLOSE_REASON_STALE,
         )
+        if transitions is not None and closed is not None and now is not None:
+            transitions.append(
+                IncidentTransition(
+                    kind=TRANSITION_CLOSED,
+                    incident=closed,
+                    at=now,
+                    detected_at=now,
+                ),
+            )
         return 1
 
     @staticmethod
@@ -386,14 +464,19 @@ def _build_payload(verdicts: list[DayVerdict], *, until: date) -> dict:
     }
 
 
-async def main(entity_ids: list[int] | None = None) -> None:
+async def main(
+    entity_ids: list[int] | None = None,
+    *,
+    notify: bool = False,
+) -> None:
+    """``notify`` — только из celery-таски: ручной запуск не шлёт."""
     async with session_makers["app"]() as session:
-        await LoadImbalanceIncidentRunner(session).run(entity_ids)
+        await LoadImbalanceIncidentRunner(session, notify=notify).run(entity_ids)
 
 
 @celery_app.task(name="detectors.load_imbalance.run_incidents")
 def run_load_imbalance_incidents(entity_ids: list[int] | None = None) -> None:
-    run_async(main(entity_ids))
+    run_async(main(entity_ids, notify=True))
 
 
 if __name__ == "__main__":

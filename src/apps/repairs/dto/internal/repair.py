@@ -29,3 +29,15 @@ class CurrentRepairDTO(RepairDTO):
     """
 
     repair_type_name_ru: str | None = None
+
+
+class StartedRepairDTO(BaseModel):
+    """Ремонт для уведомления о начале: скважина и вид работ одним запросом."""
+
+    id: int
+    abai_id: int
+    start_time: datetime
+    abai_repair_type_id: int | None = None
+    repair_type_name_ru: str | None = None
+    well_id: int | None = None
+    well_name: str | None = None

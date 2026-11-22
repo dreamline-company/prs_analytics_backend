@@ -4,6 +4,9 @@
 незавершённых. Шаги зависят друг от друга, поэтому один celery-таск с
 последовательными await вместо chain: упавший шаг прерывает прогон, следующие
 шаги по неполным данным не выполняются.
+
+Уведомления (начало ремонта, защита ABAI) шлёт только плановый прогон Celery;
+ручной запуск из командной строки — нет.
 """
 
 import asyncio
@@ -21,19 +24,19 @@ from core import get_logger
 logger = get_logger(__name__)
 
 
-async def main() -> None:
+async def main(*, notify: bool = False) -> None:
     logger.info("Repairs sync 1/3: load_repair_work_types")
     await load_repair_work_types()
     logger.info("Repairs sync 2/3: load_repairs")
-    await load_repairs()
+    await load_repairs(notify=notify)
     logger.info("Repairs sync 3/3: update_not_finished_repairs")
-    await update_not_finished_repairs()
+    await update_not_finished_repairs(notify=notify)
     logger.info("Repairs sync done")
 
 
 @celery_app.task(name="repairs.sync")
 def sync_repairs() -> None:
-    run_async(main())
+    run_async(main(notify=True))
 
 
 if __name__ == "__main__":

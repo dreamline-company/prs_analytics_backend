@@ -5,6 +5,11 @@
 24ч-контекстом -> state machine эпизода -> upsert инцидентов -> сдвиг курсора.
 Инциденты и курсор пишутся в одной транзакции; повторная обработка того же
 окна идемпотентна (частичный уникальный индекс инцидентов).
+
+Уведомления (``r2.load_drop`` / ``r2.possible_rod_break`` / ``r2.closed``)
+пишутся в ту же транзакцию станции прямо перед её commit. Шлёт только
+celery-таска (диспетчер, подметальщик); ручной запуск и первый прогон станции
+(курсора нет — разбор истории) — нет.
 """
 
 import asyncio
@@ -45,6 +50,15 @@ from apps.detectors.rod_breaks.services.telemetry_source import (
     RodBreakTelemetrySource,
 )
 from apps.models_registry import *  # noqa: F403
+from apps.notifications.producers.detectors import (
+    TRANSITION_CLOSED,
+    TRANSITION_ESCALATED,
+    TRANSITION_OPENED,
+    IncidentTransition,
+    emit_transitions,
+    live_run_notifies,
+    publish_safely,
+)
 from apps.repairs.models.repair import Repair
 from apps.telemetry.models.sdmo import SdmoStation
 from apps.telemetry.repositories.sdmo import SdmoStationRepository
@@ -67,6 +81,13 @@ _CONTEXT = timedelta(
     hours=max(config.MEDIAN_WINDOW_HOURS, incident_config.BASE_HOURS) + 2,
 )
 _BASE_WINDOW = timedelta(hours=incident_config.BASE_HOURS)
+
+# Действия state machine, о которых шлются уведомления (закрытие — отдельно).
+_TRANSITION_BY_ACTION = {
+    ACTION_OPEN_WARNING: TRANSITION_OPENED,
+    ACTION_OPEN_ALARM: TRANSITION_OPENED,
+    ACTION_ESCALATE: TRANSITION_ESCALATED,
+}
 
 # Ключи payload, которые живут весь эпизод: payload перезаписывается каждым
 # upsert'ом, поэтому их переносят из активного эпизода.
@@ -104,8 +125,10 @@ async def target_stations(
 
 
 class RodBreakIncidentRunner:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, notify: bool = False) -> None:
         self.session = session
+        # Уведомления шлёт только celery-таска (диспетчер, подметальщик).
+        self.notify = notify
         self.source = RodBreakTelemetrySource(session)
         self.incident_repo = DetectorIncidentRepository(session)
         self.cursor_repo = DetectorCursorRepository(session)
@@ -120,11 +143,24 @@ class RodBreakIncidentRunner:
         opened = escalated = normalized = 0
         for station in stations:
             cursor = cursors.get(station.id)
+            cursor_ts = cursor.last_event_at if cursor else None
+            transitions: list[IncidentTransition] = []
+            notification_ids: list[int] = []
             try:
                 o, e, n = await self._run_station(
                     station,
-                    cursor_ts=cursor.last_event_at if cursor else None,
+                    cursor_ts=cursor_ts,
+                    transitions=transitions,
                 )
+                if live_run_notifies(
+                    notify=self.notify,
+                    has_cursor=cursor_ts is not None,
+                ):
+                    # Прямо перед commit, в транзакции станции.
+                    notification_ids = await emit_transitions(
+                        self.session,
+                        transitions,
+                    )
                 await self.session.commit()
             except Exception:
                 await self.session.rollback()
@@ -133,6 +169,7 @@ class RodBreakIncidentRunner:
                     station.id,
                 )
                 continue
+            await publish_safely(notification_ids)
             opened += o
             escalated += e
             normalized += n
@@ -163,7 +200,10 @@ class RodBreakIncidentRunner:
         station: SdmoStation,
         *,
         cursor_ts: datetime | None,
+        transitions: list[IncidentTransition] | None = None,
     ) -> tuple[int, int, int]:
+        """``transitions`` — сюда кладутся открытия, эскалации и закрытия
+        эпизодов для уведомлений."""
         # Местное время, как savetime СДМО: по UTC последние 5 часов данных
         # считались «будущим» и не оценивались.
         now = datetime.now(get_settings().ZONE_INFO).replace(tzinfo=None)
@@ -246,13 +286,22 @@ class RodBreakIncidentRunner:
                 continue
 
             if action.kind == ACTION_NORMALIZE:
-                await self.incident_repo.normalize(
+                closed = await self.incident_repo.normalize(
                     detector_code=DETECTOR_CODE,
                     well_id=station.well_id,
                     reason_code=incident_config.REASON_ROD_BREAK,
                     normalized_at=action.at,
                     close_reason=action.close_reason or CLOSE_REASON_RECOVERED,
                 )
+                if transitions is not None and closed is not None:
+                    transitions.append(
+                        IncidentTransition(
+                            kind=TRANSITION_CLOSED,
+                            incident=closed,
+                            at=action.at,
+                            detected_at=now,
+                        ),
+                    )
                 active_opened_at = None
                 active_detected_at = None
                 extras = {}
@@ -263,18 +312,31 @@ class RodBreakIncidentRunner:
                 escalated += 1
                 extras = {**extras, "stage_check": action.evidence}
 
-            await self.incident_repo.upsert_active(
-                self._build_upsert(
-                    station=station,
-                    action=action,
-                    series=series,
-                    base_moment=base_moment,
-                    now=now,
-                    opened_at=active_opened_at or action.at,
-                    detected_at=active_detected_at or now,
-                    extras=extras,
-                ),
+            upsert = self._build_upsert(
+                station=station,
+                action=action,
+                series=series,
+                base_moment=base_moment,
+                now=now,
+                opened_at=active_opened_at or action.at,
+                detected_at=active_detected_at or now,
+                extras=extras,
             )
+            state = await self.incident_repo.upsert_active(upsert)
+            kind = _TRANSITION_BY_ACTION.get(action.kind)
+            if transitions is not None and kind is not None:
+                transitions.append(
+                    IncidentTransition(
+                        kind=kind,
+                        incident=state,
+                        # Время данных: открытие — T0, авария — корзина, на
+                        # которой подтвердилась (эскалация / старое открытие).
+                        at=upsert.escalated_at
+                        if upsert.level == INCIDENT_LEVEL_ALARM and upsert.escalated_at
+                        else upsert.opened_at,
+                        detected_at=now,
+                    ),
+                )
 
         last_complete = series[-1].start_ts + _BUCKET_SPAN if series else None
         await self.cursor_repo.upsert(
@@ -451,14 +513,19 @@ class RodBreakIncidentRunner:
         return payload
 
 
-async def main(entity_ids: list[int] | None = None) -> None:
+async def main(
+    entity_ids: list[int] | None = None,
+    *,
+    notify: bool = False,
+) -> None:
+    """``notify`` — только из celery-таски: ручной запуск не шлёт."""
     async with session_makers["app"]() as session:
-        await RodBreakIncidentRunner(session).run(entity_ids)
+        await RodBreakIncidentRunner(session, notify=notify).run(entity_ids)
 
 
 @celery_app.task(name="detectors.rod_breaks.run_incidents")
 def run_rod_break_incidents(entity_ids: list[int] | None = None) -> None:
-    run_async(main(entity_ids))
+    run_async(main(entity_ids, notify=True))
 
 
 if __name__ == "__main__":

@@ -13,6 +13,9 @@
 
 ``--dry-run`` считает всё и откатывает транзакции — для сводки до записи.
 Повторный запуск идемпотентен: открытые строки обновляются, не дублируются.
+
+Уведомления (остановка и пуск привода, сбой СДМО по НГДУ) шлёт только
+плановый прогон Celery; ручной запуск из командной строки — нет.
 """
 
 import argparse
@@ -42,7 +45,7 @@ def local_now() -> datetime:
     return datetime.now(get_settings().ZONE_INFO).replace(tzinfo=None)
 
 
-async def main(*, dry_run: bool = False) -> list[NgduResult]:
+async def main(*, dry_run: bool = False, notify: bool = False) -> list[NgduResult]:
     async with redis_lock(LOCK_KEY, ttl_sec=LOCK_TTL_SEC) as acquired:
         if not acquired:
             logger.info("Well state refresh already running; skipped")
@@ -50,6 +53,7 @@ async def main(*, dry_run: bool = False) -> list[NgduResult]:
         async with session_makers["app"]() as session:
             return await WellStateRefresher(session, now=local_now()).run(
                 dry_run=dry_run,
+                notify=notify,
             )
 
 
@@ -59,7 +63,7 @@ async def main(*, dry_run: bool = False) -> list[NgduResult]:
     time_limit=TIME_LIMIT_SEC,
 )
 def refresh_well_state() -> None:
-    run_async(main())
+    run_async(main(notify=True))
 
 
 def _print_summary(results: list[NgduResult], *, dry_run: bool) -> None:
