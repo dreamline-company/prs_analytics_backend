@@ -1,5 +1,6 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -52,6 +53,37 @@ VLT_STATUS_REGISTER = 1999
 # каждой десятой строке случайным образом — 50 строк (~100 минут) покрывают это
 # с запасом, а станция, не отдававшая статус дольше, актуального статуса не имеет.
 VLT_STATUS_LOOKBACK_ROWS = 50
+
+# Сколько последних отсчётов станции просматривать для паспорта привода
+# (момент, скорость, заполнение). Часть станций пишет регистры не одной строкой,
+# а отдельными пакетами с разницей в несколько секунд (UVK_0444, 22.11.2026:
+# ~4 строки за цикл 5 минут, момент — в каждой четвёртой). 50 строк — около
+# часа у таких станций и несколько часов у обычных.
+PUMP_PARAMETERS_LOOKBACK_ROWS = 50
+PUMP_PARAMETER_FIELDS = ("pump_moment", "pump_speed", "pump_fill")
+
+
+def merge_pump_tail(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """Паспорт привода из хвоста станции (строки от новых к старым).
+
+    ``savetime`` и ``station_id`` — последнего отсчёта; каждый регистр —
+    последнее заполненное значение в хвосте (``None``, если его нет ни в одной
+    строке). Иначе у станций, пишущих регистры отдельными пакетами, последняя
+    строка несёт одну скорость, и момент в карточке пустой.
+    """
+    if not rows:
+        return None
+    merged: dict[str, Any] = {
+        "savetime": rows[0]["savetime"],
+        "station_id": rows[0]["station_id"],
+    }
+    for field in PUMP_PARAMETER_FIELDS:
+        merged[field] = next(
+            (row[field] for row in rows if row[field] is not None),
+            None,
+        )
+    return merged
+
 
 # Порядок колонок для COPY в telemetry_sdmo_fc_data (id/created_at заполняет БД).
 # station_id — локальный telemetry_sdmo_station.id, abai_ngdu_id — НГДУ источника.
@@ -537,18 +569,23 @@ class SdmoFcDataRepository(
     async def get_last_pump_parameters_by_stations(
         self,
         station_ids: Sequence[int],
-    ) -> RowMapping | None:
-        """Последний отсчёт (savetime, station_id, момент, скорость, заполнение)
-        по станциям. Значения сырые — koef применяет ``SdmoRegisterScaler``.
+    ) -> dict[str, Any] | None:
+        """Последние значения привода (savetime, station_id, момент, скорость,
+        заполнение) по станциям. Значения сырые — koef применяет
+        ``SdmoRegisterScaler``.
+
+        ``savetime`` — время последнего отсчёта станции, регистры — последние
+        заполненные в ``PUMP_PARAMETERS_LOOKBACK_ROWS`` строках хвоста
+        (``merge_pump_tail``): станция может писать регистры отдельными пакетами.
 
         ``station_ids`` — локальные id станций. Запрос делается по одной
-        станции за раз: равенство по station_id + LIMIT 1 — это обратный
+        станции за раз: равенство по station_id + LIMIT — это обратный
         index scan по ``ix_telemetry_sdmo_fc_data_station_savetime``, тогда как
         фильтр ``IN (...)`` с ``ORDER BY savetime DESC`` заставил бы сортировать
         все строки станций (сотни тысяч на станцию). У скважины обычно одна
-        станция.
+        станция; при нескольких побеждает самый свежий отсчёт.
         """
-        rows: list[RowMapping] = []
+        latest: dict[str, Any] | None = None
         for station_id in station_ids:
             found = await self.get_projection_list(
                 ProjectionQuerySpec(
@@ -569,15 +606,15 @@ class SdmoFcDataRepository(
                     ),
                     filters=(SdmoFcData.station_id == station_id,),
                     order_by=(SdmoFcData.savetime.desc(),),
-                    limit=1,
+                    limit=PUMP_PARAMETERS_LOOKBACK_ROWS,
                 ),
             )
-            rows.extend(found)
-
-        if not rows:
-            return None
-
-        return max(rows, key=lambda row: row["savetime"])
+            merged = merge_pump_tail(found)
+            if merged is not None and (
+                latest is None or merged["savetime"] > latest["savetime"]
+            ):
+                latest = merged
+        return latest
 
     async def list_vlt_status_by_station_period(
         self,
