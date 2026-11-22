@@ -6,6 +6,7 @@ from .compensation.routers.api import router as compensation_router_api
 from .detectors.routers.api import router as detectors_router_api
 from .files.routers.api import router as files_router_api
 from .kpi.routers.api import router as kpi_router_api
+from .notifications.routers.api import router as notifications_router_api
 from .org.routers.api import router as org_router_api
 from .repairs.routes.api import router as repairs_router_api
 from .telemetry.routers.api import router as telemetry_router_api
@@ -21,3 +22,4 @@ server_router.include_router(files_router_api)
 server_router.include_router(detectors_router_api)
 server_router.include_router(kpi_router_api)
 server_router.include_router(compensation_router_api)
+server_router.include_router(notifications_router_api)
