@@ -52,11 +52,23 @@ class AskWellChatAssistantUseCase:
     config_factory: WellConfigFactory
     # Досье скважины для системного промпта; None — собрать не удалось.
     dossier_provider: Callable[[int], Awaitable[str | None]] | None = None
+    # Блок уведомления (notification_id, well_id); None — нет или чужое.
+    notification_provider: Callable[[int, int], Awaitable[str | None]] | None = None
 
     async def execute(self, command: AskWellChatAssistantCommand) -> AIMessageDTO:
         dossier = None
         if command.well_id is not None and self.dossier_provider is not None:
             dossier = await self.dossier_provider(command.well_id)
+        notification = None
+        if (
+            command.well_id is not None
+            and command.notification_id is not None
+            and self.notification_provider is not None
+        ):
+            notification = await self.notification_provider(
+                command.notification_id,
+                command.well_id,
+            )
         try:
             result = await self.agent.ainvoke(
                 input={"messages": [command.message]},
@@ -67,6 +79,7 @@ class AskWellChatAssistantUseCase:
                 context=WellChatContext(
                     well_bound=command.well_id is not None,
                     dossier=dossier,
+                    notification=notification,
                 ),
             )
         except BadRequestError as e:

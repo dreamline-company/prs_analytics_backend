@@ -22,8 +22,9 @@ from core.settings import get_settings
 
 settings = get_settings()
 
-# Окно модели ~16k токенов: системный промпт с досье ~2.7k, схемы tools ~2.6k,
-# ответ ~2k — на историю треда остаётся около 9k. Берём 7k с запасом.
+# Окно модели ~16k токенов: системный промпт с досье ~2.7k, блок уведомления
+# до ~0.3k, схемы tools ~2.8k, ответ ~2k — на историю треда остаётся около
+# 8k. Берём 7k с запасом.
 HISTORY_MAX_TOKENS = 7000
 # Русский текст и JSON — 1.7–2.6 символа на токен (cl100k), а не 4 по умолчанию.
 CHARS_PER_TOKEN = 2.0
@@ -31,14 +32,16 @@ CHARS_PER_TOKEN = 2.0
 
 @dataclass(frozen=True, slots=True)
 class WellChatContext:
-    """Контекст одного вопроса: досье привязанной скважины.
+    """Контекст одного вопроса: досье привязанной скважины и блок уведомления.
 
     Досье живёт в контексте, а не в сообщениях: в историю треда оно не
     попадает и не раздувает окно, а на каждый вопрос подставляется свежее.
+    Блок уведомления — так же, пока тред привязан с ``notification_id``.
     """
 
     well_bound: bool = False
     dossier: str | None = None
+    notification: str | None = None
 
 
 @dynamic_prompt
@@ -46,7 +49,11 @@ def well_system_prompt(request: ModelRequest) -> str:
     context = request.runtime.context
     if not isinstance(context, WellChatContext):
         context = WellChatContext()
-    return render_system_prompt(context.dossier, well_bound=context.well_bound)
+    return render_system_prompt(
+        context.dossier,
+        well_bound=context.well_bound,
+        notification=context.notification,
+    )
 
 
 def _count_tokens(messages: list[BaseMessage]) -> int:

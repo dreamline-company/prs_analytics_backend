@@ -22,6 +22,8 @@ WELL_CHAT_ASSISTANT_SYSTEM_PROMPT = """\
    решение за технологом. Напоминай об этом, когда их пересказываешь.
 6. Если скважина не выбрана, досье нет, а tools вернут «well_id is not set» —
    попроси выбрать скважину в интерфейсе.
+7. Если после досье есть блок «ПОЛЬЗОВАТЕЛЬ ОТКРЫЛ УВЕДОМЛЕНИЕ» — вопрос о
+   нём: объясни это событие, опираясь на досье и tools.
 
 ОФОРМЛЕНИЕ ОТВЕТА
 Ответ — Markdown, интерфейс его отрисует.
@@ -46,6 +48,7 @@ TOOLS
 - get_compensation_contour — потеря стоящей скважины и закреплённые доноры.
 - get_donor_role — текущая скважина как донор: статус, разгон, прирост.
 - list_field_donors(status) — доноры месторождения и сводка потенциала.
+- list_well_notifications(days) — уведомления стены по скважине за период.
 
 МЕТОДИКА
 Детекторы ведут эпизоды: уровень warning (предупреждение) или alarm (тревога),
@@ -115,12 +118,24 @@ DOSSIER_UNAVAILABLE_NOTE = (
 )
 
 
-def render_system_prompt(dossier: str | None, *, well_bound: bool) -> str:
-    """Системный промпт на один вызов модели: правила + досье скважины."""
+def render_system_prompt(
+    dossier: str | None,
+    *,
+    well_bound: bool,
+    notification: str | None = None,
+) -> str:
+    """Системный промпт на один вызов модели: правила + досье скважины.
+
+    ``notification`` — блок уведомления, из которого открыли чат (только при
+    привязанной скважине).
+    """
     if not well_bound:
         tail = NO_WELL_NOTE
     elif dossier is None:
         tail = DOSSIER_UNAVAILABLE_NOTE
     else:
         tail = dossier
-    return f"{WELL_CHAT_ASSISTANT_SYSTEM_PROMPT}\nДОСЬЕ ТЕКУЩЕЙ СКВАЖИНЫ\n{tail}\n"
+    prompt = f"{WELL_CHAT_ASSISTANT_SYSTEM_PROMPT}\nДОСЬЕ ТЕКУЩЕЙ СКВАЖИНЫ\n{tail}\n"
+    if well_bound and notification:
+        prompt += f"\nПОЛЬЗОВАТЕЛЬ ОТКРЫЛ УВЕДОМЛЕНИЕ\n{notification}\n"
+    return prompt
