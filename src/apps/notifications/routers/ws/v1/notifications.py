@@ -36,9 +36,9 @@ def parse_client_frame(text: str) -> HelloFrameDTO | None:
         data: Any = json.loads(text)
     except json.JSONDecodeError as e:
         raise BadNotificationFrameError(details={"json": str(e)}) from e
-    if not isinstance(data, dict):
-        raise BadNotificationFrameError(details={"payload": "expected JSON object"})
-    if data.get("type") != "hello":
+    # Не объект («"ping"», «[1]») и объект без type=hello — keepalive и прочее,
+    # их игнорируем.
+    if not isinstance(data, dict) or data.get("type") != "hello":
         return None
     try:
         return HelloFrameDTO.model_validate(data)

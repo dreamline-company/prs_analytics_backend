@@ -6,7 +6,11 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
-from apps.notifications.constants import HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT
+from apps.notifications.constants import (
+    HISTORY_DEFAULT_LIMIT,
+    HISTORY_MAX_LIMIT,
+    MAX_ID,
+)
 from apps.notifications.dto.queries.notification import ListNotificationsQuery
 from apps.notifications.dto.responses.notification import (
     NotificationCardResponseDTO,
@@ -53,7 +57,7 @@ def _mark_use_case(session: AsyncSession) -> MarkNotificationsViewedUseCase:
 @router.get("")
 async def list_notifications(  # noqa: PLR0913
     session: Annotated[AsyncSession, Depends(get_app_session)],
-    before_id: Annotated[int | None, Query(ge=1)] = None,
+    before_id: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None,
     limit: Annotated[
         int,
         Query(ge=1, le=HISTORY_MAX_LIMIT),
@@ -69,10 +73,13 @@ async def list_notifications(  # noqa: PLR0913
         Query(description="можно через запятую"),
     ] = None,
     viewed: Annotated[bool | None, Query()] = None,
-    ngdu_id: Annotated[int | None, Query(description="org.id из /org/v1/ngdu")] = None,
-    well_id: Annotated[int | None, Query()] = None,
+    ngdu_id: Annotated[
+        int | None,
+        Query(ge=1, le=MAX_ID, description="org.id из /org/v1/ngdu"),
+    ] = None,
+    well_id: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None,
     source_type: Annotated[str | None, Query(max_length=30)] = None,
-    source_id: Annotated[int | None, Query()] = None,
+    source_id: Annotated[int | None, Query(ge=0, le=MAX_ID)] = None,
 ) -> NotificationHistoryResponseDTO:
     try:
         query = ListNotificationsQuery(
@@ -106,7 +113,7 @@ async def view_all_notifications(
     session: Annotated[AsyncSession, Depends(get_app_session)],
     up_to_id: Annotated[
         int,
-        Query(ge=1, description="самый большой id, который видит экран"),
+        Query(ge=1, le=MAX_ID, description="самый большой id, который видит экран"),
     ],
 ) -> NotificationViewResponseDTO:
     result = await _mark_use_case(session).mark_up_to(up_to_id)
@@ -116,7 +123,7 @@ async def view_all_notifications(
 @router.get("/{notification_id}")
 async def get_notification(
     session: Annotated[AsyncSession, Depends(get_app_session)],
-    notification_id: Annotated[int, Path(ge=1)],
+    notification_id: Annotated[int, Path(ge=1, le=MAX_ID)],
 ) -> NotificationCardResponseDTO:
     use_case = GetNotificationCardUseCase(
         notification_repository=NotificationRepository(session),
@@ -131,7 +138,7 @@ async def get_notification(
 @router.post("/{notification_id}/view")
 async def view_notification(
     session: Annotated[AsyncSession, Depends(get_app_session)],
-    notification_id: Annotated[int, Path(ge=1)],
+    notification_id: Annotated[int, Path(ge=1, le=MAX_ID)],
 ) -> NotificationViewResponseDTO:
     try:
         result = await _mark_use_case(session).mark_one(notification_id)

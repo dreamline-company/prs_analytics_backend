@@ -53,9 +53,14 @@ def test_parse_client_frame() -> None:
     assert parse_client_frame('{"type":"hello","after_id":5}').after_id == 5
     assert parse_client_frame('{"type":"hello"}').after_id is None
     assert parse_client_frame('{"type":"pong"}') is None
+    # Валидный JSON, но не объект — keepalive, игнорируется.
+    for ignored in ("[1]", '"ping"', "123", "null"):
+        assert parse_client_frame(ignored) is None
     for bad in (
         '{"type":"hello","after_id":"x"}',
-        "[1]",
+        '{"type":"hello","after_id":"5"}',
+        '{"type":"hello","after_id":true}',
+        '{"type":"hello","after_id":99999999999999999999999}',
         "{",
         '{"type":"hello","after_id":-1}',
     ):

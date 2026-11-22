@@ -12,6 +12,16 @@
 Эмиттер не коммитит: строка уходит в журнал в той же транзакции, что и
 событие. Публикация — после коммита; потерянный сигнал подберёт опрос хаба.
 
+**emit — прямо перед commit.** ``created_at`` ставится при INSERT, а видна
+строка после коммита. Подстраховочный опрос хаба и окно снимка смотрят на
+``created_at`` за последние 15 мин: строка, закоммиченная позже, доедет
+только сигналом Redis, а потерянный сигнал её уже не спасёт. Поэтому
+транзакция от emit до commit должна быть заметно короче окна.
+
+Запись идёт в savepoint: сбой вставки (например, несуществующая скважина)
+откатывает только уведомление, а работа производителя остаётся в
+транзакции. Эмиттер тогда пишет ошибку в лог и возвращает ``None``.
+
 Антиспам: пересборки истории (restage, recheck, backfill) уведомлений не
 шлют — производители вызывают эмиттер только из живых прогонов. Страховка
 здесь: событие старше ``MAX_EVENT_AGE`` не пишется. Выключенный флаг
@@ -21,6 +31,7 @@
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.notifications.constants import MAX_EVENT_AGE, local_now
@@ -74,11 +85,26 @@ class NotificationEmitter:
             )
             return None
 
+        try:
+            async with session.begin_nested():
+                notification_id = await self._insert(session, data, now)
+        except SQLAlchemyError:
+            logger.exception("Notification %s not written", data.dedup_key)
+            return None
+        if notification_id is None:
+            logger.debug("Notification %s already exists", data.dedup_key)
+        return notification_id
+
+    async def _insert(
+        self,
+        session: AsyncSession,
+        data: NotificationCreateDTO,
+        now: datetime,
+    ) -> int | None:
         abai_ngdu_id = data.abai_ngdu_id
         if abai_ngdu_id is None and data.well_id is not None:
             abai_ngdu_id = await self._resolve_abai_ngdu_id(session, data.well_id)
-
-        notification_id = await NotificationRepository(session).insert_ignore(
+        return await NotificationRepository(session).insert_ignore(
             {
                 "event_code": data.event_code,
                 "severity": data.severity,
@@ -94,9 +120,6 @@ class NotificationEmitter:
                 "created_at": now,
             },
         )
-        if notification_id is None:
-            logger.debug("Notification %s already exists", data.dedup_key)
-        return notification_id
 
     @staticmethod
     async def _resolve_abai_ngdu_id(session: AsyncSession, well_id: int) -> int | None:

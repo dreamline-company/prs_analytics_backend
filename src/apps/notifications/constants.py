@@ -12,14 +12,21 @@ SEVERITIES: tuple[str, ...] = (SEVERITY_INFO, SEVERITY_WARNING, SEVERITY_ALARM)
 Severity = Literal["info", "warning", "alarm"]
 
 # Канал pub/sub: после коммита в него уходят id новых уведомлений и отметок
-# «просмотрено». Номер БД Redis каналу не важен.
-REDIS_CHANNEL = "notifications"
+# «просмотрено». Номер БД Redis каналу не важен, а пространство имён каналов
+# у Redis общее — поэтому в имени приложение и окружение: чужой стенд на том
+# же Redis не разбудит стену прода.
+REDIS_CHANNEL_SUFFIX = "notifications"
+
+# Верхняя граница id (BIGINT): больше — 422/1007 до похода в БД.
+MAX_ID = 2**63 - 1
 
 # Эмиттер не пишет события старше этого: пересборки истории (restage, recheck,
 # backfill) не должны будить стену.
 MAX_EVENT_AGE = timedelta(hours=24)
 
-# Хаб: подстраховочный опрос журнала, его окно, ping сокетов.
+# Хаб: подстраховочный опрос журнала, его окно, ping сокетов. Окно считается
+# по created_at (время INSERT), а видна строка после коммита: производитель
+# обязан коммитить вскоре после emit — транзакция заметно короче окна.
 POLL_INTERVAL_SECONDS = 10.0
 POLL_WINDOW = timedelta(minutes=15)
 PING_INTERVAL_SECONDS = 25.0
@@ -33,6 +40,11 @@ HISTORY_DEFAULT_LIMIT = 50
 HISTORY_MAX_LIMIT = 200
 
 EXPLOITATION_BY_NAME_RU = {"ЭВН": "evn", "ШГН": "shgn"}
+
+
+def redis_channel() -> str:
+    settings = get_settings()
+    return f"{settings.APP_NAME}:{settings.ENV}:{REDIS_CHANNEL_SUFFIX}"
 
 
 def local_now() -> datetime:

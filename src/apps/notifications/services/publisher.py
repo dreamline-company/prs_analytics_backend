@@ -3,7 +3,8 @@
 Сигнал не обязателен для доставки — потерянный подберёт опрос хаба (окно
 15 мин). Поэтому сбой Redis таску не роняет: пишем предупреждение и выходим.
 
-Сообщение — JSON: ``{"notification_ids": [...]}`` или ``{"view_ids": [...]}``.
+Канал — ``<APP_NAME>:<ENV>:notifications``, сообщение — JSON:
+``{"notification_ids": [...]}`` или ``{"view_ids": [...]}``.
 """
 
 import json
@@ -11,7 +12,7 @@ from collections.abc import Iterable
 
 import redis.asyncio as redis
 
-from apps.notifications.constants import REDIS_CHANNEL
+from apps.notifications.constants import redis_channel
 from core import get_logger
 from core.settings import get_settings
 
@@ -43,7 +44,7 @@ async def _publish(key: str, ids: Iterable[int | None]) -> None:
         socket_timeout=_TIMEOUT_SECONDS,
     )
     try:
-        await client.publish(REDIS_CHANNEL, message)
+        await client.publish(redis_channel(), message)
     except (redis.RedisError, OSError):
         logger.warning(
             "Notifications signal skipped (Redis unavailable): %s; "

@@ -68,9 +68,17 @@ def _history_conditions(flt: NotificationFilterDTO) -> list[ColumnElement[bool]]
 class NotificationRepository(
     AsyncAlchemyRepository[NotificationCreateDTO, BaseModel, Notification],
 ):
-    """Журнал только дописывается: обновления и удаления здесь нет намеренно."""
+    """Журнал только дописывается: правка и удаление строк запрещены."""
 
     model = Notification
+
+    async def update(self, *_: Any, **__: Any) -> Any:  # noqa: ANN401
+        msg = "notifications journal is append-only"
+        raise NotImplementedError(msg)
+
+    async def delete(self, *_: Any, **__: Any) -> Any:  # noqa: ANN401
+        msg = "notifications journal is append-only"
+        raise NotImplementedError(msg)
 
     async def insert_ignore(self, values: dict[str, Any]) -> int | None:
         """``INSERT … ON CONFLICT (dedup_key) DO NOTHING RETURNING id``.

@@ -73,11 +73,3 @@ class NotificationViewRowDTO(BaseModel):
     view_id: int
     notification_id: int
     viewed_at: datetime
-
-
-class NotificationWellInfoDTO(BaseModel):
-    """Имя скважины и её abai_id — для блока ``well`` элемента."""
-
-    id: int
-    name: str
-    abai_id: int | None

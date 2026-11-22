@@ -3,8 +3,8 @@
 Сокеты распределены по 3 воркерам, поэтому общий источник — журнал в
 Postgres, а Redis только будит хабы:
 
-1. подписка на канал ``notifications``: пришли id — хаб читает строки из
-   журнала и рассылает своим сокетам;
+1. подписка на канал ``<APP_NAME>:<ENV>:notifications``: пришли id — хаб
+   читает строки из журнала и рассылает своим сокетам;
 2. подстраховка — раз в ``POLL_INTERVAL_SECONDS`` опрос журнала за последние
    ``POLL_WINDOW`` и рассылка того, что ещё не слали. Pub/sub теряет
    сообщение, если Redis моргнул или хаб переподключался. Голый курсор
@@ -38,7 +38,6 @@ from apps.notifications.constants import (
     PING_INTERVAL_SECONDS,
     POLL_INTERVAL_SECONDS,
     POLL_WINDOW,
-    REDIS_CHANNEL,
     SNAPSHOT_LATEST,
     SNAPSHOT_MAX,
     local_now,
@@ -161,7 +160,7 @@ class RedisMessageSource:
     def __init__(
         self,
         url: str,
-        channel: str = REDIS_CHANNEL,
+        channel: str,
         *,
         read_timeout: float = 5.0,
     ) -> None:
@@ -503,10 +502,11 @@ class NotificationHub:
 
 def build_notification_hub() -> NotificationHub:
     """Хаб воркера на журнале приложения и Redis приложения."""
+    from apps.notifications.constants import redis_channel  # noqa: PLC0415
     from core.settings import get_settings  # noqa: PLC0415
     from shared.database.sql.setup import session_makers  # noqa: PLC0415
 
     return NotificationHub(
         store=SessionHubStore(session_makers["app"]),
-        source=RedisMessageSource(get_settings().APP_REDIS_DB_URL),
+        source=RedisMessageSource(get_settings().APP_REDIS_DB_URL, redis_channel()),
     )

@@ -1,10 +1,13 @@
 """Эмиттер: флаг, страховка от старых событий, идемпотентная вставка."""
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
 
 from apps.notifications.dto.internal.notification import (
     NotificationCreateDTO,
@@ -31,6 +34,12 @@ class _CapturingSession:
         self.statements: list[Any] = []
         self.keys: set[str] = set()
         self.next_id = 1
+        self.savepoints = 0
+
+    @asynccontextmanager
+    async def begin_nested(self) -> Any:  # noqa: ANN401
+        self.savepoints += 1
+        yield
 
     async def execute(self, stmt: Any) -> Any:  # noqa: ANN401
         self.statements.append(stmt)
@@ -110,7 +119,22 @@ def test_aware_event_at_becomes_local_naive() -> None:
     assert dto.event_at == datetime(2026, 11, 22, 9, 10)  # noqa: DTZ001 — Atyrau +5
 
 
-def test_repository_has_no_update_or_delete_of_journal() -> None:
-    """Журнал неизменяемый: своих методов правки у репозитория нет."""
-    own = set(vars(NotificationRepository))
-    assert not {name for name in own if "update" in name or "delete" in name}
+def test_journal_update_and_delete_are_forbidden() -> None:
+    """Журнал неизменяемый: унаследованные update/delete закрыты."""
+    repo = NotificationRepository(_NoDbSession())  # type: ignore[arg-type]
+    for method in (repo.update, repo.delete):
+        with pytest.raises(NotImplementedError):
+            asyncio.run(method(filters=()))
+
+
+class _FailingSession(_CapturingSession):
+    async def execute(self, stmt: Any) -> Any:  # noqa: ANN401, ARG002
+        statement, msg = "INSERT", "fk violation"
+        raise IntegrityError(statement, {}, Exception(msg))
+
+
+def test_insert_failure_returns_none_inside_savepoint() -> None:
+    emitter = NotificationEmitter(enabled=True, clock=lambda: NOW)
+    session = _FailingSession()
+    assert _emit(emitter, session, _dto()) is None
+    assert session.savepoints == 1

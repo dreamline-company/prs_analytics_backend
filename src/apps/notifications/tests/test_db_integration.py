@@ -101,9 +101,12 @@ def test_view_all_does_not_touch_later_rows() -> None:
         b = await EMITTER.emit(session, _dto("b", severity="info"))
         assert a is not None
         assert b is not None
+        # Пришло до нажатия, но id больше up_to_id: экран его ещё не видел.
+        later = await EMITTER.emit(session, _dto("later", severity="warning"))
+        assert later is not None
+        assert later > b
         views = NotificationViewRepository(session)
         marked = await views.mark_up_to(b, local_now())
-        later = await EMITTER.emit(session, _dto("later", severity="warning"))
         assert {r.notification_id for r in marked} >= {a, b}
         assert later not in {r.notification_id for r in marked}
         # Повторное «всё просмотрено» ничего не отмечает заново.
@@ -115,6 +118,16 @@ def test_view_all_does_not_touch_later_rows() -> None:
         assert not {a, b} & {r.id for r in unviewed}
         counts = await repo.count_unviewed_by_severity()
         assert counts.get("warning", 0) >= 1
+
+    _in_tx(scenario)
+
+
+def test_failed_emit_keeps_producer_transaction() -> None:
+    """Несуществующая скважина: уведомления нет, транзакция жива."""
+
+    async def scenario(session: AsyncSession) -> None:
+        assert await EMITTER.emit(session, _dto("bad-well", well_id=2**62)) is None
+        assert await EMITTER.emit(session, _dto("after-bad")) is not None
 
     _in_tx(scenario)
 
