@@ -28,6 +28,7 @@ from apps.files.models.file import File
 from apps.gps.models.message import GpsMessage
 from apps.gps.models.unit import GpsUnit
 from apps.kbrs.models.measure import KbrsMeasure
+from apps.notifications.models.notification import Notification, NotificationView
 from apps.org.models.brigade import Brigade, UniqueBrigade
 from apps.org.models.ngdu import NGDU
 from apps.org.models.oil_field import OilField
@@ -101,6 +102,8 @@ __all__ = (
     "GpsMessage",
     "GpsUnit",
     "KbrsMeasure",
+    "Notification",
+    "NotificationView",
     "OilField",
     "Org",
     "OrgType",

@@ -1,12 +1,29 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api import server_router
+from apps.notifications.services.hub import build_notification_hub
 from apps.ws import server_ws_router
 from core.settings import get_settings
 
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Хаб уведомлений — по одному на воркер uvicorn: сокеты воркера, подписка
+    # на Redis и подстраховочный опрос журнала.
+    hub = build_notification_hub()
+    app.state.notification_hub = hub
+    await hub.start()
+    try:
+        yield
+    finally:
+        await hub.stop()
 
 
 def get_application() -> FastAPI:
@@ -20,6 +37,7 @@ def get_application() -> FastAPI:
         version="1",
         docs_url=settings.DOCS_URL,
         openapi_url=settings.OPENAPI_URL,
+        lifespan=lifespan,
     )
     app.include_router(server_router)
     app.include_router(server_ws_router)
