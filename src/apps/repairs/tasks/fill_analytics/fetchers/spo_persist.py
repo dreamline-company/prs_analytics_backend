@@ -69,6 +69,10 @@ class SpoMeasurementPersister:
         parsed = full.chart
         snapshot_time = _naive(parsed.start or fallback_snapshot_time)
 
+        # Замок до поиска: параллельная запись того же замера дождётся коммита
+        # первой и найдёт её строку, а не создаст вторую. ``existing`` от
+        # вызывающего мог быть прочитан до замка — пустой ищется заново.
+        await self.spo_repo.lock_kbrs_measure(measure_id)
         if existing is None:
             existing = await self.spo_repo.get_by_kbrs_measure_id(
                 measure_id,

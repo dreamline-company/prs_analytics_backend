@@ -43,6 +43,32 @@ LIVE_MEASURE_GRACE = timedelta(minutes=settings.KBRS_POLL_REFRESH_GRACE_MINUTES)
 SPO_WINDOW_TAIL = timedelta(days=1)
 
 
+@dataclass(frozen=True, slots=True)
+class RepairRef:
+    """Снимок ремонта для цикла с commit/rollback на каждый ремонт.
+
+    ``rollback`` протухает все ORM-объекты сессии, и первое чтение атрибута в
+    async-сессии падает ``MissingGreenlet`` — уже на следующем ремонте и в
+    обработчике его ошибки, так что сбой одного ремонта обрывает весь прогон.
+    """
+
+    id: int
+    well_id: int | None
+    abai_well_id: int | None
+    start_time: datetime
+    end_time: datetime | None
+
+    @classmethod
+    def of(cls, repair: Repair) -> "RepairRef":
+        return cls(
+            id=repair.id,
+            well_id=repair.well_id,
+            abai_well_id=repair.abai_well_id,
+            start_time=repair.start_time,
+            end_time=repair.end_time,
+        )
+
+
 @dataclass(slots=True)
 class RunStats:
     """Итог прогона добытчика: сколько ремонтов обработано, изменено, упало."""
@@ -69,7 +95,11 @@ def ai_retry_cutoff(now: datetime) -> datetime:
     return now - timedelta(days=GRACE_DAYS + AI_RETRY_DAYS)
 
 
-def repair_window(repair: Repair, *, now: datetime) -> tuple[datetime, datetime]:
+def repair_window(
+    repair: Repair | RepairRef,
+    *,
+    now: datetime,
+) -> tuple[datetime, datetime]:
     """Интервал, в котором ищутся замеры СПО ремонта: [start, end + сутки]."""
     start = as_naive(repair.start_time)
     end = as_naive(repair.end_time) if repair.end_time is not None else now
@@ -187,7 +217,7 @@ async def list_candidate_repairs(
 
 
 async def resolve_repair_well(
-    repair: Repair,
+    repair: Repair | RepairRef,
     well_repo: WellRepository,
 ) -> Well | None:
     """Скважина ремонта: ``Repair.well_id`` загрузчик не заполняет, реальная
