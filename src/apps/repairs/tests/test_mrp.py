@@ -374,37 +374,53 @@ def test_crf_is_split_by_lift_type() -> None:
     assert result.crf.shgn_wells == groups["ШГН"].wells
 
 
-def _calendar_fund_well(
+def _status_fund_well(
     months: set[tuple[int, int]],
-    repairs: list[RepairSpan],
+    work: list[tuple[str, str]],
+    repairs: list[RepairSpan] | None = None,
 ) -> WellFundInput:
-    # статусов «в работе» нет вообще: время считается по календарю фонда
     return WellFundInput(
         well_id=1,
         name="W_1",
         oil_field="W",
         lift_type=None,
-        work_intervals=[],
-        repairs=repairs,
+        work_intervals=[(_dt(a), _dt(b)) for a, b in work],
+        repairs=repairs or [],
         fund_months=frozenset(months),
     )
 
 
-def test_fund_work_time_is_calendar_days_minus_repairs() -> None:
-    well = _calendar_fund_well(
+def test_fund_work_time_is_days_in_working_status() -> None:
+    # ремонт 10–12.08 в ABAI — простой с причиной ПРС: в статусе «в работе»
+    # скважины в эти сутки нет, и вычитать ремонт отдельно не нужно
+    well = _status_fund_well(
         {(2026, 8), (2026, 9)},
-        [_span(1, "2026-08-10T00:00", "2026-08-12T00:00")],  # 2 сут в августе
+        [
+            ("2026-08-01T00:00", "2026-08-10T00:00"),
+            ("2026-08-12T00:00", "2026-10-01T00:00"),
+        ],
+        [_span(1, "2026-08-10T00:00", "2026-08-12T00:00")],
     )
 
     result = compute_kmg([well], end_year=2026, end_month=9, months=2, now=NOW)
 
-    # август 31 + сентябрь 30 − 2 сут ремонта; простой/статусы не важны
-    assert result.total.work_days == pytest.approx(31 + 30 - 2, abs=0.01)
+    # август 9 + 20 сут, сентябрь 30 сут
+    assert result.total.work_days == pytest.approx(9 + 20 + 30, abs=0.01)
+    assert result.total.avg_fund == pytest.approx(1.0)
+
+
+def test_downtime_in_fund_is_not_work_time() -> None:
+    # в фонде (на 1-е число «простой»), но статуса «в работе» нет вообще
+    well = _status_fund_well({(2026, 9)}, [])
+
+    result = compute_kmg([well], end_year=2026, end_month=9, months=1, now=NOW)
+
+    assert result.total.work_days == pytest.approx(0)
     assert result.total.avg_fund == pytest.approx(1.0)
 
 
 def test_fund_work_time_skips_months_outside_the_fund() -> None:
-    well = _calendar_fund_well({(2026, 9)}, [])
+    well = _status_fund_well({(2026, 9)}, [("2026-08-01T00:00", "2026-10-01T00:00")])
 
     result = compute_kmg([well], end_year=2026, end_month=9, months=2, now=NOW)
 
@@ -414,7 +430,7 @@ def test_fund_work_time_skips_months_outside_the_fund() -> None:
 
 
 def test_fund_work_time_of_unfinished_month_runs_until_now() -> None:
-    well = _calendar_fund_well({(2026, 9)}, [])
+    well = _status_fund_well({(2026, 9)}, [("2026-09-01T00:00", "2026-10-01T00:00")])
 
     result = compute_kmg(
         [well],

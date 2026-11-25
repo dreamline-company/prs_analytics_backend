@@ -238,15 +238,15 @@ class WellFundInput:
     name: str
     oil_field: str
     lift_type: str | None
-    # Интервалы статуса «в работе» (WRK), местное время. Нужны только без
-    # ``fund_months``: с фондом время работы — календарные сутки фонда.
+    # Интервалы статуса «в работе» (WRK), местное время: это и есть время
+    # работы. Простой (в т.ч. ремонт ПРС/КРС) и периодическая в него не входят.
     work_intervals: Sequence[Interval]
     # Ремонты скважины, пересекающие окно (для вычета времени и подсчёта)
     repairs: Sequence[RepairSpan]
     # Месяцы (год, месяц), в которых скважина входит в действующий фонд: на
     # 1-е число действует категория OIL и статус «в работе» / «простой» /
-    # «периодическая». Время работы месяца в фонде — все его календарные сутки
-    # минус ремонты. None — фонд не ограничивается (месяц с работой в статусах).
+    # «периодическая». Время работы месяца в фонде — сутки в статусе «в работе».
+    # None — фонд не ограничивается (месяц с работой в статусах).
     fund_months: frozenset[tuple[int, int]] | None = None
     # В фонде ли на 1-е число месяца после окна (так заказчик считает «фонд на
     # конец периода»: окно ноябрь–октябрь — фонд на 1 ноября). None — это 1-е
@@ -434,15 +434,14 @@ def _month_work_days(
     well: WellFundInput,
     bounds: tuple[datetime, datetime],
     work: list[Interval],
-    repair_cut: list[Interval],
     now: datetime,
 ) -> float:
     """Время работы скважины в месяце, сутки.
 
-    Фонд известен (``fund_months``) — по методике заказчика это все календарные
-    сутки месяца в фонде минус сутки ремонтов (статус «в работе» или «простой»
-    не важен: простаивающая скважина тоже в фонде). Месяц считается до ``now``.
-    Фонд не задан — время работы по статусам «в работе».
+    Время работы — сутки в статусе «в работе» (WRK). Простой (DWN) с любой
+    причиной, включая ремонт (ПРС, КРС), и периодическая эксплуатация временем
+    работы не считаются. С фондом (``fund_months``) считаются только месяцы в
+    фонде, а незаконченный месяц — до ``now``.
     """
     lo, hi = bounds
     if well.fund_months is None:
@@ -450,7 +449,7 @@ def _month_work_days(
     end = min(hi, now)
     if end <= lo:
         return 0.0
-    return _length_days(_subtract([(lo, end)], repair_cut))
+    return _length_days(c for iv in work if (c := _clip(iv, lo, end)))
 
 
 def _in_fund(well: WellFundInput, year: int, month: int) -> bool:
@@ -487,12 +486,14 @@ def _group(
             for iv in well.work_intervals
             if (clipped := _clip(iv, win_start, win_end))
         )
-        work = _subtract(work, repair_cut)
+        if well.fund_months is None:
+            # Без фонда статусы не знают о ремонтах — вычитаем их сами
+            work = _subtract(work, repair_cut)
 
         for (year, month), (lo, hi) in zip(months, month_bounds, strict=True):
             if not _in_fund(well, year, month):
                 continue
-            days = _month_work_days(well, (lo, hi), work, repair_cut, now)
+            days = _month_work_days(well, (lo, hi), work, now)
             work_days += days
             # Без режима фонд — месяцы с работой; с режимом — все месяцы в фонде
             if days > 0 or well.fund_months is not None:
@@ -720,18 +721,17 @@ def compute_month_stats(
             for r in well.repairs
             if (clipped := _clip((r.start, r.end or now), span_start, span_end))
         )
-        work = _subtract(
-            _union(
-                clipped
-                for iv in well.work_intervals
-                if (clipped := _clip(iv, span_start, span_end))
-            ),
-            repair_cut,
+        work = _union(
+            clipped
+            for iv in well.work_intervals
+            if (clipped := _clip(iv, span_start, span_end))
         )
+        if well.fund_months is None:
+            work = _subtract(work, repair_cut)
         for i, (lo, hi) in enumerate(bounds):
             if not _in_fund(well, *months[i]):
                 continue
-            days = _month_work_days(well, (lo, hi), work, repair_cut, now)
+            days = _month_work_days(well, (lo, hi), work, now)
             work_days[i] += days
             if days > 0 or well.fund_months is not None:
                 fund[i] += 1
