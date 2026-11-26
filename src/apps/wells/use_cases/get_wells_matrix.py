@@ -14,17 +14,22 @@ Resolution chain:
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import TYPE_CHECKING
 
+from apps.kpi.use_cases.get_mrp_summary import default_end_month
 from apps.org.dto.internal.brigade import BrigadeDangerDTO, BrigadeShortDTO
 from apps.org.services.cm_brigades import match_cm_brigades
 from apps.repairs.dto.internal.repair import RepairDTO
+from apps.repairs.services.mrp import (
+    compute_kmg,
+    month_start,
+    next_month,
+    window_months,
+)
 from apps.wells.dto.internal.well_matrix import WellLegendDTO, WellMatrixItemDTO
 from apps.wells.services.well_status import WellStatusService
 from core.settings import get_settings
-
-_YEAR = timedelta(days=365)
 
 if TYPE_CHECKING:
     from apps.org.models.brigade import UniqueBrigade
@@ -32,6 +37,7 @@ if TYPE_CHECKING:
     from apps.repairs.models.repair import Repair
     from apps.repairs.repositories.brigade import RepairBrigadeRepository
     from apps.repairs.repositories.repair import RepairRepository
+    from apps.repairs.services.mrp_inputs import MrpInputsService
     from apps.wells.dto.queries.well import GetWellsMatrixQuery
     from apps.wells.models.well import Well
     from apps.wells.repositories.spo import SPORepository
@@ -56,10 +62,12 @@ class GetWellsMatrixUseCase:
         cm_brigade_repository: CMBrigadeRepository,
         cm_brigade_error_screen_repository: CMBrigadeErrorScreenRepository,
         spo_repository: SPORepository,
+        mrp_inputs_service: MrpInputsService,
     ) -> None:
         self.ngdu_wells_service = ngdu_wells_service
         self.well_status_service = WellStatusService(spo_repository)
         self.repair_repository = repair_repository
+        self.mrp_inputs_service = mrp_inputs_service
         self.repair_brigade_repository = repair_brigade_repository
         self.unique_brigade_repository = unique_brigade_repository
         self.cm_brigade_repository = cm_brigade_repository
@@ -90,9 +98,7 @@ class GetWellsMatrixUseCase:
             brigade_by_repair_id,
             active_repair_by_abai_well,
         )
-        frequent_repair_abai_well_ids = await self._frequent_repair_abai_well_ids(
-            [w.abai_id for w in wells],
-        )
+        frequent_repair_abai_well_ids = await self._frequent_repair_abai_well_ids(wells)
         work_codes = await self.well_status_service.work_codes(
             {
                 w.id: active_repair_by_abai_well[w.abai_id]
@@ -113,19 +119,25 @@ class GetWellsMatrixUseCase:
             for w in sorted(wells, key=lambda w: w.name)
         ]
 
-    async def _frequent_repair_abai_well_ids(
-        self,
-        abai_well_ids: list[int],
-    ) -> set[int]:
-        if not abai_well_ids:
-            return set()
-        threshold = get_settings().FREQUENT_REPAIR_THRESHOLD
-        since = datetime.now() - _YEAR  # noqa: DTZ005
-        counts = await self.repair_repository.count_by_well_abai_ids_since(
-            abai_well_ids,
-            since=since,
+    async def _frequent_repair_abai_well_ids(self, wells: list[Well]) -> set[int]:
+        """Скважины ЧРФ — по тому же расчёту, что и сводка ЧРФ (kpi/mrp/summary).
+
+        Окно — скользящий год до прошлого полного месяца, три и больше ремонтов
+        без ГТМ, ремонт относится к месяцу окончания, скважина в фонде. Флаг в
+        матрице совпадает со списком ЧРФ в сводке.
+        """
+        now = datetime.now(get_settings().ZONE_INFO).replace(tzinfo=None)
+        end_year, end_month = default_end_month(now)
+        periods = window_months(end_year, end_month, 12)
+        inputs = await self.mrp_inputs_service.load_fund_inputs(
+            wells,
+            window_start=month_start(*periods[0]),
+            window_end=next_month(*periods[-1]),
+            now=now,
         )
-        return {abai_id for abai_id, count in counts.items() if count > threshold}
+        result = compute_kmg(inputs, end_year=end_year, end_month=end_month, now=now)
+        names = {w.name for w in result.crf.wells}
+        return {w.abai_id for w in wells if w.name in names}
 
     def _build_item(  # noqa: PLR0913
         self,

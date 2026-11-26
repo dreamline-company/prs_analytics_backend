@@ -17,6 +17,7 @@ from apps.repairs.repositories.ai_results import RepairDynamogramAIResultReposit
 from apps.repairs.repositories.brigade import RepairBrigadeRepository
 from apps.repairs.repositories.repair import RepairRepository
 from apps.repairs.services import CurrentRepairService
+from apps.repairs.services.mrp_inputs import MrpInputsService
 from apps.telemetry.repositories.sdmo import (
     SdmoFcDataRepository,
     SdmoFcRegRepository,
@@ -56,6 +57,10 @@ from apps.wells.dto.responses.well import (
     WellProductionProfileResponseDTO,
     WellsMatrixResponseDTO,
     WellTimelineResponseDTO,
+)
+from apps.wells.repositories.category_geo import (
+    WellCategoryRepository,
+    WellGeoRepository,
 )
 from apps.wells.repositories.coords import WellCoordRepository
 from apps.wells.repositories.dynamogram import DynamogramRepository
@@ -151,6 +156,14 @@ async def get_wells_matrix(
             session=cm_session,
         ),
         spo_repository=SPORepository(session=app_session),
+        mrp_inputs_service=MrpInputsService(
+            repair_repository=RepairRepository(session=app_session),
+            status_repository=WellStatusRepository(session=app_session),
+            expl_repository=WellExplRepository(session=app_session),
+            regime_repository=TechRegimeRepository(session=app_session),
+            category_repository=WellCategoryRepository(session=app_session),
+            geo_repository=WellGeoRepository(session=app_session),
+        ),
     )
     matrix = await use_case.execute(GetWellsMatrixQuery(ngdu_id=ngdu_id))
     return WellsMatrixResponseDTO(data=matrix)
