@@ -49,6 +49,16 @@ class RepairSpan:
     # Вид ремонта по справочнику ABAI (для списка ремонтов ЧРФ)
     type_name: str | None = None
 
+    @property
+    def counted_at(self) -> datetime:
+        """Дата, по которой ремонт попадает в месяц и в окно отчёта.
+
+        Заказчик относит ремонт к месяцу, в котором он закончился (подтверждено
+        технологом: начался в марте, закончился в апреле — это апрель). Ремонт,
+        который ещё идёт, считается по дате начала.
+        """
+        return self.end if self.end is not None else self.start
+
 
 # ---------------------------------------------------------------------------
 # МРП по скважине
@@ -501,11 +511,8 @@ def _group(
                 calendar_days += _days(hi - lo)
 
         for r in well.repairs:
-            if win_start <= r.start < win_end and _in_fund(
-                well,
-                r.start.year,
-                r.start.month,
-            ):
+            when = r.counted_at
+            if win_start <= when < win_end and _in_fund(well, when.year, when.month):
                 repairs += 1
                 gtm += r.is_gtm
                 tech += r.is_tech and not r.is_gtm
@@ -572,9 +579,9 @@ def compute_kmg(  # noqa: PLR0913
         n = sum(
             1
             for r in well.repairs
-            if win_start <= r.start < win_end
+            if win_start <= r.counted_at < win_end
             and not r.is_gtm
-            and _in_fund(well, r.start.year, r.start.month)
+            and _in_fund(well, r.counted_at.year, r.counted_at.month)
         )
         if n:
             counts[well.name] = n
@@ -591,10 +598,11 @@ def compute_kmg(  # noqa: PLR0913
                 type_name=r.type_name,
                 is_gtm=r.is_gtm,
                 is_tech=r.is_tech,
-                counted=not r.is_gtm and _in_fund(well, r.start.year, r.start.month),
+                counted=not r.is_gtm
+                and _in_fund(well, r.counted_at.year, r.counted_at.month),
             )
             for r in sorted(well.repairs, key=lambda r: r.start)
-            if win_start <= r.start < win_end
+            if win_start <= r.counted_at < win_end
         ]
 
     crf_wells = sorted(
@@ -738,7 +746,7 @@ def compute_month_stats(
                 calendar[i] += _days(hi - lo)
         for r in well.repairs:
             for i, (lo, hi) in enumerate(bounds):
-                if lo <= r.start < hi:
+                if lo <= r.counted_at < hi:
                     if _in_fund(well, *months[i]):
                         repairs[i] += 1
                         gtm[i] += r.is_gtm
