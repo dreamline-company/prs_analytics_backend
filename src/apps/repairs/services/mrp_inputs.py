@@ -33,11 +33,13 @@ if TYPE_CHECKING:
     from apps.wells.repositories.well_expl import WellExplRepository
     from apps.wells.repositories.well_status import WellStatusRepository
 
-# «В работе» и «периодическая эксплуатация» — скважина считается работающей
-# (так же определяется работа в верификации обрывов штанг).
-WORK_STATUS_CODES: Final = frozenset({"WRK", "PEXP"})
-# Фонд на 1-е число: категория «нефтяная» и один из этих статусов (простой тоже
-# фонд, но временем работы не считается).
+# Время работы — только сутки в статусе «в работе». Простой (DWN, в т.ч. ремонт
+# ПРС/КРС с причиной) и периодическая эксплуатация (PEXP) временем работы не
+# считаются: так считает заказчик (сверка с его формой МРП за август 2026:
+# 177 135 сут по статусу WRK против 177 067 в его форме).
+WORK_STATUS_CODES: Final = frozenset({"WRK"})
+# Фонд на 1-е число: категория «нефтяная» и один из этих статусов (простой и
+# периодическая — фонд, но временем работы не считаются).
 FUND_CATEGORY_CODE: Final = "OIL"
 FUND_STATUS_CODES: Final = frozenset({"WRK", "DWN", "PEXP"})
 # Открытый интервал в ABAI — dend 3333-12-31; всё позже этого года — «не закрыт».
@@ -77,6 +79,25 @@ def fund_months_of(
             dbeg <= moment < dend for dbeg, dend in status_intervals
         ):
             months.add((first.year, first.month))
+    return frozenset(months)
+
+
+def repair_fund_months_of(
+    month_firsts: Sequence[date],
+    fund_on_firsts: frozenset[tuple[int, int]],
+) -> frozenset[tuple[int, int]]:
+    """Месяцы, ремонты которых учитываются: в фонде на 1-е число или на конец.
+
+    ``fund_on_firsts`` — месяцы (1-е числа, включая 1-е число после окна, если
+    оно наступило), на которые скважина в фонде. Месяц годится, если скважина в
+    фонде на его 1-е число или на 1-е число следующего месяца.
+    """
+    months: set[tuple[int, int]] = set()
+    for first in month_firsts:
+        year, month = first.year, first.month
+        nxt = (year + 1, 1) if month == 12 else (year, month + 1)  # noqa: PLR2004
+        if (year, month) in fund_on_firsts or nxt in fund_on_firsts:
+            months.add((year, month))
     return frozenset(months)
 
 
@@ -217,6 +238,16 @@ class MrpInputsService:
             abai_ids,
         )
 
+        def repair_months(abai_well_id: int) -> frozenset[tuple[int, int]]:
+            return repair_fund_months_of(
+                month_firsts,
+                fund_months_of(
+                    fund_firsts,
+                    category_by_well.get(abai_well_id, []),
+                    fund_status_by_well.get(abai_well_id, []),
+                ),
+            )
+
         return [
             WellFundInput(
                 well_id=well.id,
@@ -230,6 +261,7 @@ class MrpInputsService:
                     category_by_well.get(well.abai_id, []),
                     fund_status_by_well.get(well.abai_id, []),
                 ),
+                repair_fund_months=repair_months(well.abai_id),
                 in_fund_at_end=bool(
                     fund_months_of(
                         [end_first],

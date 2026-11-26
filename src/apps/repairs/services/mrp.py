@@ -49,6 +49,16 @@ class RepairSpan:
     # Вид ремонта по справочнику ABAI (для списка ремонтов ЧРФ)
     type_name: str | None = None
 
+    @property
+    def counted_at(self) -> datetime:
+        """Дата, по которой ремонт попадает в месяц и в окно отчёта.
+
+        Заказчик относит ремонт к месяцу, в котором он закончился (подтверждено
+        технологом: начался в марте, закончился в апреле — это апрель). Ремонт,
+        который ещё идёт, считается по дате начала.
+        """
+        return self.end if self.end is not None else self.start
+
 
 # ---------------------------------------------------------------------------
 # МРП по скважине
@@ -238,20 +248,25 @@ class WellFundInput:
     name: str
     oil_field: str
     lift_type: str | None
-    # Интервалы статуса «в работе» (WRK), местное время. Нужны только без
-    # ``fund_months``: с фондом время работы — календарные сутки фонда.
+    # Интервалы статуса «в работе» (WRK), местное время: это и есть время
+    # работы. Простой (в т.ч. ремонт ПРС/КРС) и периодическая в него не входят.
     work_intervals: Sequence[Interval]
     # Ремонты скважины, пересекающие окно (для вычета времени и подсчёта)
     repairs: Sequence[RepairSpan]
     # Месяцы (год, месяц), в которых скважина входит в действующий фонд: на
     # 1-е число действует категория OIL и статус «в работе» / «простой» /
-    # «периодическая». Время работы месяца в фонде — все его календарные сутки
-    # минус ремонты. None — фонд не ограничивается (месяц с работой в статусах).
+    # «периодическая». Время работы месяца в фонде — сутки в статусе «в работе».
+    # None — фонд не ограничивается (месяц с работой в статусах).
     fund_months: frozenset[tuple[int, int]] | None = None
     # В фонде ли на 1-е число месяца после окна (так заказчик считает «фонд на
     # конец периода»: окно ноябрь–октябрь — фонд на 1 ноября). None — это 1-е
     # число ещё не наступило или фонд не задан: берётся последний месяц окна.
     in_fund_at_end: bool | None = None
+    # Месяцы, в которых ремонт скважины учитывается: скважина в фонде на 1-е
+    # число месяца или на 1-е число следующего (ремонт-ввод из консервации или
+    # бурения заканчивается в месяце, а скважина в фонде уже на его конец).
+    # None — берётся ``fund_months``.
+    repair_fund_months: frozenset[tuple[int, int]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -434,15 +449,14 @@ def _month_work_days(
     well: WellFundInput,
     bounds: tuple[datetime, datetime],
     work: list[Interval],
-    repair_cut: list[Interval],
     now: datetime,
 ) -> float:
     """Время работы скважины в месяце, сутки.
 
-    Фонд известен (``fund_months``) — по методике заказчика это все календарные
-    сутки месяца в фонде минус сутки ремонтов (статус «в работе» или «простой»
-    не важен: простаивающая скважина тоже в фонде). Месяц считается до ``now``.
-    Фонд не задан — время работы по статусам «в работе».
+    Время работы — сутки в статусе «в работе» (WRK). Простой (DWN) с любой
+    причиной, включая ремонт (ПРС, КРС), и периодическая эксплуатация временем
+    работы не считаются. С фондом (``fund_months``) считаются только месяцы в
+    фонде, а незаконченный месяц — до ``now``.
     """
     lo, hi = bounds
     if well.fund_months is None:
@@ -450,11 +464,23 @@ def _month_work_days(
     end = min(hi, now)
     if end <= lo:
         return 0.0
-    return _length_days(_subtract([(lo, end)], repair_cut))
+    return _length_days(c for iv in work if (c := _clip(iv, lo, end)))
 
 
 def _in_fund(well: WellFundInput, year: int, month: int) -> bool:
     return well.fund_months is None or (year, month) in well.fund_months
+
+
+def _repair_in_fund(well: WellFundInput, when: datetime) -> bool:
+    """Учитывается ли ремонт, закончившийся (идущий — начатый) в момент ``when``."""
+    if well.fund_months is None:
+        return True
+    months = (
+        well.repair_fund_months
+        if well.repair_fund_months is not None
+        else well.fund_months
+    )
+    return (when.year, when.month) in months
 
 
 def _group(
@@ -487,12 +513,14 @@ def _group(
             for iv in well.work_intervals
             if (clipped := _clip(iv, win_start, win_end))
         )
-        work = _subtract(work, repair_cut)
+        if well.fund_months is None:
+            # Без фонда статусы не знают о ремонтах — вычитаем их сами
+            work = _subtract(work, repair_cut)
 
         for (year, month), (lo, hi) in zip(months, month_bounds, strict=True):
             if not _in_fund(well, year, month):
                 continue
-            days = _month_work_days(well, (lo, hi), work, repair_cut, now)
+            days = _month_work_days(well, (lo, hi), work, now)
             work_days += days
             # Без режима фонд — месяцы с работой; с режимом — все месяцы в фонде
             if days > 0 or well.fund_months is not None:
@@ -500,11 +528,8 @@ def _group(
                 calendar_days += _days(hi - lo)
 
         for r in well.repairs:
-            if win_start <= r.start < win_end and _in_fund(
-                well,
-                r.start.year,
-                r.start.month,
-            ):
+            when = r.counted_at
+            if win_start <= when < win_end and _repair_in_fund(well, when):
                 repairs += 1
                 gtm += r.is_gtm
                 tech += r.is_tech and not r.is_gtm
@@ -571,9 +596,9 @@ def compute_kmg(  # noqa: PLR0913
         n = sum(
             1
             for r in well.repairs
-            if win_start <= r.start < win_end
+            if win_start <= r.counted_at < win_end
             and not r.is_gtm
-            and _in_fund(well, r.start.year, r.start.month)
+            and _repair_in_fund(well, r.counted_at)
         )
         if n:
             counts[well.name] = n
@@ -590,10 +615,10 @@ def compute_kmg(  # noqa: PLR0913
                 type_name=r.type_name,
                 is_gtm=r.is_gtm,
                 is_tech=r.is_tech,
-                counted=not r.is_gtm and _in_fund(well, r.start.year, r.start.month),
+                counted=not r.is_gtm and _repair_in_fund(well, r.counted_at),
             )
             for r in sorted(well.repairs, key=lambda r: r.start)
-            if win_start <= r.start < win_end
+            if win_start <= r.counted_at < win_end
         ]
 
     crf_wells = sorted(
@@ -720,26 +745,25 @@ def compute_month_stats(
             for r in well.repairs
             if (clipped := _clip((r.start, r.end or now), span_start, span_end))
         )
-        work = _subtract(
-            _union(
-                clipped
-                for iv in well.work_intervals
-                if (clipped := _clip(iv, span_start, span_end))
-            ),
-            repair_cut,
+        work = _union(
+            clipped
+            for iv in well.work_intervals
+            if (clipped := _clip(iv, span_start, span_end))
         )
+        if well.fund_months is None:
+            work = _subtract(work, repair_cut)
         for i, (lo, hi) in enumerate(bounds):
             if not _in_fund(well, *months[i]):
                 continue
-            days = _month_work_days(well, (lo, hi), work, repair_cut, now)
+            days = _month_work_days(well, (lo, hi), work, now)
             work_days[i] += days
             if days > 0 or well.fund_months is not None:
                 fund[i] += 1
                 calendar[i] += _days(hi - lo)
         for r in well.repairs:
             for i, (lo, hi) in enumerate(bounds):
-                if lo <= r.start < hi:
-                    if _in_fund(well, *months[i]):
+                if lo <= r.counted_at < hi:
+                    if _repair_in_fund(well, r.counted_at):
                         repairs[i] += 1
                         gtm[i] += r.is_gtm
                         tech[i] += r.is_tech and not r.is_gtm

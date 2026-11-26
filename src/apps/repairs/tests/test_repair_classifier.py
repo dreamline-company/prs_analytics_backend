@@ -26,6 +26,13 @@ def test_type_name_with_measure_is_gtm() -> None:
     assert _gtm(name="По мероприятию")
 
 
+def test_transfer_between_producer_and_injector_is_gtm() -> None:
+    assert _gtm(name="TP 2-15 Добывающая – Нагнетательная")
+    assert _gtm(name="Нагнетательная - Добывающая")
+    # смена способа добычи остаётся обычным ремонтом
+    assert not _gtm(name="TP 2-12 УЭВН – ШГН")
+
+
 def test_type_id_fallback_when_name_unknown() -> None:
     assert _gtm(type_id=GTM_REPAIR_TYPE_ID)
 

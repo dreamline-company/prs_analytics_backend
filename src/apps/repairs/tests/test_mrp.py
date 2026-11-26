@@ -8,6 +8,7 @@ from apps.repairs.services.mrp import (
     RepairSpan,
     WellFundInput,
     compute_kmg,
+    compute_month_stats,
     compute_well_mrp,
     interpret_well_mrp,
     is_shgn,
@@ -203,11 +204,12 @@ def test_kmg_total_follows_the_form_formulas() -> None:
     # A: 365 − 1 (ремонт 10 с 01.10 по 02.10 — часть в окне) − 2 − 1;
     # B: 92 − 3
     assert total.work_days == pytest.approx(364 - 3 + 89, abs=1.0)
-    assert total.repairs == 5  # ремонт 10 начат до окна — не считается
+    # ремонт 10 начат до окна, но закончился в нём — считается (по дате окончания)
+    assert total.repairs == 6
     assert total.gtm == 1
-    assert total.failures == 4
-    assert total.mrp_with_gtm == pytest.approx(total.work_days / 5)
-    assert total.mrp_without_gtm == pytest.approx(total.work_days / 4)
+    assert total.failures == 5
+    assert total.mrp_with_gtm == pytest.approx(total.work_days / 6)
+    assert total.mrp_without_gtm == pytest.approx(total.work_days / 5)
     # фонд: A — 12 месяцев, B — 3 месяца
     assert total.avg_fund == pytest.approx(15 / 12)
     assert total.calendar_days == pytest.approx(365 + 92)
@@ -231,10 +233,11 @@ def test_crf_counts_only_non_gtm_repairs_from_threshold() -> None:
     assert [(w.name, w.repairs) for w in crf.wells] == [("JLM_0002", 3)]
     assert crf.repairs == 3
     assert crf.percent_of_fund == pytest.approx(50.0)
-    # VMB_0001: 1 ремонт без ГТМ (ГТМ не считается); JLM_0002: 3
-    assert crf.distribution == {1: 1, 3: 1}
+    # VMB_0001: 2 ремонта без ГТМ (10 — закончился в окне, 11; ГТМ не считается);
+    # JLM_0002: 3
+    assert crf.distribution == {2: 1, 3: 1}
     # имена скважин есть у всех групп градации, а не только у ЧРФ
-    assert crf.wells_by_count == {1: ["VMB_0001"], 3: ["JLM_0002"]}
+    assert crf.wells_by_count == {2: ["VMB_0001"], 3: ["JLM_0002"]}
 
 
 def test_crf_threshold_is_configurable() -> None:
@@ -374,37 +377,53 @@ def test_crf_is_split_by_lift_type() -> None:
     assert result.crf.shgn_wells == groups["ШГН"].wells
 
 
-def _calendar_fund_well(
+def _status_fund_well(
     months: set[tuple[int, int]],
-    repairs: list[RepairSpan],
+    work: list[tuple[str, str]],
+    repairs: list[RepairSpan] | None = None,
 ) -> WellFundInput:
-    # статусов «в работе» нет вообще: время считается по календарю фонда
     return WellFundInput(
         well_id=1,
         name="W_1",
         oil_field="W",
         lift_type=None,
-        work_intervals=[],
-        repairs=repairs,
+        work_intervals=[(_dt(a), _dt(b)) for a, b in work],
+        repairs=repairs or [],
         fund_months=frozenset(months),
     )
 
 
-def test_fund_work_time_is_calendar_days_minus_repairs() -> None:
-    well = _calendar_fund_well(
+def test_fund_work_time_is_days_in_working_status() -> None:
+    # ремонт 10–12.08 в ABAI — простой с причиной ПРС: в статусе «в работе»
+    # скважины в эти сутки нет, и вычитать ремонт отдельно не нужно
+    well = _status_fund_well(
         {(2026, 8), (2026, 9)},
-        [_span(1, "2026-08-10T00:00", "2026-08-12T00:00")],  # 2 сут в августе
+        [
+            ("2026-08-01T00:00", "2026-08-10T00:00"),
+            ("2026-08-12T00:00", "2026-10-01T00:00"),
+        ],
+        [_span(1, "2026-08-10T00:00", "2026-08-12T00:00")],
     )
 
     result = compute_kmg([well], end_year=2026, end_month=9, months=2, now=NOW)
 
-    # август 31 + сентябрь 30 − 2 сут ремонта; простой/статусы не важны
-    assert result.total.work_days == pytest.approx(31 + 30 - 2, abs=0.01)
+    # август 9 + 20 сут, сентябрь 30 сут
+    assert result.total.work_days == pytest.approx(9 + 20 + 30, abs=0.01)
+    assert result.total.avg_fund == pytest.approx(1.0)
+
+
+def test_downtime_in_fund_is_not_work_time() -> None:
+    # в фонде (на 1-е число «простой»), но статуса «в работе» нет вообще
+    well = _status_fund_well({(2026, 9)}, [])
+
+    result = compute_kmg([well], end_year=2026, end_month=9, months=1, now=NOW)
+
+    assert result.total.work_days == pytest.approx(0)
     assert result.total.avg_fund == pytest.approx(1.0)
 
 
 def test_fund_work_time_skips_months_outside_the_fund() -> None:
-    well = _calendar_fund_well({(2026, 9)}, [])
+    well = _status_fund_well({(2026, 9)}, [("2026-08-01T00:00", "2026-10-01T00:00")])
 
     result = compute_kmg([well], end_year=2026, end_month=9, months=2, now=NOW)
 
@@ -414,7 +433,7 @@ def test_fund_work_time_skips_months_outside_the_fund() -> None:
 
 
 def test_fund_work_time_of_unfinished_month_runs_until_now() -> None:
-    well = _calendar_fund_well({(2026, 9)}, [])
+    well = _status_fund_well({(2026, 9)}, [("2026-09-01T00:00", "2026-10-01T00:00")])
 
     result = compute_kmg(
         [well],
@@ -441,3 +460,42 @@ def test_without_fund_work_time_still_follows_statuses() -> None:
     result = compute_kmg([well], end_year=2026, end_month=9, months=1, now=NOW)
 
     assert result.total.work_days == pytest.approx(10, abs=0.01)
+
+
+def test_repair_belongs_to_the_month_it_ended() -> None:
+    # начался 28.02, закончился 03.03 — для заказчика это март
+    well = _status_fund_well(
+        {(2026, 2), (2026, 3)},
+        [("2026-02-01T00:00", "2026-04-01T00:00")],
+        [_span(1, "2026-02-28T10:00", "2026-03-03T10:00")],
+    )
+
+    feb, mar = compute_month_stats([well], [(2026, 2), (2026, 3)], now=NOW)
+
+    assert (feb.repairs, mar.repairs) == (0, 1)
+
+
+def test_open_repair_is_counted_by_its_start_month() -> None:
+    well = _status_fund_well(
+        {(2026, 9)},
+        [("2026-09-01T00:00", "2026-10-01T00:00")],
+        [_span(1, "2026-09-20T00:00", None)],
+    )
+
+    (sep,) = compute_month_stats([well], [(2026, 9)], now=NOW)
+
+    assert sep.repairs == 1
+
+
+def test_repair_ending_after_the_window_is_not_counted() -> None:
+    wells = [
+        _status_fund_well(
+            {(2026, 9)},
+            [("2026-09-01T00:00", "2026-10-01T00:00")],
+            [_span(1, "2026-09-29T00:00", "2026-10-02T00:00")],
+        ),
+    ]
+
+    result = compute_kmg(wells, end_year=2026, end_month=9, now=NOW)
+
+    assert result.total.repairs == 0

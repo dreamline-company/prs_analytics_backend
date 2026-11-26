@@ -41,14 +41,11 @@ class _Repairs:
     async def list_active_by_well_abai_ids(self, _ids: list[int]) -> list:
         return [_repair(501, 1001), _repair(502, 1002)]
 
-    async def count_by_well_abai_ids_since(
-        self,
-        _ids: list[int],
-        *,
-        since: datetime,
-    ) -> dict:
-        del since  # порог частых ремонтов в этом тесте не важен
-        return {}
+
+class _MrpInputs:
+    async def load_fund_inputs(self, wells: list, **_kwargs: object) -> list:
+        del wells  # флаг частых ремонтов в этом тесте не важен
+        return []
 
 
 class _RepairBrigades:
@@ -77,6 +74,7 @@ def _use_case(spo: _Spo) -> GetWellsMatrixUseCase:
         cm_brigade_repository=None,  # type: ignore[arg-type]
         cm_brigade_error_screen_repository=None,  # type: ignore[arg-type]
         spo_repository=spo,  # type: ignore[arg-type]
+        mrp_inputs_service=_MrpInputs(),  # type: ignore[arg-type]
     )
 
 
