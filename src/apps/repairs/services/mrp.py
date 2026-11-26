@@ -262,6 +262,11 @@ class WellFundInput:
     # конец периода»: окно ноябрь–октябрь — фонд на 1 ноября). None — это 1-е
     # число ещё не наступило или фонд не задан: берётся последний месяц окна.
     in_fund_at_end: bool | None = None
+    # Месяцы, в которых ремонт скважины учитывается: скважина в фонде на 1-е
+    # число месяца или на 1-е число следующего (ремонт-ввод из консервации или
+    # бурения заканчивается в месяце, а скважина в фонде уже на его конец).
+    # None — берётся ``fund_months``.
+    repair_fund_months: frozenset[tuple[int, int]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -466,6 +471,18 @@ def _in_fund(well: WellFundInput, year: int, month: int) -> bool:
     return well.fund_months is None or (year, month) in well.fund_months
 
 
+def _repair_in_fund(well: WellFundInput, when: datetime) -> bool:
+    """Учитывается ли ремонт, закончившийся (идущий — начатый) в момент ``when``."""
+    if well.fund_months is None:
+        return True
+    months = (
+        well.repair_fund_months
+        if well.repair_fund_months is not None
+        else well.fund_months
+    )
+    return (when.year, when.month) in months
+
+
 def _group(
     key: str,
     wells: Sequence[WellFundInput],
@@ -512,7 +529,7 @@ def _group(
 
         for r in well.repairs:
             when = r.counted_at
-            if win_start <= when < win_end and _in_fund(well, when.year, when.month):
+            if win_start <= when < win_end and _repair_in_fund(well, when):
                 repairs += 1
                 gtm += r.is_gtm
                 tech += r.is_tech and not r.is_gtm
@@ -581,7 +598,7 @@ def compute_kmg(  # noqa: PLR0913
             for r in well.repairs
             if win_start <= r.counted_at < win_end
             and not r.is_gtm
-            and _in_fund(well, r.counted_at.year, r.counted_at.month)
+            and _repair_in_fund(well, r.counted_at)
         )
         if n:
             counts[well.name] = n
@@ -598,8 +615,7 @@ def compute_kmg(  # noqa: PLR0913
                 type_name=r.type_name,
                 is_gtm=r.is_gtm,
                 is_tech=r.is_tech,
-                counted=not r.is_gtm
-                and _in_fund(well, r.counted_at.year, r.counted_at.month),
+                counted=not r.is_gtm and _repair_in_fund(well, r.counted_at),
             )
             for r in sorted(well.repairs, key=lambda r: r.start)
             if win_start <= r.counted_at < win_end
@@ -747,7 +763,7 @@ def compute_month_stats(
         for r in well.repairs:
             for i, (lo, hi) in enumerate(bounds):
                 if lo <= r.counted_at < hi:
-                    if _in_fund(well, *months[i]):
+                    if _repair_in_fund(well, r.counted_at):
                         repairs[i] += 1
                         gtm[i] += r.is_gtm
                         tech[i] += r.is_tech and not r.is_gtm

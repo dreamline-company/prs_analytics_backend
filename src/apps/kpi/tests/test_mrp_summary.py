@@ -290,15 +290,16 @@ def test_note_explains_assumptions() -> None:
 
 
 def test_fund_is_limited_by_oil_category() -> None:
-    # JLM_0002 стала нефтяной только с августа: её ремонт 21 (10 июля) и время
-    # работы июля в расчёт не входят — в фонд июля она не попадает.
+    # JLM_0002 стала нефтяной только с августа: время работы июля в расчёт не
+    # входит (на 1 июля её нет в фонде), а ремонт 21 (10 июля) считается — на конец
+    # июля (1 августа) скважина уже в фонде.
     categories = [
         (1001, _dt("2025-01-01T00:00"), OPEN_END),
         (1002, _dt("2026-08-01T00:00"), OPEN_END),
     ]
     by_field = {g.key: g for g in _run(categories).by_oil_field}
 
-    assert by_field["JLM"].repairs == 2
+    assert by_field["JLM"].repairs == 3
     # август + сентябрь = 61 сут минус два ремонта по 1 сут
     assert by_field["JLM"].work_days == pytest.approx(59, abs=0.5)
 
