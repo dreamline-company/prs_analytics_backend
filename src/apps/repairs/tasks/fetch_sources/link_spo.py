@@ -26,8 +26,8 @@ from apps.kbrs.repositories.measure import KbrsMeasureRepository
 from apps.models_registry import *  # noqa: F403
 from apps.org.repositories.org import OrgRepository
 from apps.org.use_cases.get_ngdu_for_well import GetNGDUForWellUseCase
-from apps.repairs.models.repair import Repair
 from apps.repairs.tasks.fetch_sources.candidates import (
+    RepairRef,
     RunStats,
     as_naive,
     grace_cutoff,
@@ -164,13 +164,23 @@ class LinkRepairSpo:
         )
         return stats
 
-    async def _target_repairs(self, ctx: _Context, *, now: datetime) -> list[Repair]:
-        candidates = await list_candidate_repairs(
-            ctx.session,
-            grace_cutoff=grace_cutoff(now),
-            repair_id=self._repair_id,
-            well_id=self._well_id,
-        )
+    async def _target_repairs(
+        self,
+        ctx: _Context,
+        *,
+        now: datetime,
+    ) -> list[RepairRef]:
+        # Снимки до цикла: ремонты коммитятся и откатываются по одному, а после
+        # rollback ORM-объекты протухают — сбой одного ремонта ронял весь обход.
+        candidates = [
+            RepairRef.of(repair)
+            for repair in await list_candidate_repairs(
+                ctx.session,
+                grace_cutoff=grace_cutoff(now),
+                repair_id=self._repair_id,
+                well_id=self._well_id,
+            )
+        ]
         if self._measure_id is None:
             return candidates
         measure = await ctx.measure_repo.get_by_measure_id(self._measure_id)
@@ -186,15 +196,15 @@ class LinkRepairSpo:
     async def _repairs_for_measure(
         ctx: _Context,
         measure: KbrsMeasure,
-        candidates: Sequence[Repair],
+        candidates: Sequence[RepairRef],
         *,
         now: datetime,
-    ) -> list[Repair]:
+    ) -> list[RepairRef]:
         """Кандидаты той же скважины (номер + НГДУ), окно которых задевает замер."""
         ngdu_abai_id = ngdu_abai_id_by_owner(measure.owner_id)
         if ngdu_abai_id is None:
             return []
-        matched: list[Repair] = []
+        matched: list[RepairRef] = []
         for repair in candidates:
             well = await resolve_repair_well(repair, ctx.well_repo)
             if well is None or extract_well_number(well.name) != measure.well_number:
@@ -213,7 +223,7 @@ class LinkRepairSpo:
     async def _link_repair(
         self,
         ctx: _Context,
-        repair: Repair,
+        repair: RepairRef,
         *,
         now: datetime,
     ) -> tuple[bool, bool]:
@@ -268,7 +278,7 @@ class LinkRepairSpo:
     @staticmethod
     async def _link_measure(
         ctx: _Context,
-        repair: Repair,
+        repair: RepairRef,
         well: Well,
         measure: KbrsMeasure,
         existing: SPO | None,

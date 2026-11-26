@@ -1,13 +1,27 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, column, func, select, values
+from sqlalchemy import (
+    BigInteger,
+    ColumnElement,
+    DateTime,
+    Integer,
+    cast,
+    column,
+    func,
+    select,
+    values,
+)
 
 from apps.kbrs.models.measure import KbrsMeasure
 from apps.wells.dto.internal.repositories.spo import CreateSPODTO, UpdateSPODTO
 from apps.wells.models.spo import SPO
 from apps.wells.models.spo_event import SPOEvent
 from shared.repository.sqlalchemy import AsyncAlchemyRepository, QuerySpec
+
+# Пространство advisory-замков записи СПО по замеру КБРС:
+# pg_advisory_xact_lock(int, int). 7301 — разбор динамограмм.
+_SPO_MEASURE_LOCK_NAMESPACE = 7302
 
 
 class SPORepository(
@@ -79,13 +93,15 @@ class SPORepository(
         *,
         well_id: int,
     ) -> SPO | None:
-        return await self.get_one(
-            QuerySpec(
-                filters=(
-                    SPO.kbrs_measure_id == kbrs_measure_id,
-                    SPO.well_id == well_id,
-                ),
-            ),
+        """СПО замера на скважине; при дублях — самая ранняя.
+
+        Дубли — от параллельных связываний до замка записи
+        (``lock_kbrs_measure``): ``one_or_none`` на них валил ремонт каждым
+        прогоном.
+        """
+        return await self._first(
+            SPO.kbrs_measure_id == kbrs_measure_id,
+            SPO.well_id == well_id,
         )
 
     async def get_by_well_id_and_snapshot_time(
@@ -93,14 +109,34 @@ class SPORepository(
         well_id: int,
         snapshot_time: datetime,
     ) -> SPO | None:
-        return await self.get_one(
-            QuerySpec(
-                filters=(
-                    SPO.well_id == well_id,
-                    SPO.snapshot_time == snapshot_time,
+        """СПО скважины на момент снимка; при дублях — самая ранняя."""
+        return await self._first(
+            SPO.well_id == well_id,
+            SPO.snapshot_time == snapshot_time,
+        )
+
+    async def lock_kbrs_measure(self, kbrs_measure_id: int) -> None:
+        """Транзакционный замок записи СПО замера (держится до commit/rollback).
+
+        Опросчик ставит связывание на каждый скачанный замер, и задачи по
+        замерам одной скважины разбирают один ремонт одновременно (плюс крон):
+        без замка обе не находят СПО и обе её создают. Второй писатель ждёт
+        коммита первого и затем находит его строку.
+        """
+        await self.session.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    cast(_SPO_MEASURE_LOCK_NAMESPACE, Integer),
+                    cast(kbrs_measure_id, Integer),
                 ),
             ),
         )
+
+    async def _first(self, *filters: ColumnElement[bool]) -> SPO | None:
+        rows = await self.get_list(
+            QuerySpec(filters=filters, order_by=(SPO.id.asc(),), limit=1),
+        )
+        return rows[0] if rows else None
 
     async def list_by_well_id_in_window(
         self,
